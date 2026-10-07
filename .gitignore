@@ -1,0 +1,24 @@
+# Gradle
+.gradle/
+**/build/
+
+# Local Android SDK configuration
+local.properties
+
+# Android Studio / IntelliJ IDEA
+.idea/
+*.iml
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Signing and secrets
+*.jks
+*.keystore
+
+# Superpowers and temporary artifacts
+.superpowers/
+*.tmp
+*.log
+
