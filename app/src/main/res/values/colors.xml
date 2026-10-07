@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="smooth_dark_background">#090B0D</color>
+    <color name="smooth_dark_surface">#111418</color>
+    <color name="smooth_dark_text">#F4F6F8</color>
+    <color name="smooth_accent">#19C3E6</color>
+    <color name="smooth_light_background">#F5F7F8</color>
+    <color name="smooth_light_surface">#FFFFFF</color>
+    <color name="smooth_border">#D8DEE3</color>
+</resources>
