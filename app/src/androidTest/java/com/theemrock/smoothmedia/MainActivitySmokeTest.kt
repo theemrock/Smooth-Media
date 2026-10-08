@@ -15,7 +15,7 @@ class MainActivitySmokeTest {
 
     @Test
     fun launch_displaysSmoothMediaShell() {
-        composeRule.onNodeWithText("Smooth Media").assertIsDisplayed()
-        composeRule.onNodeWithText("Phase 01").assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.app_name)).assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.phase_00)).assertIsDisplayed()
     }
 }
