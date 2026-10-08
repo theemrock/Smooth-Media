@@ -49,4 +49,5 @@ dependencies {
     androidTestImplementation(composeBom)
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.compose.ui.test.junit4)
+    androidTestImplementation(libs.media3.exoplayer)
 }

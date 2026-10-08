@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <uses-permission android:name="android.permission.READ_MEDIA_AUDIO" />
+
+    <application>
+        <activity
+            android:name=".p01x.P01xSmokeActivity"
+            android:exported="true"
+            android:label="@string/p01x_title" />
+    </application>
+
+</manifest>

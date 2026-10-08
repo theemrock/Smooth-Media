@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="p01x_title">P01X Music Library Smoke</string>
+    <string name="p01x_developer_only">Developer-only — temporary, read-only probe</string>
+    <string name="p01x_permission_required">Music klasörünü keşfetmek için ses dosyalarını okuma izni gerekiyor.</string>
+    <string name="p01x_grant_permission">İzin ver</string>
+    <string name="p01x_loading">Music/ arşivi taranıyor…</string>
+    <string name="p01x_empty">Music/ altında MP3 veya FLAC bulunamadı.</string>
+    <string name="p01x_load_failed">Arşiv okunamadı. Logcat ayrıntılarını kontrol edin.</string>
+    <string name="p01x_file_count">Toplam %1$d dosya</string>
+    <string name="p01x_format_count">MP3: %1$d · FLAC: %2$d</string>
+    <string name="p01x_metadata_loading">Metadata okunuyor…</string>
+    <string name="p01x_placeholder">…</string>
+    <string name="p01x_file_location">%1$s · %2$s</string>
+    <string name="p01x_status_available">AVAILABLE</string>
+    <string name="p01x_status_missing">MISSING</string>
+    <string name="p01x_status_incomplete">INCOMPLETE</string>
+    <string name="p01x_status_unsupported">UNSUPPORTED</string>
+    <string name="p01x_title_label">Başlık</string>
+    <string name="p01x_artist_label">Sanatçı</string>
+    <string name="p01x_album_label">Albüm</string>
+    <string name="p01x_album_artist_label">Albüm sanatçısı</string>
+    <string name="p01x_year_label">Yıl</string>
+    <string name="p01x_track_label">Track</string>
+    <string name="p01x_disc_label">Disk</string>
+    <string name="p01x_genre_label">Genre</string>
+    <string name="p01x_duration_label">Süre</string>
+    <string name="p01x_bitrate_label">Bitrate</string>
+    <string name="p01x_sample_rate_label">Sample rate</string>
+    <string name="p01x_channels_label">Kanallar</string>
+    <string name="p01x_artwork_label">Embedded artwork</string>
+    <string name="p01x_artwork_description">%1$s albüm kapağı</string>
+    <string name="p01x_value_format">%1$s: %2$s</string>
+    <string name="p01x_duration_value">%1$d sn</string>
+    <string name="p01x_bitrate_value">%1$d kbps</string>
+    <string name="p01x_sample_rate_value">%1$d Hz</string>
+</resources>
