@@ -20,3 +20,24 @@ value class FileLocator(val value: String) {
         require(value.isNotBlank())
     }
 }
+
+@JvmInline
+value class LibrarySourceId(val value: String) {
+    init {
+        require(value.isNotBlank())
+    }
+}
+
+@JvmInline
+value class ScanSessionId(val value: String) {
+    init {
+        require(value.isNotBlank())
+    }
+}
+
+@JvmInline
+value class CatalogExclusionId(val value: String) {
+    init {
+        require(value.isNotBlank())
+    }
+}

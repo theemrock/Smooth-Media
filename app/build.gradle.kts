@@ -4,6 +4,8 @@ plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
+    alias(libs.plugins.ksp)
+    alias(libs.plugins.room)
 }
 
 android {
@@ -14,8 +16,8 @@ android {
         applicationId = "com.theemrock.smoothmedia"
         minSdk = 33
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0"
+        versionCode = 1002
+        versionName = "v0.0.01.002"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -37,12 +39,22 @@ kotlin {
     }
 }
 
+room {
+    schemaDirectory("$projectDir/schemas")
+}
+
 dependencies {
     val composeBom = platform(libs.compose.bom)
+    val kotlinxSerializationBom = platform(libs.kotlinx.serialization.bom)
 
     implementation(composeBom)
+    implementation(kotlinxSerializationBom)
     implementation(libs.activity.compose)
     implementation(libs.compose.material3)
+    implementation(libs.room.runtime)
+    implementation(libs.sqlite.framework)
+
+    ksp(libs.room.compiler)
 
     testImplementation(libs.junit)
 
@@ -50,4 +62,5 @@ dependencies {
     androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.media3.exoplayer)
+    androidTestImplementation(libs.room.testing)
 }
