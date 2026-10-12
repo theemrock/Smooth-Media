@@ -9,11 +9,40 @@ interface LibrarySourceRepository {
 
     fun find(sourceId: String): LibrarySourceEntity?
 
-    fun updateState(
+    fun findByRootUri(rootUri: String): LibrarySourceEntity?
+
+    fun listAll(): List<LibrarySourceEntity>
+
+    fun registerOrReactivate(source: LibrarySourceEntity): SourceRegistrationWriteResult
+
+    fun updateAccessState(
         sourceId: String,
         persistedPermissionFlags: Int,
         permissionState: SourcePermissionState,
         availability: SourceAvailability,
         updatedAtEpochMs: Long,
     ): Boolean
+
+    fun updateState(
+        sourceId: String,
+        persistedPermissionFlags: Int,
+        permissionState: SourcePermissionState,
+        availability: SourceAvailability,
+        updatedAtEpochMs: Long,
+    ): Boolean = updateAccessState(
+        sourceId,
+        persistedPermissionFlags,
+        permissionState,
+        availability,
+        updatedAtEpochMs,
+    )
+
+    fun markRemoved(sourceId: String, updatedAtEpochMs: Long): Boolean
+}
+
+enum class SourceRegistrationWriteResult {
+    Added,
+    AlreadyActive,
+    Reactivated,
+    Conflict,
 }

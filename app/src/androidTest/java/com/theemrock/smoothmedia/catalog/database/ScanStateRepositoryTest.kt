@@ -50,7 +50,7 @@ class ScanStateRepositoryTest {
 
     @Test
     fun sourcePermissionState_isPersistedSeparatelyFromAvailability() {
-        val sourceRepository = RoomLibrarySourceRepository(database.librarySourceDao())
+        val sourceRepository = RoomLibrarySourceRepository(database)
 
         assertTrue(
             sourceRepository.updateState(

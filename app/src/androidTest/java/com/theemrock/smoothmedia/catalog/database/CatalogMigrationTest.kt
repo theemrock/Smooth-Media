@@ -1,18 +1,14 @@
 package com.theemrock.smoothmedia.catalog.database
 
 import android.content.Context
-import androidx.room.Room
 import androidx.room.testing.MigrationTestHelper
+import androidx.sqlite.db.SupportSQLiteDatabase
 import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
-import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
-import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceType
-import com.theemrock.smoothmedia.catalog.database.entity.SourceAvailability
-import com.theemrock.smoothmedia.catalog.database.entity.SourcePermissionState
+import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
@@ -41,32 +37,69 @@ class CatalogMigrationTest {
     }
 
     @Test
-    fun exportedVersionOneSchema_opensWithoutDestructiveFallback() {
-        assertEquals(1, CatalogDatabase.SCHEMA_VERSION)
-        migrationHelper.createDatabase(databaseName, CatalogDatabase.SCHEMA_VERSION).close()
+    fun versionOneToTwo_addsActiveSelectionStateAndPreservesAllTables() {
+        migrationHelper.createDatabase(databaseName, 1).apply {
+            insertVersionOneFixture(this)
+            close()
+        }
 
-        val database = Room.databaseBuilder(context, CatalogDatabase::class.java, databaseName)
-            .addCallback(CatalogDatabaseCallback)
-            .addMigrations(*CatalogMigrations.ALL)
-            .build()
+        val migrated = migrationHelper.runMigrationsAndValidate(
+            databaseName,
+            2,
+            true,
+            *CatalogMigrations.ALL,
+        )
         try {
-            database.openHelper.writableDatabase
-            database.librarySourceDao().insert(source())
-            assertNotNull(database.librarySourceDao().find("source-1"))
+            assertEquals(SourceSelectionState.ACTIVE.name, migrated.singleString("SELECT selection_state FROM library_sources"))
+            listOf(
+                "tracks",
+                "library_sources",
+                "track_locations",
+                "locator_bindings",
+                "scan_sessions",
+                "active_scan_leases",
+                "source_scan_checkpoints",
+                "scan_candidates",
+                "catalog_exclusions",
+            ).forEach { table ->
+                assertEquals("row missing after migration in $table", 1, migrated.singleInt("SELECT COUNT(*) FROM $table"))
+            }
         } finally {
-            database.close()
+            migrated.close()
         }
     }
 
-    private fun source() = LibrarySourceEntity(
-        sourceId = "source-1",
-        sourceType = LibrarySourceType.SAF_TREE,
-        rootUri = "content://tree/music",
-        volumeName = null,
-        persistedPermissionFlags = 3,
-        permissionState = SourcePermissionState.GRANTED,
-        availability = SourceAvailability.AVAILABLE,
-        createdAtEpochMs = 1_000,
-        updatedAtEpochMs = 1_000,
-    )
+    private fun insertVersionOneFixture(database: SupportSQLiteDatabase) {
+        database.execSQL("INSERT INTO tracks VALUES ('track-1', 'ACTIVE', 1000, 1000)")
+        database.execSQL(
+            "INSERT INTO library_sources VALUES ('source-1', 'SAF_TREE', 'content://provider/tree/music', NULL, 1, 'GRANTED', 'AVAILABLE', 1000, 1000)",
+        )
+        database.execSQL(
+            """
+            INSERT INTO track_locations VALUES (
+                'location-1', 'track-1', 'source-1', 'FLAC', 'AVAILABLE', NULL, NULL,
+                42, 900, 180000, 900000, 96000, 2, 1000, 1000,
+                'SHA-256', 1, 'digest', 'SHA-256', 1, 'digest'
+            )
+            """.trimIndent(),
+        )
+        database.execSQL("INSERT INTO locator_bindings VALUES ('content://provider/document/track', 'location-1', 'source-1', 1000)")
+        database.execSQL("INSERT INTO scan_sessions VALUES ('scan-1', 'RUNNING', 1000, 1000, NULL)")
+        database.execSQL("INSERT INTO active_scan_leases VALUES (1, 'scan-1')")
+        database.execSQL("INSERT INTO source_scan_checkpoints VALUES ('scan-1', 'source-1', NULL, 1, 0, 'PARTIAL', 1000)")
+        database.execSQL("INSERT INTO scan_candidates VALUES ('scan-1', 'source-1', 'candidate-1', 'DISCOVERED', 'location-1', 1000)")
+        database.execSQL("INSERT INTO catalog_exclusions VALUES ('exclusion-1', 'source-1', 'content://provider/document/excluded', 1000, 'SHA-256', 1, 'excluded')")
+    }
+
+    private fun SupportSQLiteDatabase.singleString(sql: String): String =
+        query(sql).use { cursor ->
+            check(cursor.moveToFirst())
+            cursor.getString(0)
+        }
+
+    private fun SupportSQLiteDatabase.singleInt(sql: String): Int =
+        query(sql).use { cursor ->
+            check(cursor.moveToFirst())
+            cursor.getInt(0)
+        }
 }

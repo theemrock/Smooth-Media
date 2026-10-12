@@ -17,7 +17,7 @@ import com.theemrock.smoothmedia.catalog.database.entity.SourceScanCheckpointEnt
 import com.theemrock.smoothmedia.catalog.database.entity.TrackEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackLocationEntity
 
-private const val CATALOG_SCHEMA_VERSION = 1
+private const val CATALOG_SCHEMA_VERSION = 2
 
 @Database(
     entities = [

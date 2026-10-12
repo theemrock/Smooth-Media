@@ -28,6 +28,8 @@ data class LibrarySourceEntity(
     val createdAtEpochMs: Long,
     @ColumnInfo(name = "updated_at_epoch_ms")
     val updatedAtEpochMs: Long,
+    @ColumnInfo(name = "selection_state", defaultValue = "'ACTIVE'")
+    val selectionState: SourceSelectionState = SourceSelectionState.ACTIVE,
 )
 
 enum class LibrarySourceType {
@@ -46,4 +48,9 @@ enum class SourceAvailability {
     AVAILABLE,
     UNAVAILABLE,
     PERMISSION_LOST,
+}
+
+enum class SourceSelectionState {
+    ACTIVE,
+    REMOVED,
 }
