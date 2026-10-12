@@ -1,5 +1,29 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Smooth Media</string>
-    <string name="phase_00">Phase 00</string>
+    <string name="source_registry_title">Music sources</string>
+    <string name="source_registry_description">Only folders you choose are registered. Each selected folder includes all of its subfolders.</string>
+    <string name="add_folder">Add folder</string>
+    <string name="refresh_sources">Refresh access</string>
+    <string name="remove_source">Remove source</string>
+    <string name="no_sources">No music source is registered.</string>
+    <string name="source_active">Active source</string>
+    <string name="source_removed">Removed by user</string>
+    <string name="source_available">Available</string>
+    <string name="source_unavailable">Temporarily unavailable</string>
+    <string name="source_permission_lost">Permission lost</string>
+    <string name="source_added">Source added.</string>
+    <string name="source_already_registered">This source is already registered.</string>
+    <string name="source_reactivated">Source reactivated with its existing catalog identity.</string>
+    <string name="source_added_unavailable">Source saved, but its provider is currently unavailable.</string>
+    <string name="source_invalid_uri">The selected folder URI is invalid.</string>
+    <string name="source_permission_denied">Persistent read permission was not granted.</string>
+    <string name="source_permission_failed">Source permission could not be verified.</string>
+    <string name="source_permission_persisted_storage_failed">Permission was persisted, but the source could not be saved. Remove the permission from Android settings or try again.</string>
+    <string name="source_identity_conflict">The selected folder conflicts with an existing source identity.</string>
+    <string name="source_not_found">Source record was not found.</string>
+    <string name="source_storage_failed">Source storage could not be updated.</string>
+    <string name="source_removed_success">Source removed. Catalog records were kept.</string>
+    <string name="source_already_removed">Source was already removed.</string>
+    <string name="source_removed_permission_release_failed">Source was removed, but Android permission could not be released. Try again.</string>
 </resources>

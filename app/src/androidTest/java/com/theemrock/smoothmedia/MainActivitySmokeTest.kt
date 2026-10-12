@@ -16,6 +16,7 @@ class MainActivitySmokeTest {
     @Test
     fun launch_displaysSmoothMediaShell() {
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.app_name)).assertIsDisplayed()
-        composeRule.onNodeWithText(composeRule.activity.getString(R.string.phase_00)).assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.source_registry_title)).assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.add_folder)).assertIsDisplayed()
     }
 }
