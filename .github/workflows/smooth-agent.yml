@@ -49,7 +49,7 @@ jobs:
 
           git switch -c "$BRANCH"
 
-git add -- agent/REPORT.md app/src/main/ app/src/test/ app/src/androidTest/
+          git add -- agent/REPORT.md app/src/main/ app/src/test/ app/src/androidTest/
 
           if git diff --cached --quiet; then
             echo "No changes to publish."
