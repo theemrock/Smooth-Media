@@ -24,6 +24,7 @@ import com.theemrock.smoothmedia.source.AndroidSelectedTreeParser
 import com.theemrock.smoothmedia.source.SourceRegistryFactory
 import com.theemrock.smoothmedia.source.SourceRegistryRuntime
 import com.theemrock.smoothmedia.source.TreePickerIntentFactory
+import com.theemrock.smoothmedia.source.selectRefreshSummary
 import com.theemrock.smoothmedia.ui.DeviceOrientationPolicy
 import com.theemrock.smoothmedia.ui.SourceManagementScreen
 import com.theemrock.smoothmedia.ui.sourceRefreshMessage
@@ -111,14 +112,14 @@ class MainActivity : ComponentActivity() {
                 postState(emptyList(), R.string.source_storage_failed)
                 return@execute
             }
-            stored.filter { it.selectionState == SourceSelectionState.ACTIVE }.forEach { source ->
+            val results = stored.filter { it.selectionState == SourceSelectionState.ACTIVE }.map { source ->
                 runtime.registry.refresh(source.sourceId, System.currentTimeMillis())
             }
             val refreshed = runCatching { runtime.repository.listAll() }.getOrElse {
                 postState(stored, R.string.source_storage_failed)
                 return@execute
             }
-            postState(refreshed, null)
+            postState(refreshed, selectRefreshSummary(results)?.let(::sourceRefreshMessage))
         }
     }
 
@@ -128,14 +129,14 @@ class MainActivity : ComponentActivity() {
                 postState(sources, R.string.source_storage_failed)
                 return@execute
             }.filter { it.selectionState == SourceSelectionState.ACTIVE }
-            val result = activeSources.map { source ->
+            val results = activeSources.map { source ->
                 runtime.registry.refresh(source.sourceId, System.currentTimeMillis())
-            }.lastOrNull()
+            }
             val refreshed = runCatching { runtime.repository.listAll() }.getOrElse {
                 postState(activeSources, R.string.source_storage_failed)
                 return@execute
             }
-            postState(refreshed, result?.let(::sourceRefreshMessage))
+            postState(refreshed, selectRefreshSummary(results)?.let(::sourceRefreshMessage))
         }
     }
 

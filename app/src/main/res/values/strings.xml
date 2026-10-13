@@ -6,6 +6,7 @@
     <string name="add_folder">Add folder</string>
     <string name="refresh_sources">Refresh access</string>
     <string name="remove_source">Remove source</string>
+    <string name="retry_permission_release">Retry permission release</string>
     <string name="no_sources">No music source is registered.</string>
     <string name="source_active">Active source</string>
     <string name="source_removed">Removed by user</string>
@@ -26,4 +27,5 @@
     <string name="source_removed_success">Source removed. Catalog records were kept.</string>
     <string name="source_already_removed">Source was already removed.</string>
     <string name="source_removed_permission_release_failed">Source was removed, but Android permission could not be released. Try again.</string>
+    <string name="source_permission_released_storage_failed">Android permission was released, but the source access state could not be updated.</string>
 </resources>

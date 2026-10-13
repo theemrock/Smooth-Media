@@ -216,6 +216,8 @@ Commit: `feat: add source management screen`
 
 ### Task 6: Tam doğrulama, sürüm ve P01-03 checkpoint
 
+**Çalışma durumu (2026-10-13):** Tasks 1–5 uygulanmış; Task 6 ön sürüm kontrolleri kısmen PASS. Son incelemenin önemli bulguları için düzeltme turu eklendi. Zorunlu S24 Ultra connected/instrumentation ve gerçek SAF kabulü cihaz bulunmadığı için NOT RUN; bu nedenle sürüm artırma, PASS etiketi ve push adımları beklemede.
+
 **Files:**
 - Modify after pre-version acceptance only: `app/build.gradle.kts`
 - Update if Room export changes: `app/schemas/com.theemrock.smoothmedia.catalog.database.CatalogDatabase/2.json`

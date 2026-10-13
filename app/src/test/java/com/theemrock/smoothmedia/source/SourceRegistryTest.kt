@@ -136,6 +136,41 @@ class SourceRegistryTest {
     }
 
     @Test
+    fun removedSource_canRetryPermissionReleaseAndClearsCurrentAccessState() {
+        val repository = FakeRepository()
+        val gateway = FakePermissionGateway(releaseResult = TreePermissionReleaseResult.Failed)
+        val registry = SourceRegistry(repository, gateway)
+        val sourceId = (registry.register(selection(), 1_000) as SourceRegistrationResult.Added).sourceId
+
+        assertEquals(
+            SourceRemovalResult.RemovedWithPermissionReleaseFailure(sourceId),
+            registry.remove(sourceId, 2_000),
+        )
+        gateway.releaseResult = TreePermissionReleaseResult.Released
+
+        assertEquals(SourceRemovalResult.AlreadyRemoved(sourceId), registry.remove(sourceId, 3_000))
+        assertEquals(2, gateway.releasedUris.size)
+        assertEquals(0, repository.find(sourceId)!!.persistedPermissionFlags)
+        assertEquals(SourcePermissionState.LOST, repository.find(sourceId)!!.permissionState)
+        assertEquals(SourceAvailability.PERMISSION_LOST, repository.find(sourceId)!!.availability)
+    }
+
+    @Test
+    fun gatewayException_isConvertedToControlledRemovalFailure() {
+        val repository = FakeRepository()
+        val gateway = FakePermissionGateway()
+        val registry = SourceRegistry(repository, gateway)
+        val sourceId = (registry.register(selection(), 1_000) as SourceRegistrationResult.Added).sourceId
+        gateway.throwOnRelease = true
+
+        assertEquals(
+            SourceRemovalResult.RemovedWithPermissionReleaseFailure(sourceId),
+            registry.remove(sourceId, 2_000),
+        )
+        assertEquals(SourceSelectionState.REMOVED, repository.find(sourceId)!!.selectionState)
+    }
+
+    @Test
     fun roomRemovalFailure_doesNotReleasePermission() {
         val repository = FakeRepository()
         val gateway = FakePermissionGateway()
@@ -168,11 +203,12 @@ class SourceRegistryTest {
 
 private class FakePermissionGateway(
     private val takeResult: TreePermissionTakeResult = TreePermissionTakeResult.Granted(1),
-    private val releaseResult: TreePermissionReleaseResult = TreePermissionReleaseResult.Released,
+    var releaseResult: TreePermissionReleaseResult = TreePermissionReleaseResult.Released,
 ) : TreePermissionGateway {
     var takeCount = 0
     var inspectResult: TreePermissionInspection = TreePermissionInspection.Available(1)
     val releasedUris = mutableListOf<String>()
+    var throwOnRelease = false
 
     override fun takeAndVerify(selection: SelectedTree): TreePermissionTakeResult {
         takeCount += 1
@@ -182,6 +218,7 @@ private class FakePermissionGateway(
     override fun inspect(rootUri: String): TreePermissionInspection = inspectResult
 
     override fun release(rootUri: String, persistedPermissionFlags: Int): TreePermissionReleaseResult {
+        if (throwOnRelease) error("platform failure")
         releasedUris += rootUri
         return releaseResult
     }

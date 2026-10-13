@@ -63,7 +63,12 @@ class SourceManagementActivityTest {
 
     @Test
     fun sourceScreen_distinguishesRemovedAndPermissionLostRecords() {
-        val removed = source("removed", SourceSelectionState.REMOVED, SourceAvailability.UNAVAILABLE)
+        val removed = source(
+            "removed",
+            SourceSelectionState.REMOVED,
+            SourceAvailability.UNAVAILABLE,
+            persistedPermissionFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION,
+        )
         val permissionLost = source("lost", SourceSelectionState.ACTIVE, SourceAvailability.PERMISSION_LOST)
 
         composeRule.activityRule.scenario.onActivity { activity ->
@@ -82,6 +87,9 @@ class SourceManagementActivityTest {
 
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.source_removed)).assertIsDisplayed()
         composeRule.onNodeWithText(composeRule.activity.getString(R.string.source_permission_lost)).assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.retry_permission_release),
+        ).assertIsDisplayed()
     }
 
     @Test
@@ -96,12 +104,13 @@ class SourceManagementActivityTest {
         id: String,
         selectionState: SourceSelectionState,
         availability: SourceAvailability,
+        persistedPermissionFlags: Int = 0,
     ) = LibrarySourceEntity(
         sourceId = id,
         sourceType = LibrarySourceType.SAF_TREE,
         rootUri = "content://provider/tree/$id",
         volumeName = null,
-        persistedPermissionFlags = 0,
+        persistedPermissionFlags = persistedPermissionFlags,
         permissionState = if (availability == SourceAvailability.PERMISSION_LOST) {
             SourcePermissionState.LOST
         } else {

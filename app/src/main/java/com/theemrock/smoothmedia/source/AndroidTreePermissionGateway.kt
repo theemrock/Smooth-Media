@@ -7,34 +7,40 @@ import android.provider.DocumentsContract
 
 object AndroidSelectedTreeParser {
     fun fromResult(uri: Uri?, grantedFlags: Int): SelectedTree? {
-        if (uri == null || uri.scheme != ContentResolver.SCHEME_CONTENT || !DocumentsContract.isTreeUri(uri)) {
-            return null
-        }
+        if (uri == null || uri.scheme != ContentResolver.SCHEME_CONTENT || !DocumentsContract.isTreeUri(uri)) return null
         val authority = uri.authority ?: return null
         val treeDocumentId = try {
             DocumentsContract.getTreeDocumentId(uri)
         } catch (_: IllegalArgumentException) {
             return null
         }
-        return SelectedTree(
-            rootUri = uri.toString(),
-            authority = authority,
-            treeDocumentId = treeDocumentId,
-            grantedFlags = grantedFlags,
-        )
+        return SelectedTree(uri.toString(), authority, treeDocumentId, grantedFlags)
     }
 }
 
+data class PersistedTreePermission(val uri: Uri, val isReadPermission: Boolean)
+
+enum class TreeProbeResult { AVAILABLE, UNAVAILABLE, PERMISSION_LOST, INVALID, FAILED }
+
+/** Small platform boundary that keeps Android grant failures testable and controlled. */
+interface AndroidTreePermissionOperations {
+    fun take(uri: Uri, flags: Int)
+    fun persistedPermissions(): List<PersistedTreePermission>
+    fun release(uri: Uri, flags: Int)
+    fun probe(treeUri: Uri): TreeProbeResult
+}
+
 class AndroidTreePermissionGateway(
-    private val contentResolver: ContentResolver,
+    private val operations: AndroidTreePermissionOperations,
 ) : TreePermissionGateway {
+    constructor(contentResolver: ContentResolver) : this(ContentResolverTreePermissionOperations(contentResolver))
+
     override fun takeAndVerify(selection: SelectedTree): TreePermissionTakeResult {
         val uri = parseAndValidate(selection) ?: return TreePermissionTakeResult.InvalidUri
         val readFlags = selection.grantedFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION
         if (readFlags == 0) return TreePermissionTakeResult.PermissionDenied
-
         try {
-            contentResolver.takePersistableUriPermission(uri, readFlags)
+            operations.take(uri, readFlags)
         } catch (_: SecurityException) {
             return TreePermissionTakeResult.PermissionDenied
         } catch (_: IllegalArgumentException) {
@@ -42,54 +48,63 @@ class AndroidTreePermissionGateway(
         } catch (_: Exception) {
             return TreePermissionTakeResult.Failed
         }
-        val persistedFlags = persistedReadFlags(uri)
+        val persistedFlags = try {
+            persistedReadFlags(uri)
+        } catch (_: Exception) {
+            return TreePermissionTakeResult.Failed
+        }
         if (persistedFlags == 0) return TreePermissionTakeResult.PermissionDenied
-
-        return when (probe(uri)) {
-            ProbeResult.AVAILABLE -> TreePermissionTakeResult.Granted(persistedFlags)
-            ProbeResult.UNAVAILABLE -> TreePermissionTakeResult.Unavailable(persistedFlags)
-            ProbeResult.PERMISSION_LOST -> TreePermissionTakeResult.PermissionDenied
-            ProbeResult.INVALID -> TreePermissionTakeResult.InvalidUri
+        return when (safeProbe(uri)) {
+            TreeProbeResult.AVAILABLE -> TreePermissionTakeResult.Granted(persistedFlags)
+            TreeProbeResult.UNAVAILABLE -> TreePermissionTakeResult.Unavailable(persistedFlags)
+            TreeProbeResult.PERMISSION_LOST -> TreePermissionTakeResult.PermissionDenied
+            TreeProbeResult.INVALID -> TreePermissionTakeResult.InvalidUri
+            TreeProbeResult.FAILED -> TreePermissionTakeResult.Failed
         }
     }
 
     override fun inspect(rootUri: String): TreePermissionInspection {
         val uri = Uri.parse(rootUri)
-        if (AndroidSelectedTreeParser.fromResult(uri, 0) == null) {
-            return TreePermissionInspection.InvalidUri
+        if (AndroidSelectedTreeParser.fromResult(uri, 0) == null) return TreePermissionInspection.InvalidUri
+        val persistedFlags = try {
+            persistedReadFlags(uri)
+        } catch (_: Exception) {
+            return TreePermissionInspection.Failed
         }
-        val persistedFlags = persistedReadFlags(uri)
         if (persistedFlags == 0) return TreePermissionInspection.PermissionLost
-
-        return when (probe(uri)) {
-            ProbeResult.AVAILABLE -> TreePermissionInspection.Available(persistedFlags)
-            ProbeResult.UNAVAILABLE -> TreePermissionInspection.Unavailable(persistedFlags)
-            ProbeResult.PERMISSION_LOST -> TreePermissionInspection.PermissionLost
-            ProbeResult.INVALID -> TreePermissionInspection.InvalidUri
+        return when (safeProbe(uri)) {
+            TreeProbeResult.AVAILABLE -> TreePermissionInspection.Available(persistedFlags)
+            TreeProbeResult.UNAVAILABLE -> TreePermissionInspection.Unavailable(persistedFlags)
+            TreeProbeResult.PERMISSION_LOST -> TreePermissionInspection.PermissionLost
+            TreeProbeResult.INVALID -> TreePermissionInspection.InvalidUri
+            TreeProbeResult.FAILED -> TreePermissionInspection.Failed
         }
     }
 
     override fun release(rootUri: String, persistedPermissionFlags: Int): TreePermissionReleaseResult {
         val uri = Uri.parse(rootUri)
-        if (AndroidSelectedTreeParser.fromResult(uri, 0) == null) {
+        if (AndroidSelectedTreeParser.fromResult(uri, 0) == null) return TreePermissionReleaseResult.Failed
+        val matching = try {
+            matchingReadPermissions(uri)
+        } catch (_: Exception) {
             return TreePermissionReleaseResult.Failed
         }
-        if (persistedReadFlags(uri) == 0) return TreePermissionReleaseResult.AlreadyReleased
+        if (matching.isEmpty()) return TreePermissionReleaseResult.AlreadyReleased
         val releaseFlags = (persistedPermissionFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION)
-            .takeIf { it != 0 }
-            ?: Intent.FLAG_GRANT_READ_URI_PERMISSION
-
-        return try {
-            contentResolver.releasePersistableUriPermission(
-                uri,
-                releaseFlags,
-            )
-            TreePermissionReleaseResult.Released
-        } catch (_: SecurityException) {
-            TreePermissionReleaseResult.AlreadyReleased
-        } catch (_: Exception) {
-            TreePermissionReleaseResult.Failed
+            .takeIf { it != 0 } ?: Intent.FLAG_GRANT_READ_URI_PERMISSION
+        matching.forEach { permission ->
+            try {
+                operations.release(permission.uri, releaseFlags)
+            } catch (_: Exception) {
+                // The postcondition below decides whether release actually completed.
+            }
         }
+        val remaining = try {
+            matchingReadPermissions(uri)
+        } catch (_: Exception) {
+            return TreePermissionReleaseResult.Failed
+        }
+        return if (remaining.isEmpty()) TreePermissionReleaseResult.Released else TreePermissionReleaseResult.Failed
     }
 
     private fun parseAndValidate(selection: SelectedTree): Uri? {
@@ -99,21 +114,43 @@ class AndroidTreePermissionGateway(
         return uri
     }
 
-    private fun persistedReadFlags(uri: Uri): Int {
-        val permission = contentResolver.persistedUriPermissions.firstOrNull {
-            it.uri == uri && it.isReadPermission
-        } ?: return 0
-        return Intent.FLAG_GRANT_READ_URI_PERMISSION
+    private fun persistedReadFlags(uri: Uri): Int =
+        if (matchingReadPermissions(uri).isEmpty()) 0 else Intent.FLAG_GRANT_READ_URI_PERMISSION
+
+    private fun matchingReadPermissions(uri: Uri): List<PersistedTreePermission> {
+        val identity = treeIdentity(uri) ?: return emptyList()
+        return operations.persistedPermissions().filter { permission ->
+            permission.isReadPermission && treeIdentity(permission.uri) == identity
+        }
     }
 
-    private fun probe(treeUri: Uri): ProbeResult {
+    private fun safeProbe(uri: Uri): TreeProbeResult = try {
+        operations.probe(uri)
+    } catch (_: Exception) {
+        TreeProbeResult.FAILED
+    }
+
+    private fun treeIdentity(uri: Uri): Pair<String, String>? {
+        val parsed = AndroidSelectedTreeParser.fromResult(uri, 0) ?: return null
+        return parsed.authority.orEmpty() to parsed.treeDocumentId.orEmpty()
+    }
+}
+
+private class ContentResolverTreePermissionOperations(
+    private val contentResolver: ContentResolver,
+) : AndroidTreePermissionOperations {
+    override fun take(uri: Uri, flags: Int) = contentResolver.takePersistableUriPermission(uri, flags)
+
+    override fun persistedPermissions(): List<PersistedTreePermission> =
+        contentResolver.persistedUriPermissions.map { PersistedTreePermission(it.uri, it.isReadPermission) }
+
+    override fun release(uri: Uri, flags: Int) = contentResolver.releasePersistableUriPermission(uri, flags)
+
+    override fun probe(treeUri: Uri): TreeProbeResult {
         val documentUri = try {
-            DocumentsContract.buildDocumentUriUsingTree(
-                treeUri,
-                DocumentsContract.getTreeDocumentId(treeUri),
-            )
+            DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
         } catch (_: IllegalArgumentException) {
-            return ProbeResult.INVALID
+            return TreeProbeResult.INVALID
         }
         return try {
             contentResolver.query(
@@ -122,22 +159,14 @@ class AndroidTreePermissionGateway(
                 null,
                 null,
                 null,
-            )?.use { cursor ->
-                if (cursor.moveToFirst()) ProbeResult.AVAILABLE else ProbeResult.UNAVAILABLE
-            } ?: ProbeResult.UNAVAILABLE
+            )?.use { if (it.moveToFirst()) TreeProbeResult.AVAILABLE else TreeProbeResult.UNAVAILABLE }
+                ?: TreeProbeResult.UNAVAILABLE
         } catch (_: SecurityException) {
-            ProbeResult.PERMISSION_LOST
+            TreeProbeResult.PERMISSION_LOST
         } catch (_: IllegalArgumentException) {
-            ProbeResult.INVALID
+            TreeProbeResult.INVALID
         } catch (_: Exception) {
-            ProbeResult.UNAVAILABLE
+            TreeProbeResult.UNAVAILABLE
         }
-    }
-
-    private enum class ProbeResult {
-        AVAILABLE,
-        UNAVAILABLE,
-        PERMISSION_LOST,
-        INVALID,
     }
 }

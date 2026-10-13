@@ -107,6 +107,13 @@ private fun SourceCard(source: LibrarySourceEntity, onRemove: (String) -> Unit) 
                 OutlinedButton(onClick = { onRemove(source.sourceId) }) {
                     Text(stringResource(R.string.remove_source))
                 }
+            } else if (source.persistedPermissionFlags != 0 ||
+                source.permissionState == com.theemrock.smoothmedia.catalog.database.entity.SourcePermissionState.GRANTED
+            ) {
+                Spacer(modifier = Modifier.height(8.dp))
+                OutlinedButton(onClick = { onRemove(source.sourceId) }) {
+                    Text(stringResource(R.string.retry_permission_release))
+                }
             }
         }
     }
@@ -157,6 +164,8 @@ fun sourceRemovalMessage(result: SourceRemovalResult): Int = when (result) {
     is SourceRemovalResult.AlreadyRemoved -> R.string.source_already_removed
     is SourceRemovalResult.RemovedWithPermissionReleaseFailure ->
         R.string.source_removed_permission_release_failed
+    is SourceRemovalResult.PermissionReleasedButStorageFailed ->
+        R.string.source_permission_released_storage_failed
     SourceRemovalResult.NotFound -> R.string.source_not_found
     SourceRemovalResult.StorageFailure -> R.string.source_storage_failed
 }

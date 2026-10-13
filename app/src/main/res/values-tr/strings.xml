@@ -6,6 +6,7 @@
     <string name="add_folder">Klasör ekle</string>
     <string name="refresh_sources">Erişimi yenile</string>
     <string name="remove_source">Kaynağı kaldır</string>
+    <string name="retry_permission_release">İzni bırakmayı yeniden dene</string>
     <string name="no_sources">Kayıtlı müzik kaynağı yok.</string>
     <string name="source_active">Etkin kaynak</string>
     <string name="source_removed">Kullanıcı tarafından kaldırıldı</string>
@@ -26,4 +27,5 @@
     <string name="source_removed_success">Kaynak kaldırıldı. Katalog kayıtları korundu.</string>
     <string name="source_already_removed">Kaynak zaten kaldırılmıştı.</string>
     <string name="source_removed_permission_release_failed">Kaynak kaldırıldı ancak Android izni bırakılamadı. Yeniden deneyin.</string>
+    <string name="source_permission_released_storage_failed">Android izni bırakıldı ancak kaynağın erişim durumu güncellenemedi.</string>
 </resources>

@@ -19,7 +19,11 @@ class SourceRegistry(
             SafTreeIdentityResult.Invalid -> return SourceRegistrationResult.InvalidUri
             is SafTreeIdentityResult.Valid -> identityResult.identity
         }
-        val permissionResult = permissionGateway.takeAndVerify(selection)
+        val permissionResult = try {
+            permissionGateway.takeAndVerify(selection)
+        } catch (_: Exception) {
+            return SourceRegistrationResult.PermissionFailure
+        }
         val persistedFlags: Int
         val availability: SourceAvailability
         when (permissionResult) {
@@ -79,7 +83,11 @@ class SourceRegistry(
             return SourceRefreshResult.Removed(sourceId)
         }
 
-        val inspection = permissionGateway.inspect(source.rootUri)
+        val inspection = try {
+            permissionGateway.inspect(source.rootUri)
+        } catch (_: Exception) {
+            return SourceRefreshResult.PermissionCheckFailed
+        }
         val updated = try {
             when (inspection) {
                 is TreePermissionInspection.Available -> repository.updateAccessState(
@@ -139,16 +147,36 @@ class SourceRegistry(
             if (!removed) return SourceRemovalResult.StorageFailure
         }
 
-        return when (permissionGateway.release(source.rootUri, source.persistedPermissionFlags)) {
+        val releaseResult = try {
+            permissionGateway.release(source.rootUri, source.persistedPermissionFlags)
+        } catch (_: Exception) {
+            TreePermissionReleaseResult.Failed
+        }
+        return when (releaseResult) {
             TreePermissionReleaseResult.Failed ->
                 SourceRemovalResult.RemovedWithPermissionReleaseFailure(sourceId)
 
             TreePermissionReleaseResult.AlreadyReleased,
             TreePermissionReleaseResult.Released,
-            -> if (wasRemoved) {
-                SourceRemovalResult.AlreadyRemoved(sourceId)
-            } else {
-                SourceRemovalResult.Removed(sourceId)
+            -> {
+                val reconciled = try {
+                    repository.updateAccessState(
+                        sourceId = sourceId,
+                        persistedPermissionFlags = 0,
+                        permissionState = SourcePermissionState.LOST,
+                        availability = SourceAvailability.PERMISSION_LOST,
+                        updatedAtEpochMs = nowEpochMs,
+                    )
+                } catch (_: Exception) {
+                    false
+                }
+                if (!reconciled) {
+                    SourceRemovalResult.PermissionReleasedButStorageFailed(sourceId)
+                } else if (wasRemoved) {
+                    SourceRemovalResult.AlreadyRemoved(sourceId)
+                } else {
+                    SourceRemovalResult.Removed(sourceId)
+                }
             }
         }
     }

@@ -50,6 +50,8 @@ sealed interface SourceRemovalResult {
 
     data class RemovedWithPermissionReleaseFailure(val sourceId: String) : SourceRemovalResult
 
+    data class PermissionReleasedButStorageFailed(val sourceId: String) : SourceRemovalResult
+
     data object NotFound : SourceRemovalResult
 
     data object StorageFailure : SourceRemovalResult
