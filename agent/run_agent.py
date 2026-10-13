@@ -3,7 +3,9 @@
 
 import json
 import os
+import shutil
 import subprocess
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -131,6 +133,7 @@ TOOLS = [
         },
     },
 ]
+TOOL_NAMES = {tool["function"]["name"] for tool in TOOLS}
 
 
 def relative_path(name):
@@ -221,11 +224,31 @@ def safe_write(name, content):
 def run_test(task, timeout):
     if task not in {"testDebugUnitTest", "compileDebugKotlin"}:
         return {"error": "Gradle task not allowed"}
+
+    def ignore_protected(source, names):
+        source_path = Path(source)
+        return [
+            name for name in names
+            if name.startswith(".") or name in BLOCKED_NAMES
+            or name in {"agent", ".github"}
+            or (source_path / name).is_symlink()
+        ]
+
+    allowed_environment = {
+        "ANDROID_HOME", "ANDROID_SDK_ROOT", "CI", "COMSPEC", "GRADLE_USER_HOME",
+        "HOME", "JAVA_HOME", "LANG", "LC_ALL", "PATH", "PATHEXT", "SystemRoot",
+        "TEMP", "TERM", "TMP", "USERPROFILE",
+    }
+    environment = {key: value for key, value in os.environ.items() if key in allowed_environment}
     try:
-        proc = subprocess.run(
-            ["bash", "./gradlew", task, "--no-daemon"],
-            cwd=ROOT, capture_output=True, text=True, timeout=timeout,
-        )
+        with tempfile.TemporaryDirectory(prefix="smooth-agent-test-") as directory:
+            workspace = Path(directory) / "repository"
+            shutil.copytree(ROOT, workspace, ignore=ignore_protected)
+            proc = subprocess.run(
+                ["bash", "./gradlew", task, "--no-daemon"],
+                cwd=workspace, capture_output=True, text=True, timeout=timeout,
+                env=environment,
+            )
         return {"exit_code": proc.returncode,
                 "output": (proc.stdout + "\n" + proc.stderr)[-8000:]}
     except subprocess.TimeoutExpired:
@@ -236,12 +259,16 @@ def native_tool_action(message):
     calls = message.get("tool_calls")
     if not isinstance(calls, list) or len(calls) != 1:
         return None
-    function = calls[0].get("function")
+    call = calls[0]
+    if (not isinstance(call, dict) or call.get("type") != "function"
+            or not isinstance(call.get("id"), str) or not call["id"].strip()):
+        return None
+    function = call.get("function")
     if not isinstance(function, dict):
         return None
     name = function.get("name")
     arguments = function.get("arguments")
-    if not isinstance(name, str) or not isinstance(arguments, str):
+    if name not in TOOL_NAMES or not isinstance(arguments, str):
         return None
     try:
         values = json.loads(arguments)
@@ -252,7 +279,7 @@ def native_tool_action(message):
     return json.dumps({"tool": name, **values}, ensure_ascii=False)
 
 
-def ask_model(history):
+def ask_model(history, deadline=None):
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError("OPENROUTER_API_KEY missing")
@@ -266,6 +293,13 @@ def ask_model(history):
         "parallel_tool_calls": False,
     }
     for attempt in range(3):
+        if deadline is None:
+            request_timeout = 120
+        else:
+            remaining = deadline - time.monotonic()
+            if remaining <= 15:
+                raise RuntimeError("Agent time limit reached before model response")
+            request_timeout = max(1, min(120, int(remaining - 15)))
         request = urllib.request.Request(
             "https://openrouter.ai/api/v1/chat/completions",
             data=json.dumps(payload).encode("utf-8"),
@@ -273,29 +307,33 @@ def ask_model(history):
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=120) as response:
+            with urllib.request.urlopen(request, timeout=request_timeout) as response:
                 data = json.load(response)
-            choice = data["choices"][0]
-            message = choice["message"]
-            content = message.get("content")
-            native_action = native_tool_action(message)
+            choices = data.get("choices") if isinstance(data, dict) else None
+            choice = choices[0] if isinstance(choices, list) and choices else None
+            message = choice.get("message") if isinstance(choice, dict) else None
+            content = message.get("content") if isinstance(message, dict) else None
+            native_action = native_tool_action(message) if isinstance(message, dict) else None
             if native_action is not None:
                 return {
                     "action": native_action,
                     "assistant": message,
-                    "tool_call_id": message["tool_calls"][0].get("id"),
+                    "tool_call_id": message["tool_calls"][0]["id"],
                 }
             if not isinstance(content, str) or not content.strip():
                 if attempt == 2:
-                    calls = message.get("tool_calls")
+                    calls = message.get("tool_calls") if isinstance(message, dict) else None
                     call_count = len(calls) if isinstance(calls, list) else 0
                     raise RuntimeError(
                         "OpenRouter returned no usable action "
-                        f"(finish_reason={choice.get('finish_reason')}, "
+                        f"(finish_reason={choice.get('finish_reason') if isinstance(choice, dict) else None}, "
                         f"content_type={type(content).__name__}, "
                         f"tool_calls={call_count})"
                     )
-                time.sleep(5 * (attempt + 1))
+                retry_delay = 5 * (attempt + 1)
+                if deadline is not None and time.monotonic() + retry_delay + 15 >= deadline:
+                    raise RuntimeError("Agent time limit reached while retrying model response")
+                time.sleep(retry_delay)
                 continue
             return {
                 "action": content.strip(),
@@ -305,13 +343,19 @@ def ask_model(history):
         except urllib.error.HTTPError as exc:
             if exc.code not in {429, 500, 502, 503, 504} or attempt == 2:
                 raise RuntimeError(f"OpenRouter HTTP {exc.code}") from None
-            time.sleep(5 * (attempt + 1))
+            retry_delay = 5 * (attempt + 1)
+            if deadline is not None and time.monotonic() + retry_delay + 15 >= deadline:
+                raise RuntimeError("Agent time limit reached while retrying OpenRouter") from None
+            time.sleep(retry_delay)
         except (urllib.error.URLError, TimeoutError) as exc:
             if attempt == 2:
                 raise RuntimeError(
                     f"OpenRouter network error: {type(exc).__name__}"
                 ) from None
-            time.sleep(5 * (attempt + 1))
+            retry_delay = 5 * (attempt + 1)
+            if deadline is not None and time.monotonic() + retry_delay + 15 >= deadline:
+                raise RuntimeError("Agent time limit reached while retrying OpenRouter") from None
+            time.sleep(retry_delay)
     raise RuntimeError("Model unavailable")
 
 
@@ -370,7 +414,7 @@ def main():
             if remaining <= 15:
                 status = "TIME LIMIT"
                 break
-            reply = ask_model(history)
+            reply = ask_model(history, deadline=started + MAX_SECONDS)
             raw = reply["action"]
             try:
                 action = json.loads(raw)

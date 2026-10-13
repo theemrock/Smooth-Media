@@ -83,6 +83,66 @@ class AskModelTest(unittest.TestCase):
             json.loads(reply["action"]),
         )
 
+    def test_malformed_native_call_is_retried(self):
+        malformed = self.native_response()
+        malformed["choices"][0]["message"]["tool_calls"] = [None]
+        attempts = iter([malformed, self.native_response()])
+
+        def fake_urlopen(request, timeout):
+            return io.BytesIO(json.dumps(next(attempts)).encode("utf-8"))
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy-test-value"}), \
+                patch.object(run_agent.urllib.request, "urlopen", side_effect=fake_urlopen), \
+                patch.object(run_agent.time, "sleep"):
+            reply = run_agent.ask_model([])
+
+        self.assertEqual("call-test", reply["tool_call_id"])
+
+    def test_non_string_tool_call_id_is_retried(self):
+        malformed = self.native_response()
+        malformed["choices"][0]["message"]["tool_calls"][0]["id"] = 123
+        attempts = iter([malformed, self.native_response()])
+
+        def fake_urlopen(request, timeout):
+            return io.BytesIO(json.dumps(next(attempts)).encode("utf-8"))
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy-test-value"}), \
+                patch.object(run_agent.urllib.request, "urlopen", side_effect=fake_urlopen), \
+                patch.object(run_agent.time, "sleep"):
+            reply = run_agent.ask_model([])
+
+        self.assertEqual("call-test", reply["tool_call_id"])
+
+    def test_malformed_response_shape_is_retried(self):
+        attempts = iter([{"error": {"message": "provider failed"}}, self.native_response()])
+
+        def fake_urlopen(request, timeout):
+            return io.BytesIO(json.dumps(next(attempts)).encode("utf-8"))
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy-test-value"}), \
+                patch.object(run_agent.urllib.request, "urlopen", side_effect=fake_urlopen), \
+                patch.object(run_agent.time, "sleep"):
+            reply = run_agent.ask_model([])
+
+        self.assertEqual("call-test", reply["tool_call_id"])
+
+    def test_model_request_respects_agent_deadline(self):
+        observed_timeouts = []
+
+        def fake_urlopen(request, timeout):
+            observed_timeouts.append(timeout)
+            raise TimeoutError("timed out")
+
+        clock = iter([580.0, 580.0, 590.0])
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy-test-value"}), \
+                patch.object(run_agent.urllib.request, "urlopen", side_effect=fake_urlopen), \
+                patch.object(run_agent.time, "monotonic", side_effect=lambda: next(clock)), \
+                patch.object(run_agent.time, "sleep"):
+            with self.assertRaisesRegex(RuntimeError, "time limit"):
+                run_agent.ask_model([], deadline=600.0)
+
+        self.assertEqual([5], observed_timeouts)
+
     def test_native_tool_result_uses_tool_role_in_history(self):
         assistant = self.native_response()["choices"][0]["message"]
         reply = {
@@ -145,6 +205,41 @@ class AskModelTest(unittest.TestCase):
             "Clarified the policy boundary and added regression coverage.",
             content,
         )
+
+    def test_gradle_runs_in_sanitized_repository_copy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "repository"
+            (root / "app" / "src" / "test").mkdir(parents=True)
+            (root / "app" / "src" / "test" / "ExampleTest.kt").write_text(
+                "class ExampleTest", encoding="utf-8"
+            )
+            (root / ".git").mkdir()
+            (root / ".git" / "config").write_text("credential", encoding="utf-8")
+            (root / ".github").mkdir()
+            (root / "agent").mkdir()
+            (root / "gradlew").write_text("#!/bin/sh", encoding="utf-8")
+
+            def fake_run(command, cwd, capture_output, text, timeout, env):
+                workspace = Path(cwd)
+                self.assertNotEqual(root, workspace)
+                self.assertTrue((workspace / "app/src/test/ExampleTest.kt").is_file())
+                self.assertFalse((workspace / ".git").exists())
+                self.assertFalse((workspace / ".github").exists())
+                self.assertFalse((workspace / "agent").exists())
+                self.assertNotIn("OPENROUTER_API_KEY", env)
+                self.assertNotIn("GITHUB_TOKEN", env)
+                return run_agent.subprocess.CompletedProcess(command, 0, "passed", "")
+
+            with patch.object(run_agent, "ROOT", root), \
+                    patch.dict(os.environ, {
+                        "OPENROUTER_API_KEY": "secret",
+                        "GITHUB_TOKEN": "credential",
+                        "PATH": os.environ.get("PATH", ""),
+                    }, clear=True), \
+                    patch.object(run_agent.subprocess, "run", side_effect=fake_run):
+                result = run_agent.run_test("testDebugUnitTest", timeout=30)
+
+        self.assertEqual(0, result["exit_code"])
 
 
 if __name__ == "__main__":
