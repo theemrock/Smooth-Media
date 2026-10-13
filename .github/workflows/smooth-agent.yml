@@ -1,65 +1,48 @@
 
-name: SMOOTH Agent Quickstart
+name: SMOOTH Agent
 
 on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+
+concurrency:
+  group: smooth-agent
+  cancel-in-progress: false
 
 jobs:
-  quickstart:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
+  agent:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: true
 
-      - name: Check OpenRouter API
+      - name: Run SMOOTH agent
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          python3 - <<'PY'
-          import json
-          import os
-          import urllib.request
-          import urllib.error
+          python3 agent/run_agent.py
 
-          key = os.environ.get("OPENROUTER_API_KEY", "")
-          if not key:
-              raise SystemExit("FAIL: API key missing")
+      - name: Publish report to agent branch
+        run: |
+          set -euo pipefail
 
-          payload = {
-              "model": "cohere/north-mini-code:free",
-              "messages": [
-                  {
-                      "role": "user",
-                      "content": "Reply with exactly: SMOOTH ONLINE"
-                  }
-              ],
-              "max_tokens": 64
-          }
+          git config user.name "smooth-agent[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          request = urllib.request.Request(
-              "https://openrouter.ai/api/v1/chat/completions",
-              data=json.dumps(payload).encode("utf-8"),
-              headers={
-                  "Authorization": "Bearer " + key,
-                  "Content-Type": "application/json"
-              },
-              method="POST"
-          )
+          git switch -C agent/first-report
 
-          try:
-              with urllib.request.urlopen(request, timeout=60) as response:
-                  result = json.load(response)
-          except urllib.error.HTTPError as error:
-              print("HTTP STATUS:", error.code)
-              raise SystemExit("FAIL: OpenRouter request rejected")
+          git add agent/REPORT.md
 
-          message = result["choices"][0]["message"]["content"]
-          print("MODEL:", result.get("model"))
-          print("RESPONSE:", message)
-          print("API CONNECTION: PASS")
-          PY
+          if git diff --cached --quiet; then
+            echo "No report changes."
+            exit 0
+          fi
+
+          git commit -m "docs(agent): generate repository report"
+          git push --force-with-lease origin agent/first-report
