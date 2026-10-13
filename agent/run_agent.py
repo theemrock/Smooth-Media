@@ -183,7 +183,10 @@ def ask_model(history):
                 data = json.load(response)
             content = data["choices"][0]["message"]["content"]
             if not isinstance(content, str) or not content.strip():
-                raise RuntimeError("Empty or invalid model response")
+                if attempt == 2:
+                    raise RuntimeError("Empty or invalid model response")
+                time.sleep(5 * (attempt + 1))
+                continue
             return content.strip()
         except urllib.error.HTTPError as exc:
             if exc.code not in {429, 500, 502, 503, 504} or attempt == 2:
