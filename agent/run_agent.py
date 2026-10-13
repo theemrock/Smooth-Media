@@ -43,7 +43,8 @@ BLOCKED_NAMES = {
 
 SYSTEM = """You are a constrained Android coding agent for SMOOTH Media.
 Read agent/TASK.md and complete ONLY the task specified there.
-Return exactly one JSON object per response (no markdown).
+Use exactly one provided function tool per response.
+If native function tools are unavailable, return exactly one JSON object (no markdown).
 Tools:
 {"tool":"list","path":"app/src"}
 {"tool":"read","path":"app/src/main/AndroidManifest.xml"}
@@ -60,6 +61,76 @@ Rules:
 - After your FINAL write, run testDebugUnitTest and verify it passes.
 - If blocked, finish with a clear explanation. Never invent test results.
 """
+
+TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "list",
+            "description": "List an allowed repository directory.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "read",
+            "description": "Read an allowed repository file.",
+            "parameters": {
+                "type": "object",
+                "properties": {"path": {"type": "string"}},
+                "required": ["path"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "write",
+            "description": "Write one allowed Kotlin or Java source or test file.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string"},
+                    "content": {"type": "string"},
+                },
+                "required": ["path", "content"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "test",
+            "description": "Run one allowed Gradle verification task.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "task": {
+                        "type": "string",
+                        "enum": ["testDebugUnitTest", "compileDebugKotlin"],
+                    },
+                },
+                "required": ["task"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "finish",
+            "description": "Finish the task with a concise summary or blocker.",
+            "parameters": {
+                "type": "object",
+                "properties": {"summary": {"type": "string"}},
+                "required": ["summary"],
+            },
+        },
+    },
+]
 
 
 def relative_path(name):
@@ -161,6 +232,26 @@ def run_test(task, timeout):
         return {"error": f"Gradle timed out after {timeout}s"}
 
 
+def native_tool_action(message):
+    calls = message.get("tool_calls")
+    if not isinstance(calls, list) or len(calls) != 1:
+        return None
+    function = calls[0].get("function")
+    if not isinstance(function, dict):
+        return None
+    name = function.get("name")
+    arguments = function.get("arguments")
+    if not isinstance(name, str) or not isinstance(arguments, str):
+        return None
+    try:
+        values = json.loads(arguments)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(values, dict) or "tool" in values:
+        return None
+    return json.dumps({"tool": name, **values}, ensure_ascii=False)
+
+
 def ask_model(history):
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
@@ -170,6 +261,9 @@ def ask_model(history):
         "messages": [{"role": "system", "content": SYSTEM}, *history],
         "temperature": 0,
         "max_tokens": 10000,
+        "tools": TOOLS,
+        "tool_choice": "auto",
+        "parallel_tool_calls": False,
     }
     for attempt in range(3):
         request = urllib.request.Request(
@@ -181,24 +275,69 @@ def ask_model(history):
         try:
             with urllib.request.urlopen(request, timeout=120) as response:
                 data = json.load(response)
-            content = data["choices"][0]["message"]["content"]
+            choice = data["choices"][0]
+            message = choice["message"]
+            content = message.get("content")
+            native_action = native_tool_action(message)
+            if native_action is not None:
+                return {
+                    "action": native_action,
+                    "assistant": message,
+                    "tool_call_id": message["tool_calls"][0].get("id"),
+                }
             if not isinstance(content, str) or not content.strip():
                 if attempt == 2:
-                    raise RuntimeError("Empty or invalid model response")
+                    calls = message.get("tool_calls")
+                    call_count = len(calls) if isinstance(calls, list) else 0
+                    raise RuntimeError(
+                        "OpenRouter returned no usable action "
+                        f"(finish_reason={choice.get('finish_reason')}, "
+                        f"content_type={type(content).__name__}, "
+                        f"tool_calls={call_count})"
+                    )
                 time.sleep(5 * (attempt + 1))
                 continue
-            return content.strip()
+            return {
+                "action": content.strip(),
+                "assistant": message,
+                "tool_call_id": None,
+            }
         except urllib.error.HTTPError as exc:
             if exc.code not in {429, 500, 502, 503, 504} or attempt == 2:
                 raise RuntimeError(f"OpenRouter HTTP {exc.code}") from None
             time.sleep(5 * (attempt + 1))
+        except (urllib.error.URLError, TimeoutError) as exc:
+            if attempt == 2:
+                raise RuntimeError(
+                    f"OpenRouter network error: {type(exc).__name__}"
+                ) from None
+            time.sleep(5 * (attempt + 1))
     raise RuntimeError("Model unavailable")
 
 
-def save_report(status, changed, tests, events):
+def append_history(history, reply, result):
+    result_content = json.dumps(result, ensure_ascii=False)[:10000]
+    if reply["tool_call_id"]:
+        history.extend([
+            reply["assistant"],
+            {
+                "role": "tool",
+                "tool_call_id": reply["tool_call_id"],
+                "content": result_content,
+            },
+        ])
+    else:
+        history.extend([
+            {"role": "assistant", "content": reply["action"][:65000]},
+            {"role": "user", "content": result_content},
+        ])
+
+
+def save_report(status, changed, tests, events, summary):
     lines = [
         "# SMOOTH Media Coding Agent Report", "", f"Model: `{MODEL}`",
-        f"Status: **{status}**", "", "## Changed Files", "",
+        f"Status: **{status}**", "", "## Summary", "",
+        summary or "- No summary provided", "", "## Changed Files", "",
         *([f"- `{p}`" for p in sorted(changed)] or ["- None"]),
         "", "## Test Results", "",
         *([f"- `{t['task']}`: {t['result']}" for t in tests] or ["- No tests executed"]),
@@ -218,6 +357,7 @@ def main():
     changed, inspected = set(), set()
     writes = test_count = 0
     status = "INCOMPLETE"
+    summary = ""
     change_revision = 0
     passed_revision = None
     try:
@@ -230,7 +370,8 @@ def main():
             if remaining <= 15:
                 status = "TIME LIMIT"
                 break
-            raw = ask_model(history)
+            reply = ask_model(history)
+            raw = reply["action"]
             try:
                 action = json.loads(raw)
                 if not isinstance(action, dict):
@@ -278,16 +419,15 @@ def main():
                             passed_revision = change_revision
                 elif tool == "finish":
                     result = {"status": "finished"}
+                    if isinstance(action.get("summary"), str):
+                        summary = action["summary"].strip()[:2000]
                 else:
                     result = {"error": "Unknown tool"}
             except (ValueError, OSError, UnicodeError) as exc:
                 result = {"error": f"{type(exc).__name__}: {exc}"}
             label = result.get("status", result.get("exit_code", result.get("error", "OK")))
             events.append({"tool": str(tool), "target": str(target), "result": str(label)})
-            history.extend([
-                {"role": "assistant", "content": raw[:65000]},
-                {"role": "user", "content": json.dumps(result, ensure_ascii=False)[:10000]},
-            ])
+            append_history(history, reply, result)
             if tool == "finish":
                 source_changed = any(p.startswith("app/src/main/") for p in changed)
                 test_changed = any(p.startswith(("app/src/test/", "app/src/androidTest/")) for p in changed)
@@ -304,7 +444,7 @@ def main():
         status = "ERROR"
         events.append({"tool": "runtime", "result": f"{type(exc).__name__}: {exc}"})
     finally:
-        save_report(status, changed, tests, events)
+        save_report(status, changed, tests, events, summary)
     print("SMOOTH CODING AGENT:", status, flush=True)
     if status != "FINISHED":
         raise SystemExit(1)
