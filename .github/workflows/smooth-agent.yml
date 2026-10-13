@@ -22,13 +22,23 @@ jobs:
         with:
           persist-credentials: true
 
-      - name: Run SMOOTH agent
+      - name: Set up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Run SMOOTH coding agent
         env:
           OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
           python3 agent/run_agent.py
 
-      - name: Publish report to agent branch
+      - name: Publish agent changes
+        if: always()
         run: |
           set -euo pipefail
 
@@ -38,14 +48,14 @@ jobs:
           BRANCH="agent/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           git switch -c "$BRANCH"
 
-          git add agent/REPORT.md
+          git add agent/REPORT.md app/src/
 
           if git diff --cached --quiet; then
-            echo "No report changes."
+            echo "No changes to publish."
             exit 0
           fi
 
-          git commit -m "docs(agent): generate repository report"
+          git commit -m "feat(agent): autonomous coding attempt"
           git push -u origin "$BRANCH"
 
           echo "Published branch: $BRANCH"
