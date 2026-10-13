@@ -35,7 +35,8 @@ jobs:
           git config user.name "smooth-agent[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-          git switch -C agent/first-report
+          BRANCH="agent/run-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          git switch -c "$BRANCH"
 
           git add agent/REPORT.md
 
@@ -45,4 +46,6 @@ jobs:
           fi
 
           git commit -m "docs(agent): generate repository report"
-          git push --force-with-lease origin agent/first-report
+          git push -u origin "$BRANCH"
+
+          echo "Published branch: $BRANCH"
