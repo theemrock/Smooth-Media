@@ -1,0 +1,32 @@
+
+name: SMOOTH Agent Quickstart
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  quickstart:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Check server
+        run: |
+          echo "SMOOTH AGENT ONLINE"
+          echo "=== SYSTEM ==="
+          uname -a
+          echo "=== CPU ==="
+          nproc
+          echo "=== RAM ==="
+          free -h
+          echo "=== DISK ==="
+          df -h .
+          echo "=== REPOSITORY ==="
+          git log -1 --oneline
+          echo "=== DONE ==="
