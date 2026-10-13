@@ -16,17 +16,50 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Check server
+      - name: Check OpenRouter API
+        env:
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
         run: |
-          echo "SMOOTH AGENT ONLINE"
-          echo "=== SYSTEM ==="
-          uname -a
-          echo "=== CPU ==="
-          nproc
-          echo "=== RAM ==="
-          free -h
-          echo "=== DISK ==="
-          df -h .
-          echo "=== REPOSITORY ==="
-          git log -1 --oneline
-          echo "=== DONE ==="
+          python3 - <<'PY'
+          import json
+          import os
+          import urllib.request
+          import urllib.error
+
+          key = os.environ.get("OPENROUTER_API_KEY", "")
+          if not key:
+              raise SystemExit("FAIL: API key missing")
+
+          payload = {
+              "model": "cohere/north-mini-code:free",
+              "messages": [
+                  {
+                      "role": "user",
+                      "content": "Reply with exactly: SMOOTH ONLINE"
+                  }
+              ],
+              "max_tokens": 64
+          }
+
+          request = urllib.request.Request(
+              "https://openrouter.ai/api/v1/chat/completions",
+              data=json.dumps(payload).encode("utf-8"),
+              headers={
+                  "Authorization": "Bearer " + key,
+                  "Content-Type": "application/json"
+              },
+              method="POST"
+          )
+
+          try:
+              with urllib.request.urlopen(request, timeout=60) as response:
+                  result = json.load(response)
+          except urllib.error.HTTPError as error:
+              print("HTTP STATUS:", error.code)
+              raise SystemExit("FAIL: OpenRouter request rejected")
+
+          message = result["choices"][0]["message"]["content"]
+          print("MODEL:", result.get("model"))
+          print("RESPONSE:", message)
+          print("API CONNECTION: PASS")
+          PY
