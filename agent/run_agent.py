@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+"""Constrained SMOOTH Media coding agent for GitHub Actions."""
 
 import json
 import os
@@ -10,594 +12,297 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 MODEL = "cohere/north-mini-code:free"
 REPORT = ROOT / "agent" / "REPORT.md"
+TASK = ROOT / "agent" / "TASK.md"
 
 MAX_STEPS = 16
 MAX_SECONDS = 600
 MAX_WRITES = 6
 MAX_TESTS = 3
+MAX_FILE_BYTES = 100_000
+MAX_CONTENT_CHARS = 60_000
 
-SYSTEM = """
-You are an autonomous Android coding agent for SMOOTH Media.
+# Read access is intentionally narrow: source, tests, task and build entrypoints.
+READ_FILES = {
+    "agent/TASK.md",
+    "settings.gradle.kts",
+    "settings.gradle",
+    "build.gradle.kts",
+    "build.gradle",
+    "app/build.gradle.kts",
+    "app/build.gradle",
+    "gradle/libs.versions.toml",
+    "app/src/main/AndroidManifest.xml",
+}
+SOURCE_AREAS = ("main", "test", "androidTest")
+BLOCKED_NAMES = {
+    ".git", ".github", ".gradle", ".idea", "build", "local.properties",
+    "gradle.properties", "keystore.properties", "secrets.properties",
+    "google-services.json", "google-services.xml", "credentials.json",
+    "id_rsa", "id_ed25519",
+}
 
-Read agent/TASK.md and complete the requested coding task.
-
-You have five tools:
-- list: list repository directory contents
-- read: read a repository file
-- write: create or replace an allowed Android source/test file
-- test: run an allowed Gradle task
-- finish: finish the task
-
-Return exactly one JSON object per response.
-
-Examples:
+SYSTEM = """You are a constrained Android coding agent for SMOOTH Media.
+Read agent/TASK.md and complete ONLY the task specified there.
+Return exactly one JSON object per response (no markdown).
+Tools:
 {"tool":"list","path":"app/src"}
 {"tool":"read","path":"app/src/main/AndroidManifest.xml"}
-{"tool":"write","path":"app/src/test/java/example/Test.kt","content":"..."}
+{"tool":"write","path":"app/src/test/java/example/ExampleTest.kt","content":"..."}
 {"tool":"test","task":"testDebugUnitTest"}
-{"tool":"finish","summary":"Completed task and verified tests"}
-
+{"tool":"finish","summary":"..."}
 Rules:
-- Inspect existing code before modifying it.
-- Make one small, meaningful Android source-code improvement.
-- Add or update a relevant automated test.
-- Preserve existing architecture and behavior.
-- Never modify Gradle configuration, workflows or agent scripts.
-- Never access secrets, credentials or hidden configuration.
-- Never run Git commands.
-- Never invent test results.
-- If blocked, finish with an explanation.
-- Do not wrap JSON in Markdown fences.
+- Inspect relevant code before modifying it.
+- Make a small change, plus a meaningful automated test.
+- Preserve the existing architecture and behavior.
+- Do not modify Gradle configuration, workflows or agent scripts.
+- Do not request or reveal secrets, tokens, credentials or hidden configuration.
+- Do not run Git or shell commands.
+- After your FINAL write, run testDebugUnitTest and verify it passes.
+- If blocked, finish with a clear explanation. Never invent test results.
 """
 
-history = []
-events = []
 
-
-def safe_path(name):
-    if not isinstance(name, str) or not name:
+def relative_path(name):
+    if not isinstance(name, str) or not name.strip():
         raise ValueError("Invalid path")
-
-    path = (ROOT / name).resolve()
-
-    if not path.is_relative_to(ROOT):
-        raise ValueError("Path outside repository")
-
-    relative = path.relative_to(ROOT)
-    blocked = {
-        ".git", ".github", ".gradle", "build",
-        ".idea", "local.properties"
-    }
-
-    if any(part in blocked for part in relative.parts):
+    raw = Path(name)
+    if raw.is_absolute() or ".." in raw.parts:
+        raise ValueError("Absolute paths and parent traversal prohibited")
+    if any(part.startswith(".") or part in BLOCKED_NAMES for part in raw.parts):
         raise ValueError("Protected path")
-
-    if path.is_symlink():
-        raise ValueError("Symlink access prohibited")
-
-    return path
-
-
-def allowed_write(path):
-    relative = path.relative_to(ROOT)
-    parts = relative.parts
-
-    if len(parts) < 4:
-        return False
-
-    if parts[0:2] != ("app", "src"):
-        return False
-
-    if parts[2] not in {
-        "main", "test", "androidTest"
-    }:
-        return False
-
-    if path.suffix not in {".kt", ".java"}:
-        return False
-
-    return True
+    path = ROOT / raw
+    cursor = ROOT
+    for part in raw.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            raise ValueError("Symlink access prohibited")
+    if not path.resolve().is_relative_to(ROOT):
+        raise ValueError("Path outside repository")
+    return raw.as_posix(), path
 
 
-def execute(command, timeout):
+def source_file(rel):
+    parts = Path(rel).parts
+    return (len(parts) >= 5 and parts[:2] == ("app", "src")
+            and parts[2] in SOURCE_AREAS
+            and Path(rel).suffix in {".kt", ".java"})
+
+
+def readable(rel):
+    if rel in READ_FILES:
+        return True
+    parts = Path(rel).parts
+    return len(parts) >= 4 and parts[:2] == ("app", "src") and parts[2] in SOURCE_AREAS and (
+        Path(rel).suffix in {".kt", ".java", ".xml"}
+    )
+
+
+def listable(rel):
+    if rel == ".":
+        return True
+    parts = Path(rel).parts
+    return rel == "app" or (parts and parts[0] == "app" and len(parts) >= 2 and parts[1] == "src")
+
+
+def safe_list(name):
+    if name == ".":
+        path = ROOT
+        rel = "."
+    else:
+        rel, path = relative_path(name)
+    if not listable(rel) or not path.is_dir():
+        return {"error": "Directory not allowed or not found"}
+    entries = []
+    for item in sorted(path.iterdir()):
+        if item.is_symlink() or item.name.startswith(".") or item.name in BLOCKED_NAMES:
+            continue
+        child = item.relative_to(ROOT).as_posix()
+        if item.is_dir():
+            if listable(child):
+                entries.append(child + "/")
+        elif readable(child):
+            entries.append(child)
+    return {"entries": entries[:100]}
+
+
+def safe_read(name):
+    rel, path = relative_path(name)
+    if not readable(rel):
+        return {"error": "Reading this file is prohibited"}
+    if not path.is_file():
+        return {"error": "File not found"}
+    if path.stat().st_size > MAX_FILE_BYTES:
+        return {"error": "File too large"}
+    return {"content": path.read_text(encoding="utf-8", errors="replace")[:20000]}
+
+
+def safe_write(name, content):
+    rel, path = relative_path(name)
+    if not source_file(rel):
+        return {"error": "Writing this file is prohibited"}
+    if not isinstance(content, str) or len(content) > MAX_CONTENT_CHARS:
+        return {"error": "Invalid content or content too large"}
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return {"status": "written", "path": rel}
+
+
+def run_test(task, timeout):
+    if task not in {"testDebugUnitTest", "compileDebugKotlin"}:
+        return {"error": "Gradle task not allowed"}
     try:
-        result = subprocess.run(
-            command,
-            cwd=ROOT,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+        proc = subprocess.run(
+            ["bash", "./gradlew", task, "--no-daemon"],
+            cwd=ROOT, capture_output=True, text=True, timeout=timeout,
         )
-
-        return {
-            "exit_code": result.returncode,
-            "output": (
-                result.stdout + "\n" + result.stderr
-            )[-8000:],
-        }
-
+        return {"exit_code": proc.returncode,
+                "output": (proc.stdout + "\n" + proc.stderr)[-8000:]}
     except subprocess.TimeoutExpired:
-        return {
-            "error": f"Command timed out after {timeout}s"
-        }
+        return {"error": f"Gradle timed out after {timeout}s"}
 
 
-def run_tool(action):
-    tool = action.get("tool")
-
-    if tool == "list":
-        path = safe_path(action.get("path", "."))
-
-        if not path.is_dir():
-            return {"error": "Not a directory"}
-
-        entries = []
-
-        for item in sorted(path.iterdir()):
-            if item.name.startswith("."):
-                continue
-
-            entries.append(
-                str(item.relative_to(ROOT))
-                + ("/" if item.is_dir() else "")
-            )
-
-        return {"entries": entries[:100]}
-
-    if tool == "read":
-        path = safe_path(action.get("path"))
-
-        if not path.is_file():
-            return {"error": "File not found"}
-
-        if path.stat().st_size > 100000:
-            return {"error": "File too large"}
-
-        return {
-            "content": path.read_text(
-                encoding="utf-8",
-                errors="replace"
-            )[:20000]
-        }
-
-    if tool == "write":
-        path = safe_path(action.get("path"))
-
-        if not allowed_write(path):
-            return {
-                "error": "Writing this path is prohibited"
-            }
-
-        content = action.get("content")
-
-        if not isinstance(content, str):
-            return {"error": "Content must be a string"}
-
-        if len(content) > 60000:
-            return {"error": "File content too large"}
-
-        path.parent.mkdir(
-            parents=True,
-            exist_ok=True
-        )
-
-        path.write_text(
-            content,
-            encoding="utf-8"
-        )
-
-        return {
-            "status": "written",
-            "path": str(path.relative_to(ROOT))
-        }
-
-    if tool == "test":
-        task = action.get("task")
-
-        allowed_tasks = {
-            "testDebugUnitTest",
-            "compileDebugKotlin",
-        }
-
-        if task not in allowed_tasks:
-            return {
-                "error": "Gradle task not allowed"
-            }
-
-        return execute(
-            [
-                "bash",
-                "./gradlew",
-                task,
-                "--no-daemon"
-            ],
-            timeout=240,
-        )
-
-    if tool == "finish":
-        return {"status": "finished"}
-
-    return {"error": "Unknown tool"}
-
-
-def ask_model():
+def ask_model(history):
     key = os.environ.get("OPENROUTER_API_KEY")
-
     if not key:
-        raise RuntimeError(
-            "OPENROUTER_API_KEY missing"
-        )
-
+        raise RuntimeError("OPENROUTER_API_KEY missing")
     payload = {
         "model": MODEL,
-        "messages": [
-            {"role": "system", "content": SYSTEM},
-            *history,
-        ],
+        "messages": [{"role": "system", "content": SYSTEM}, *history],
         "temperature": 0,
         "max_tokens": 10000,
     }
-
-    request = urllib.request.Request(
-        "https://openrouter.ai/api/v1/chat/completions",
-        data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {key}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-
     for attempt in range(3):
+        request = urllib.request.Request(
+            "https://openrouter.ai/api/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            method="POST",
+        )
         try:
-            with urllib.request.urlopen(
-                request,
-                timeout=120
-            ) as response:
+            with urllib.request.urlopen(request, timeout=120) as response:
                 data = json.load(response)
-
             content = data["choices"][0]["message"]["content"]
-
-            if not isinstance(content, str):
-                raise RuntimeError(
-                    "Invalid model response"
-                )
-
-            if not content.strip():
-                raise RuntimeError(
-                    "Empty model response"
-                )
-
+            if not isinstance(content, str) or not content.strip():
+                raise RuntimeError("Empty or invalid model response")
             return content.strip()
-
         except urllib.error.HTTPError as exc:
-            if exc.code not in {
-                429, 500, 502, 503, 504
-            }:
-                raise RuntimeError(
-                    f"OpenRouter HTTP {exc.code}"
-                ) from None
-
-            if attempt == 2:
-                raise RuntimeError(
-                    f"OpenRouter HTTP {exc.code}"
-                ) from None
-
+            if exc.code not in {429, 500, 502, 503, 504} or attempt == 2:
+                raise RuntimeError(f"OpenRouter HTTP {exc.code}") from None
             time.sleep(5 * (attempt + 1))
-
     raise RuntimeError("Model unavailable")
 
 
-def save_report(status, changed_files, test_results):
+def save_report(status, changed, tests, events):
     lines = [
-        "# SMOOTH Media Coding Agent Report",
-        "",
-        f"Model: `{MODEL}`",
-        f"Status: **{status}**",
-        "",
-        "## Changed Files",
-        "",
+        "# SMOOTH Media Coding Agent Report", "", f"Model: `{MODEL}`",
+        f"Status: **{status}**", "", "## Changed Files", "",
+        *([f"- `{p}`" for p in sorted(changed)] or ["- None"]),
+        "", "## Test Results", "",
+        *([f"- `{t['task']}`: {t['result']}" for t in tests] or ["- No tests executed"]),
+        "", "## Execution Log", "",
+        *[f"{i}. `{e['tool']}` `{e.get('target', '')}`: {e['result']}"
+          for i, e in enumerate(events, 1)],
     ]
-
-    if changed_files:
-        for path in sorted(changed_files):
-            lines.append(f"- `{path}`")
-    else:
-        lines.append("- None")
-
-    lines.extend([
-        "",
-        "## Test Results",
-        "",
-    ])
-
-    if test_results:
-        for test in test_results:
-            lines.append(
-                f"- `{test['task']}`: "
-                f"{test['result']}"
-            )
-    else:
-        lines.append("- No tests executed")
-
-    lines.extend([
-        "",
-        "## Execution Log",
-        "",
-    ])
-
-    for index, event in enumerate(events, 1):
-        lines.append(
-            f"{index}. `{event['tool']}` "
-            f"`{event.get('target', '')}`: "
-            f"{event['result']}"
-        )
-
-    REPORT.parent.mkdir(
-        parents=True,
-        exist_ok=True
-    )
-
-    REPORT.write_text(
-        "\n".join(lines) + "\n",
-        encoding="utf-8",
-    )
+    REPORT.parent.mkdir(parents=True, exist_ok=True)
+    REPORT.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
 def main():
-    print(
-        "SMOOTH CODING AGENT START",
-        flush=True
-    )
+    print("SMOOTH CODING AGENT START", flush=True)
     print("MODEL:", MODEL, flush=True)
-
     started = time.monotonic()
-
-    task_file = ROOT / "agent" / "TASK.md"
-
-    if not task_file.is_file():
-        raise RuntimeError(
-            "agent/TASK.md not found"
-        )
-
-    task = task_file.read_text(
-        encoding="utf-8"
-    )
-
-    history.append({
-        "role": "user",
-        "content": (
-            "Execute this task:\n\n"
-            + task
-        ),
-    })
-
+    history, events, tests = [], [], []
+    changed, inspected = set(), set()
+    writes = test_count = 0
     status = "INCOMPLETE"
-    changed_files = set()
-    inspected_files = set()
-    test_results = []
-
-    write_count = 0
-    test_count = 0
-
+    change_revision = 0
+    passed_revision = None
     try:
+        if not TASK.is_file():
+            raise RuntimeError("agent/TASK.md not found")
+        task = TASK.read_text(encoding="utf-8")
+        history.append({"role": "user", "content": "Execute this task:\n\n" + task})
         for step in range(MAX_STEPS):
-            if time.monotonic() - started > MAX_SECONDS:
+            remaining = MAX_SECONDS - (time.monotonic() - started)
+            if remaining <= 15:
                 status = "TIME LIMIT"
                 break
-
-            raw = ask_model()
-
+            raw = ask_model(history)
             try:
                 action = json.loads(raw)
-
                 if not isinstance(action, dict):
-                    raise ValueError(
-                        "Expected JSON object"
-                    )
-
-            except ValueError:
-                events.append({
-                    "tool": "parse",
-                    "result": "Invalid JSON response"
-                })
-
-                history.append({
-                    "role": "assistant",
-                    "content": raw[:3000],
-                })
-
-                history.append({
-                    "role": "user",
-                    "content": (
-                        "Invalid JSON. Return exactly "
-                        "one valid JSON tool object."
-                    ),
-                })
-
+                    raise ValueError("Expected object")
+            except (ValueError, TypeError):
+                events.append({"tool": "parse", "result": "Invalid JSON"})
+                history.extend([
+                    {"role": "assistant", "content": raw[:3000]},
+                    {"role": "user", "content": "Return exactly one valid JSON tool object."},
+                ])
                 continue
-
-            tool = action.get(
-                "tool",
-                "unknown"
-            )
-
-            target = action.get(
-                "path",
-                action.get("task", "")
-            )
-
-            print(
-                f"STEP {step + 1}: "
-                f"{tool} {target}",
-                flush=True
-            )
-
-            if tool == "write":
-                if write_count >= MAX_WRITES:
-                    result = {
-                        "error": "Write limit reached"
-                    }
-                else:
-                    try:
-                        path = safe_path(
-                            action.get("path")
-                        )
-                        relative = str(
-                            path.relative_to(ROOT)
-                        )
-
-                        if (
-                            path.exists()
-                            and relative not in inspected_files
-                        ):
-                            result = {
-                                "error": (
-                                    "Read existing file "
-                                    "before modifying it"
-                                )
-                            }
+            tool = action.get("tool")
+            target = action.get("path", action.get("task", ""))
+            print(f"STEP {step + 1}: {tool} {target}", flush=True)
+            try:
+                if tool == "list":
+                    result = safe_list(action.get("path", "."))
+                elif tool == "read":
+                    result = safe_read(action.get("path"))
+                    if "content" in result:
+                        inspected.add(relative_path(action["path"])[0])
+                elif tool == "write":
+                    if writes >= MAX_WRITES:
+                        result = {"error": "Write limit reached"}
+                    else:
+                        rel, path = relative_path(action.get("path"))
+                        if path.exists() and rel not in inspected:
+                            result = {"error": "Read existing file before modifying it"}
                         else:
-                            result = run_tool(action)
-
-                    except ValueError as exc:
-                        result = {
-                            "error": str(exc)
-                        }
-
-                if result.get("status") == "written":
-                    write_count += 1
-                    changed_files.add(
-                        result["path"]
-                    )
-
-            elif tool == "test":
-                if test_count >= MAX_TESTS:
-                    result = {
-                        "error": "Test limit reached"
-                    }
+                            result = safe_write(action.get("path"), action.get("content"))
+                            if result.get("status") == "written":
+                                writes += 1
+                                change_revision += 1
+                                changed.add(rel)
+                elif tool == "test":
+                    if test_count >= MAX_TESTS:
+                        result = {"error": "Test limit reached"}
+                    else:
+                        test_count += 1
+                        remaining = MAX_SECONDS - (time.monotonic() - started)
+                        result = run_test(action.get("task"), timeout=max(1, min(240, int(remaining - 10))))
+                        ok = result.get("exit_code") == 0
+                        tests.append({"task": action.get("task"), "result": "PASS" if ok else "FAIL"})
+                        if ok and action.get("task") == "testDebugUnitTest":
+                            passed_revision = change_revision
+                elif tool == "finish":
+                    result = {"status": "finished"}
                 else:
-                    test_count += 1
-                    result = run_tool(action)
-
-                    test_results.append({
-                        "task": action.get("task"),
-                        "result": (
-                            "PASS"
-                            if result.get("exit_code") == 0
-                            else "FAIL"
-                        ),
-                    })
-
-            else:
-                try:
-                    result = run_tool(action)
-                except (
-                    ValueError,
-                    OSError,
-                    UnicodeError
-                ) as exc:
-                    result = {
-                        "error": (
-                            type(exc).__name__
-                            + ": "
-                            + str(exc)
-                        )
-                    }
-
-                if (
-                    tool == "read"
-                    and "content" in result
-                ):
-                    inspected_files.add(
-                        str(
-                            safe_path(
-                                action["path"]
-                            ).relative_to(ROOT)
-                        )
-                    )
-
-            result_label = (
-                result.get("status")
-                if "status" in result
-                else result.get("exit_code")
-                if "exit_code" in result
-                else result.get("error", "OK")
-            )
-
-            events.append({
-                "tool": tool,
-                "target": str(target),
-                "result": str(result_label),
-            })
-
-            history.append({
-                "role": "assistant",
-                "content": raw[:65000],
-            })
-
-            history.append({
-                "role": "user",
-                "content": json.dumps(
-                    result,
-                    ensure_ascii=False
-                )[:10000],
-            })
-
+                    result = {"error": "Unknown tool"}
+            except (ValueError, OSError, UnicodeError) as exc:
+                result = {"error": f"{type(exc).__name__}: {exc}"}
+            label = result.get("status", result.get("exit_code", result.get("error", "OK")))
+            events.append({"tool": str(tool), "target": str(target), "result": str(label)})
+            history.extend([
+                {"role": "assistant", "content": raw[:65000]},
+                {"role": "user", "content": json.dumps(result, ensure_ascii=False)[:10000]},
+            ])
             if tool == "finish":
-                source_changed = any(
-                    p.startswith("app/src/main/")
-                    for p in changed_files
-                )
-
-                test_changed = any(
-                    p.startswith("app/src/test/")
-                    or p.startswith("app/src/androidTest/")
-                    for p in changed_files
-                )
-
-                test_passed = any(
-                    t["result"] == "PASS"
-                    and t["task"] == "testDebugUnitTest"
-                    for t in test_results
-                )
-
+                source_changed = any(p.startswith("app/src/main/") for p in changed)
+                test_changed = any(p.startswith(("app/src/test/", "app/src/androidTest/")) for p in changed)
                 if not source_changed:
                     status = "NO SOURCE CHANGES"
                 elif not test_changed:
                     status = "NO TEST CHANGES"
-                elif not test_passed:
-                    status = "NO PASSING UNIT TESTS"
+                elif passed_revision != change_revision:
+                    status = "NO PASSING TEST AFTER FINAL WRITE"
                 else:
                     status = "FINISHED"
-
                 break
-
     except Exception as exc:
         status = "ERROR"
-
-        events.append({
-            "tool": "runtime",
-            "result": (
-                type(exc).__name__
-                + ": "
-                + str(exc)
-            ),
-        })
-
+        events.append({"tool": "runtime", "result": f"{type(exc).__name__}: {exc}"})
     finally:
-        save_report(
-            status,
-            changed_files,
-            test_results
-        )
-
-    print(
-        "SMOOTH CODING AGENT:",
-        status,
-        flush=True
-    )
-
+        save_report(status, changed, tests, events)
+    print("SMOOTH CODING AGENT:", status, flush=True)
     if status != "FINISHED":
         raise SystemExit(1)
 
