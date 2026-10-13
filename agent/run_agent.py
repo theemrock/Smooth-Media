@@ -18,12 +18,14 @@ TASK = ROOT / "agent" / "TASK.md"
 
 MAX_DISCOVERY_STEPS = 8
 MAX_DELIVERY_STEPS = 10
+MAX_INVALID_STEPS = 4
 MAX_SECONDS = 600
 MAX_WRITES = 6
 MAX_TESTS = 3
 MAX_INVENTORY_FILES = 200
 MAX_FILE_BYTES = 100_000
 MAX_CONTENT_CHARS = 60_000
+MAX_HISTORY_RESULT_CHARS = 10_000
 
 # Read access is intentionally narrow: source, tests, task and build entrypoints.
 READ_FILES = {
@@ -379,8 +381,52 @@ def ask_model(history, deadline=None, tools=None):
     raise RuntimeError("Model unavailable")
 
 
+def serialize_history_result(result):
+    result_content = json.dumps(result, ensure_ascii=False)
+    if len(result_content) <= MAX_HISTORY_RESULT_CHARS:
+        return result_content
+    if isinstance(result, dict) and isinstance(result.get("entries"), list):
+        entries = result["entries"]
+        compact = {
+            **{key: value for key, value in result.items() if key != "entries"},
+            "entries": [],
+            "truncated": True,
+            "total_entries": len(entries),
+        }
+        for entry in entries:
+            compact["entries"].append(entry)
+            candidate = json.dumps(compact, ensure_ascii=False)
+            if len(candidate) > MAX_HISTORY_RESULT_CHARS:
+                compact["entries"].pop()
+                break
+        return json.dumps(compact, ensure_ascii=False)
+    if isinstance(result, dict):
+        for field in ("content", "output"):
+            value = result.get(field)
+            if not isinstance(value, str):
+                continue
+            compact = {
+                **result,
+                field: "",
+                "truncated": True,
+                "original_chars": len(value),
+            }
+            overhead = len(json.dumps(compact, ensure_ascii=False))
+            compact[field] = value[:max(0, MAX_HISTORY_RESULT_CHARS - overhead)]
+            candidate = json.dumps(compact, ensure_ascii=False)
+            if len(candidate) > MAX_HISTORY_RESULT_CHARS:
+                compact[field] = compact[field][:
+                    max(0, len(compact[field]) - (len(candidate) - MAX_HISTORY_RESULT_CHARS))
+                ]
+            return json.dumps(compact, ensure_ascii=False)
+    return json.dumps({
+        "error": "Tool result exceeded history limit",
+        "truncated": True,
+    })
+
+
 def append_history(history, reply, result):
-    result_content = json.dumps(result, ensure_ascii=False)[:10000]
+    result_content = serialize_history_result(result)
     if reply["tool_call_id"]:
         history.extend([
             reply["assistant"],
@@ -420,8 +466,8 @@ def main():
     history, events, tests = [], [], []
     changed, inspected = set(), set()
     writes = test_count = 0
-    discovery_steps = delivery_steps = 0
-    delivery_phase = False
+    discovery_steps = delivery_steps = invalid_steps = 0
+    discovery_notice_sent = False
     status = "INCOMPLETE"
     summary = ""
     change_revision = 0
@@ -437,27 +483,26 @@ def main():
             if remaining <= 15:
                 status = "TIME LIMIT"
                 break
-            if delivery_phase:
-                if delivery_steps >= MAX_DELIVERY_STEPS:
-                    break
-                delivery_steps += 1
-                active_tools = [
-                    tool for tool in TOOLS
-                    if tool["function"]["name"] in {"write", "test", "finish"}
-                ]
-            else:
-                if discovery_steps >= MAX_DISCOVERY_STEPS:
-                    delivery_phase = True
-                    history.append({
-                        "role": "user",
-                        "content": (
-                            "Discovery budget exhausted. Use the files already inspected and "
-                            "continue with write, test, or finish."
-                        ),
-                    })
-                    continue
-                discovery_steps += 1
-                active_tools = TOOLS
+            if (delivery_steps >= MAX_DELIVERY_STEPS
+                    or invalid_steps >= MAX_INVALID_STEPS):
+                break
+            discovery_available = discovery_steps < MAX_DISCOVERY_STEPS
+            if not discovery_available and not discovery_notice_sent:
+                history.append({
+                    "role": "user",
+                    "content": (
+                        "Discovery budget exhausted. Use the files already inspected and "
+                        "continue with write, test, or finish."
+                    ),
+                })
+                discovery_notice_sent = True
+            active_names = {"write", "test", "finish"}
+            if discovery_available:
+                active_names.update({"list", "read"})
+            active_tools = [
+                tool for tool in TOOLS
+                if tool["function"]["name"] in active_names
+            ]
             step += 1
             reply = ask_model(
                 history,
@@ -470,6 +515,7 @@ def main():
                 if not isinstance(action, dict):
                     raise ValueError("Expected object")
             except (ValueError, TypeError):
+                invalid_steps += 1
                 events.append({"tool": "parse", "result": "Invalid JSON"})
                 history.extend([
                     {"role": "assistant", "content": raw[:3000]},
@@ -481,19 +527,23 @@ def main():
             print(f"STEP {step}: {tool} {target}", flush=True)
             try:
                 if tool == "list":
-                    if delivery_phase:
+                    if discovery_steps >= MAX_DISCOVERY_STEPS:
+                        invalid_steps += 1
                         result = {"error": "Discovery limit reached; use write, test, or finish"}
                     else:
+                        discovery_steps += 1
                         result = safe_list(action.get("path", "."))
                 elif tool == "read":
-                    if delivery_phase:
+                    if discovery_steps >= MAX_DISCOVERY_STEPS:
+                        invalid_steps += 1
                         result = {"error": "Discovery limit reached; use write, test, or finish"}
                     else:
+                        discovery_steps += 1
                         result = safe_read(action.get("path"))
                         if "content" in result:
                             inspected.add(relative_path(action["path"])[0])
                 elif tool == "write":
-                    delivery_phase = True
+                    delivery_steps += 1
                     if writes >= MAX_WRITES:
                         result = {"error": "Write limit reached"}
                     else:
@@ -507,7 +557,7 @@ def main():
                                 change_revision += 1
                                 changed.add(rel)
                 elif tool == "test":
-                    delivery_phase = True
+                    delivery_steps += 1
                     if test_count >= MAX_TESTS:
                         result = {"error": "Test limit reached"}
                     else:
@@ -519,11 +569,12 @@ def main():
                         if ok and action.get("task") == "testDebugUnitTest":
                             passed_revision = change_revision
                 elif tool == "finish":
-                    delivery_phase = True
+                    delivery_steps += 1
                     result = {"status": "finished"}
                     if isinstance(action.get("summary"), str):
                         summary = action["summary"].strip()[:2000]
                 else:
+                    invalid_steps += 1
                     result = {"error": "Unknown tool"}
             except (ValueError, OSError, UnicodeError) as exc:
                 result = {"error": f"{type(exc).__name__}: {exc}"}

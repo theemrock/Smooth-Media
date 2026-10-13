@@ -322,6 +322,77 @@ class AskModelTest(unittest.TestCase):
         self.assertIn("Discovery limit reached", content)
         self.assertIn("`testDebugUnitTest`: PASS", content)
 
+    def test_write_does_not_discard_remaining_discovery_budget(self):
+        actions = [
+            {"tool": "read", "path": "app/src/main/java/example/Feature.kt"},
+            {
+                "tool": "write",
+                "path": "app/src/main/java/example/Feature.kt",
+                "content": "package example\nclass Feature(val enabled: Boolean = true)\n",
+            },
+            {"tool": "read", "path": "app/src/test/java/example/FeatureTest.kt"},
+            {
+                "tool": "write",
+                "path": "app/src/test/java/example/FeatureTest.kt",
+                "content": "package example\nclass FeatureTest { val expected = true }\n",
+            },
+            {"tool": "test", "task": "testDebugUnitTest"},
+            {"tool": "finish", "summary": "Updated source and its existing test."},
+        ]
+        replies = iter(self.text_reply(action) for action in actions)
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            task = root / "agent/TASK.md"
+            report = root / "agent/REPORT.md"
+            source = root / "app/src/main/java/example/Feature.kt"
+            test = root / "app/src/test/java/example/FeatureTest.kt"
+            task.parent.mkdir(parents=True)
+            source.parent.mkdir(parents=True)
+            test.parent.mkdir(parents=True)
+            task.write_text("Improve Feature safely.", encoding="utf-8")
+            source.write_text("package example\nclass Feature\n", encoding="utf-8")
+            test.write_text("package example\nclass FeatureTest\n", encoding="utf-8")
+
+            with patch.object(run_agent, "ROOT", root), \
+                    patch.object(run_agent, "TASK", task), \
+                    patch.object(run_agent, "REPORT", report), \
+                    patch.object(run_agent, "MAX_DISCOVERY_STEPS", 3), \
+                    patch.object(run_agent, "MAX_DELIVERY_STEPS", 4), \
+                    patch.object(
+                        run_agent,
+                        "ask_model",
+                        side_effect=lambda history, deadline, tools: next(replies),
+                    ), \
+                    patch.object(run_agent, "run_test", return_value={"exit_code": 0, "output": "PASS"}):
+                run_agent.main()
+
+            content = report.read_text(encoding="utf-8")
+
+        self.assertIn("Status: **FINISHED**", content)
+        self.assertNotIn("Read existing file before modifying it", content)
+
+    def test_large_inventory_history_remains_valid_json(self):
+        result = {
+            "entries": [
+                f"app/src/main/java/example/feature{i:03d}/VeryLongFeatureName{i:03d}.kt"
+                for i in range(200)
+            ],
+            "truncated": False,
+        }
+        reply = self.text_reply({"tool": "list", "path": "app/src"})
+        history = []
+
+        run_agent.append_history(history, reply, result)
+
+        serialized = history[1]["content"]
+        delivered = json.loads(serialized)
+        self.assertLessEqual(len(serialized), run_agent.MAX_HISTORY_RESULT_CHARS)
+        self.assertTrue(delivered["truncated"])
+        self.assertEqual(200, delivered["total_entries"])
+        self.assertLess(len(delivered["entries"]), 200)
+        self.assertTrue(all(path.endswith(".kt") for path in delivered["entries"]))
+
     def test_report_only_finish_remains_a_failure(self):
         reply = self.text_reply({"tool": "finish", "summary": "No change."})
         with tempfile.TemporaryDirectory() as directory:
