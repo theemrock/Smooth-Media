@@ -16,10 +16,12 @@ MODEL = "cohere/north-mini-code:free"
 REPORT = ROOT / "agent" / "REPORT.md"
 TASK = ROOT / "agent" / "TASK.md"
 
-MAX_STEPS = 16
+MAX_DISCOVERY_STEPS = 8
+MAX_DELIVERY_STEPS = 10
 MAX_SECONDS = 600
 MAX_WRITES = 6
 MAX_TESTS = 3
+MAX_INVENTORY_FILES = 200
 MAX_FILE_BYTES = 100_000
 MAX_CONTENT_CHARS = 60_000
 
@@ -48,13 +50,15 @@ Read agent/TASK.md and complete ONLY the task specified there.
 Use exactly one provided function tool per response.
 If native function tools are unavailable, return exactly one JSON object (no markdown).
 Tools:
-{"tool":"list","path":"app/src"}
+{"tool":"list","path":"app/src"}  (one call returns a recursive source inventory)
 {"tool":"read","path":"app/src/main/AndroidManifest.xml"}
 {"tool":"write","path":"app/src/test/java/example/ExampleTest.kt","content":"..."}
 {"tool":"test","task":"testDebugUnitTest"}
 {"tool":"finish","summary":"..."}
 Rules:
 - Inspect relevant code before modifying it.
+- Start with one list call for app/src. Do not walk package directories one level at a time.
+- Discovery is limited. Select and read only the source and test files relevant to the task.
 - Make a small change, plus a meaningful automated test.
 - Preserve the existing architecture and behavior.
 - Do not modify Gradle configuration, workflows or agent scripts.
@@ -69,7 +73,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list",
-            "description": "List an allowed repository directory.",
+            "description": (
+                "Return a bounded recursive inventory of readable files below an allowed "
+                "repository directory. One app/src call replaces package-by-package listing."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -187,16 +194,29 @@ def safe_list(name):
     if not listable(rel) or not path.is_dir():
         return {"error": "Directory not allowed or not found"}
     entries = []
-    for item in sorted(path.iterdir()):
-        if item.is_symlink() or item.name.startswith(".") or item.name in BLOCKED_NAMES:
-            continue
-        child = item.relative_to(ROOT).as_posix()
-        if item.is_dir():
-            if listable(child):
-                entries.append(child + "/")
-        elif readable(child):
-            entries.append(child)
-    return {"entries": entries[:100]}
+    for current, directories, files in os.walk(path, followlinks=False):
+        current_path = Path(current)
+        directories[:] = sorted(
+            directory for directory in directories
+            if not directory.startswith(".")
+            and directory not in BLOCKED_NAMES
+            and not (current_path / directory).is_symlink()
+            and listable((current_path / directory).relative_to(ROOT).as_posix())
+        )
+        for filename in sorted(files):
+            item = current_path / filename
+            if (filename.startswith(".") or filename in BLOCKED_NAMES
+                    or item.is_symlink()):
+                continue
+            child = item.relative_to(ROOT).as_posix()
+            if readable(child):
+                entries.append(child)
+                if len(entries) > MAX_INVENTORY_FILES:
+                    return {
+                        "entries": entries[:MAX_INVENTORY_FILES],
+                        "truncated": True,
+                    }
+    return {"entries": entries, "truncated": False}
 
 
 def safe_read(name):
@@ -279,7 +299,7 @@ def native_tool_action(message):
     return json.dumps({"tool": name, **values}, ensure_ascii=False)
 
 
-def ask_model(history, deadline=None):
+def ask_model(history, deadline=None, tools=None):
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError("OPENROUTER_API_KEY missing")
@@ -288,7 +308,7 @@ def ask_model(history, deadline=None):
         "messages": [{"role": "system", "content": SYSTEM}, *history],
         "temperature": 0,
         "max_tokens": 10000,
-        "tools": TOOLS,
+        "tools": TOOLS if tools is None else tools,
         "tool_choice": "auto",
         "parallel_tool_calls": False,
     }
@@ -400,6 +420,8 @@ def main():
     history, events, tests = [], [], []
     changed, inspected = set(), set()
     writes = test_count = 0
+    discovery_steps = delivery_steps = 0
+    delivery_phase = False
     status = "INCOMPLETE"
     summary = ""
     change_revision = 0
@@ -409,12 +431,39 @@ def main():
             raise RuntimeError("agent/TASK.md not found")
         task = TASK.read_text(encoding="utf-8")
         history.append({"role": "user", "content": "Execute this task:\n\n" + task})
-        for step in range(MAX_STEPS):
+        step = 0
+        while True:
             remaining = MAX_SECONDS - (time.monotonic() - started)
             if remaining <= 15:
                 status = "TIME LIMIT"
                 break
-            reply = ask_model(history, deadline=started + MAX_SECONDS)
+            if delivery_phase:
+                if delivery_steps >= MAX_DELIVERY_STEPS:
+                    break
+                delivery_steps += 1
+                active_tools = [
+                    tool for tool in TOOLS
+                    if tool["function"]["name"] in {"write", "test", "finish"}
+                ]
+            else:
+                if discovery_steps >= MAX_DISCOVERY_STEPS:
+                    delivery_phase = True
+                    history.append({
+                        "role": "user",
+                        "content": (
+                            "Discovery budget exhausted. Use the files already inspected and "
+                            "continue with write, test, or finish."
+                        ),
+                    })
+                    continue
+                discovery_steps += 1
+                active_tools = TOOLS
+            step += 1
+            reply = ask_model(
+                history,
+                deadline=started + MAX_SECONDS,
+                tools=active_tools,
+            )
             raw = reply["action"]
             try:
                 action = json.loads(raw)
@@ -429,15 +478,22 @@ def main():
                 continue
             tool = action.get("tool")
             target = action.get("path", action.get("task", ""))
-            print(f"STEP {step + 1}: {tool} {target}", flush=True)
+            print(f"STEP {step}: {tool} {target}", flush=True)
             try:
                 if tool == "list":
-                    result = safe_list(action.get("path", "."))
+                    if delivery_phase:
+                        result = {"error": "Discovery limit reached; use write, test, or finish"}
+                    else:
+                        result = safe_list(action.get("path", "."))
                 elif tool == "read":
-                    result = safe_read(action.get("path"))
-                    if "content" in result:
-                        inspected.add(relative_path(action["path"])[0])
+                    if delivery_phase:
+                        result = {"error": "Discovery limit reached; use write, test, or finish"}
+                    else:
+                        result = safe_read(action.get("path"))
+                        if "content" in result:
+                            inspected.add(relative_path(action["path"])[0])
                 elif tool == "write":
+                    delivery_phase = True
                     if writes >= MAX_WRITES:
                         result = {"error": "Write limit reached"}
                     else:
@@ -451,6 +507,7 @@ def main():
                                 change_revision += 1
                                 changed.add(rel)
                 elif tool == "test":
+                    delivery_phase = True
                     if test_count >= MAX_TESTS:
                         result = {"error": "Test limit reached"}
                     else:
@@ -462,6 +519,7 @@ def main():
                         if ok and action.get("task") == "testDebugUnitTest":
                             passed_revision = change_revision
                 elif tool == "finish":
+                    delivery_phase = True
                     result = {"status": "finished"}
                     if isinstance(action.get("summary"), str):
                         summary = action["summary"].strip()[:2000]
