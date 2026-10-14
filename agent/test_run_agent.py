@@ -145,11 +145,35 @@ class AskModelTest(unittest.TestCase):
 
         with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy-test-value"}), \
                 patch.object(run_agent.urllib.request, "urlopen", side_effect=error):
-            with self.assertRaisesRegex(RuntimeError, "HTTP 400.*malformed message sequence") as caught:
+            with self.assertRaisesRegex(RuntimeError, "HTTP 400.*category=tool-message-validation") as caught:
                 run_agent.ask_model([])
 
+        self.assertNotIn("malformed message sequence", str(caught.exception))
         self.assertNotIn("super-secret-value", str(caught.exception))
         self.assertNotIn("Authorization", str(caught.exception))
+
+    def test_http_400_does_not_echo_unlabelled_provider_message(self):
+        body = json.dumps({
+            "error": {
+                "message": "request rejected: user canary UNLABELLED-SECRET-1234567890",
+                "code": "invalid_request_error",
+            },
+        }).encode("utf-8")
+        error = urllib.error.HTTPError(
+            "https://openrouter.ai/api/v1/chat/completions",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(body),
+        )
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy-test-value"}), \
+                patch.object(run_agent.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaises(RuntimeError) as caught:
+                run_agent.ask_model([])
+
+        self.assertNotIn("UNLABELLED-SECRET-1234567890", str(caught.exception))
+        self.assertIn("code=invalid_request_error", str(caught.exception))
 
     def test_timeout_is_retried_before_returning_action(self):
         attempts = iter([TimeoutError("timed out"), self.native_response()])

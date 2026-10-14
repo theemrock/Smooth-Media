@@ -385,7 +385,7 @@ def ask_model(history, deadline=None, tools=None):
 
 
 def safe_http_error_detail(error):
-    """Extract a short, redacted provider message without exposing response payloads."""
+    """Extract structural provider details without exposing response text or payloads."""
     try:
         raw = error.read(8192)
     except (OSError, ValueError):
@@ -402,14 +402,31 @@ def safe_http_error_detail(error):
     message = provider_error.get("message")
     if not isinstance(message, str) or not message.strip():
         return ""
-    message = re.sub(r"(?i)bearer\s+\S+", "Bearer [redacted]", message)
-    message = re.sub(
-        r"(?i)(api[_-]?key|authorization|secret|token)\s*[:=]\s*\S+",
-        r"\1=[redacted]",
-        message,
-    )
-    message = re.sub(r"https?://\S+", "[url]", message)
-    return " ".join(message.split())[:240]
+    lower_message = message.lower()
+    if "tool" in lower_message and ("message" in lower_message
+                                     or "call" in lower_message
+                                     or "sequence" in lower_message):
+        category = "tool-message-validation"
+    elif "context" in lower_message:
+        category = "context-limit"
+    elif "model" in lower_message:
+        category = "model-request"
+    elif "invalid" in lower_message or "parameter" in lower_message:
+        category = "invalid-request"
+    else:
+        category = "provider-rejected-request"
+
+    fields = [f"category={category}"]
+    for key in ("code", "type"):
+        value = provider_error.get(key)
+        if isinstance(value, (int, float)):
+            fields.append(f"{key}={value}")
+        elif isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+            fields.append(f"{key}={value}")
+    parameter = provider_error.get("param", provider_error.get("field"))
+    if parameter in {"messages", "tools", "model", "max_tokens", "temperature", "tool_choice"}:
+        fields.append(f"param={parameter}")
+    return " ".join(fields)
 
 
 def serialize_history_result(result):
