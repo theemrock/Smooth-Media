@@ -38,6 +38,8 @@ fun SourceManagementScreen(
     onAdd: () -> Unit,
     onRefresh: () -> Unit,
     onRemove: (String) -> Unit,
+    scanningSourceId: String? = null,
+    onScan: (String) -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -76,7 +78,7 @@ fun SourceManagementScreen(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(sources, key = { it.sourceId }) { source ->
-                    SourceCard(source, onRemove)
+                    SourceCard(source, scanningSourceId, onRemove, onScan)
                 }
             }
         }
@@ -84,7 +86,12 @@ fun SourceManagementScreen(
 }
 
 @Composable
-private fun SourceCard(source: LibrarySourceEntity, onRemove: (String) -> Unit) {
+private fun SourceCard(
+    source: LibrarySourceEntity,
+    scanningSourceId: String?,
+    onRemove: (String) -> Unit,
+    onScan: (String) -> Unit,
+) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
@@ -104,8 +111,25 @@ private fun SourceCard(source: LibrarySourceEntity, onRemove: (String) -> Unit) 
             )
             if (source.selectionState == SourceSelectionState.ACTIVE) {
                 Spacer(modifier = Modifier.height(8.dp))
-                OutlinedButton(onClick = { onRemove(source.sourceId) }) {
-                    Text(stringResource(R.string.remove_source))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(
+                        onClick = { onScan(source.sourceId) },
+                        enabled = scanningSourceId == null,
+                    ) {
+                        Text(
+                            if (scanningSourceId == source.sourceId) {
+                                stringResource(R.string.scan_running)
+                            } else {
+                                stringResource(R.string.scan_source)
+                            },
+                        )
+                    }
+                    OutlinedButton(
+                        onClick = { onRemove(source.sourceId) },
+                        enabled = scanningSourceId == null,
+                    ) {
+                        Text(stringResource(R.string.remove_source))
+                    }
                 }
             } else if (source.persistedPermissionFlags != 0 ||
                 source.permissionState == com.theemrock.smoothmedia.catalog.database.entity.SourcePermissionState.GRANTED

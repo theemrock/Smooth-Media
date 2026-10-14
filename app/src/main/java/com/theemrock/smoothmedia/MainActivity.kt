@@ -20,6 +20,10 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
+import com.theemrock.smoothmedia.catalog.scan.ManualScanController
+import com.theemrock.smoothmedia.catalog.scan.ManualScanProgress
+import com.theemrock.smoothmedia.catalog.scan.ManualScanResult
+import com.theemrock.smoothmedia.catalog.scan.ScanSessionOrchestrator
 import com.theemrock.smoothmedia.source.AndroidSelectedTreeParser
 import com.theemrock.smoothmedia.source.SourceRegistryFactory
 import com.theemrock.smoothmedia.source.SourceRegistryRuntime
@@ -56,8 +60,11 @@ private val LightColorScheme = lightColorScheme(
 class MainActivity : ComponentActivity() {
     private lateinit var runtime: SourceRegistryRuntime
     private lateinit var executor: ExecutorService
+    private lateinit var scanController: ManualScanController
     private var sources by mutableStateOf<List<LibrarySourceEntity>>(emptyList())
     private var statusMessage by mutableStateOf<String?>(null)
+    private var scanMessage by mutableStateOf<String?>(null)
+    private var scanningSourceId by mutableStateOf<String?>(null)
 
     private val treePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
@@ -82,15 +89,18 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         runtime = SourceRegistryFactory.create(this)
         executor = Executors.newSingleThreadExecutor()
+        scanController = ManualScanController(runtime.database, contentResolver)
         setContent {
             SmoothMediaTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     SourceManagementScreen(
                         sources = sources,
-                        statusMessage = statusMessage,
+                        statusMessage = listOfNotNull(statusMessage, scanMessage).joinToString("\n").ifBlank { null },
+                        scanningSourceId = scanningSourceId,
                         onAdd = { treePicker.launch(TreePickerIntentFactory.create()) },
                         onRefresh = { refreshSources() },
                         onRemove = { sourceId -> removeSource(sourceId) },
+                        onScan = { sourceId -> startScan(sourceId) },
                     )
                 }
             }
@@ -144,6 +154,51 @@ class MainActivity : ComponentActivity() {
         submit {
             sourceRemovalMessage(runtime.registry.remove(sourceId, System.currentTimeMillis()))
         }
+    }
+
+    private fun startScan(sourceId: String) {
+        if (scanningSourceId != null) return
+        scanningSourceId = sourceId
+        scanMessage = getString(R.string.scan_starting)
+        executor.execute {
+            val source = runCatching { runtime.repository.find(sourceId) }.getOrNull()
+            val result = if (source == null) {
+                ManualScanResult.Rejected("", ScanSessionOrchestrator.RejectionReason.SOURCE_NOT_SELECTED)
+            } else {
+                scanController.start(source, ::postScanProgress)
+            }
+            runOnUiThread {
+                scanningSourceId = null
+                scanMessage = scanResultMessage(result)
+            }
+        }
+    }
+
+    private fun postScanProgress(progress: ManualScanProgress) {
+        runOnUiThread {
+            if (isDestroyed) return@runOnUiThread
+            scanMessage = getString(
+                R.string.scan_progress,
+                progress.processedCount,
+                progress.discoveredCount,
+                progress.errorCount,
+            )
+        }
+    }
+
+    private fun scanResultMessage(result: ManualScanResult): String = when (result) {
+        is ManualScanResult.Completed -> getString(
+            R.string.scan_completed,
+            result.processedCount,
+            result.successfulCount,
+            result.skippedUnreadableCount,
+        )
+        is ManualScanResult.Paused -> getString(R.string.scan_paused)
+        is ManualScanResult.Cancelled -> getString(R.string.scan_cancelled)
+        is ManualScanResult.AlreadyActive -> getString(R.string.scan_already_active)
+        is ManualScanResult.DiscoveryFailed -> getString(R.string.scan_discovery_failed)
+        is ManualScanResult.CandidateFailed -> getString(R.string.scan_candidate_failed, result.reason.name)
+        is ManualScanResult.Rejected -> getString(R.string.scan_rejected)
     }
 
     private fun submit(operation: () -> Int) {

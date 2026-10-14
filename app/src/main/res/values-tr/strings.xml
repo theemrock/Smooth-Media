@@ -28,4 +28,15 @@
     <string name="source_already_removed">Kaynak zaten kaldırılmıştı.</string>
     <string name="source_removed_permission_release_failed">Kaynak kaldırıldı ancak Android izni bırakılamadı. Yeniden deneyin.</string>
     <string name="source_permission_released_storage_failed">Android izni bırakıldı ancak kaynağın erişim durumu güncellenemedi.</string>
+    <string name="scan_source">Tara</string>
+    <string name="scan_running">Taraniyor</string>
+    <string name="scan_starting">Tarama baslatiliyor</string>
+    <string name="scan_progress">Tarama: %1$d/%2$d, hata: %3$d</string>
+    <string name="scan_completed">Tarama tamamlandi. Islenen: %1$d, basarili: %2$d, hata: %3$d</string>
+    <string name="scan_paused">Tarama duraklatildi.</string>
+    <string name="scan_cancelled">Tarama iptal edildi.</string>
+    <string name="scan_already_active">Baska bir tarama zaten aktif.</string>
+    <string name="scan_discovery_failed">Tarama kesfi basarisiz.</string>
+    <string name="scan_candidate_failed">Tarama adayda durdu: %1$s</string>
+    <string name="scan_rejected">Bu kaynak icin tarama baslatilamadi.</string>
 </resources>

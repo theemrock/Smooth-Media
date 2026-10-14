@@ -28,4 +28,15 @@
     <string name="source_already_removed">Source was already removed.</string>
     <string name="source_removed_permission_release_failed">Source was removed, but Android permission could not be released. Try again.</string>
     <string name="source_permission_released_storage_failed">Android permission was released, but the source access state could not be updated.</string>
+    <string name="scan_source">Scan</string>
+    <string name="scan_running">Scanning…</string>
+    <string name="scan_starting">Starting scan…</string>
+    <string name="scan_progress">Scan progress: %1$d/%2$d, errors: %3$d</string>
+    <string name="scan_completed">Scan completed. Processed: %1$d, successful: %2$d, errors: %3$d</string>
+    <string name="scan_paused">Scan paused.</string>
+    <string name="scan_cancelled">Scan cancelled.</string>
+    <string name="scan_already_active">Another scan is already active.</string>
+    <string name="scan_discovery_failed">Scan discovery failed.</string>
+    <string name="scan_candidate_failed">Scan stopped at candidate: %1$s</string>
+    <string name="scan_rejected">Scan could not be started for this source.</string>
 </resources>

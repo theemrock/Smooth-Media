@@ -97,9 +97,21 @@ class ScanCatalogPipelineRoomTest {
         val first = orchestrator(file, pipeline { _, _ -> FullFileHashResult.Success("SHA-256", 1, "digest-one", 10) })
         assertTrue(first.start(session("scan-1"), source()) is ScanSessionOrchestrator.Result.Completed)
 
+        val firstLocations = database.trackDao().listLocations()
+        val firstBindings = database.locatorBindingDao().listAll()
+        val firstTrackIds = firstLocations.map { it.trackId }.toSet()
+        val firstLocationIds = firstLocations.map { it.locationId }.toSet()
+        assertEquals(1, firstLocations.size)
+        assertEquals(1, firstBindings.size)
+
         val second = orchestrator(file, pipeline { _, _ -> FullFileHashResult.Success("SHA-256", 1, "digest-one", 10) })
         assertTrue(second.start(session("scan-2"), source()) is ScanSessionOrchestrator.Result.Completed)
 
+        val secondLocations = database.trackDao().listLocations()
+        val secondBindings = database.locatorBindingDao().listAll()
+        assertEquals(firstTrackIds, secondLocations.map { it.trackId }.toSet())
+        assertEquals(firstLocationIds, secondLocations.map { it.locationId }.toSet())
+        assertEquals(firstBindings, secondBindings)
         assertEquals(1, database.trackDao().listLocations().size)
         assertEquals(1, database.trackDao().listLocations().map { it.trackId }.toSet().size)
     }
