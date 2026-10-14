@@ -6,10 +6,23 @@ import com.theemrock.smoothmedia.catalog.database.entity.ScanCandidateState
 import com.theemrock.smoothmedia.catalog.database.entity.TrackEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackLocationEntity
 
+interface CatalogIdentityWriter {
+    fun createTrackWithLocation(
+        track: TrackEntity,
+        location: TrackLocationEntity,
+        binding: LocatorBindingEntity,
+    )
+
+    fun attachLocation(
+        location: TrackLocationEntity,
+        binding: LocatorBindingEntity,
+    )
+}
+
 class CatalogIdentityTransaction(
     private val database: CatalogDatabase,
-) {
-    fun createTrackWithLocation(
+) : CatalogIdentityWriter {
+    override fun createTrackWithLocation(
         track: TrackEntity,
         location: TrackLocationEntity,
         binding: LocatorBindingEntity,
@@ -21,7 +34,7 @@ class CatalogIdentityTransaction(
         }
     }
 
-    fun attachLocation(
+    override fun attachLocation(
         location: TrackLocationEntity,
         binding: LocatorBindingEntity,
     ) {

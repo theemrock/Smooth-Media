@@ -7,6 +7,9 @@ import android.provider.DocumentsContract
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.room.Room
+import com.theemrock.smoothmedia.catalog.database.CatalogDatabase
+import com.theemrock.smoothmedia.catalog.database.CatalogDatabaseCallback
 import com.theemrock.smoothmedia.catalog.database.CatalogDatabaseFactory
 import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceType
@@ -17,6 +20,13 @@ import com.theemrock.smoothmedia.discovery.DirectoryReadResult.Readable
 import com.theemrock.smoothmedia.source.AndroidTreePermissionGateway
 import com.theemrock.smoothmedia.source.TreePermissionGateway
 import com.theemrock.smoothmedia.source.TreePermissionInspection
+import com.theemrock.smoothmedia.catalog.ingestion.CatalogIdFactory
+import com.theemrock.smoothmedia.catalog.ingestion.CatalogIngestionResult
+import com.theemrock.smoothmedia.catalog.ingestion.CatalogIngestionUseCase
+import com.theemrock.smoothmedia.catalog.model.TrackId
+import com.theemrock.smoothmedia.catalog.model.TrackLocationId
+import com.theemrock.smoothmedia.catalog.repository.CatalogIdentityTransaction
+import com.theemrock.smoothmedia.catalog.repository.RoomCatalogRepository
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -153,6 +163,102 @@ class SelectedAudioDiscoveryRealSafTest {
             )
             assertEquals(second.files.size, second.files.map { it.documentId }.toSet().size)
             Log.i(TAG, "PASS|sourceId=${source.sourceId}|files=${first.files.size}|root=$TEST_ROOT_NAME")
+    }
+
+    @Test
+    fun ingestsRealSafMp3AndFlacIntoIsolatedRoom_withoutCrossFormatMerge() {
+        val arguments = InstrumentationRegistry.getArguments()
+        assume(
+            enabled = arguments.getString(ARG_ENABLED).toBoolean(),
+            reason = "Enable explicitly with -e $ARG_ENABLED true",
+        )
+        val sourceId = arguments.getString(ARG_SOURCE_ID)
+        assume(sourceId != null, "Pass -e $ARG_SOURCE_ID=<existing ACTIVE SAF source ID>")
+        val source = findSavedSourceReadOnly(context, sourceId!!)
+            ?: skip("No saved LibrarySource exists for $ARG_SOURCE_ID")
+        assume(
+            source.sourceType == LibrarySourceType.SAF_TREE &&
+                source.selectionState == SourceSelectionState.ACTIVE,
+            "The selected source must be an ACTIVE SAF_TREE",
+        )
+        assume(
+            rootDisplayName(context, source.rootUri) == TEST_ROOT_NAME,
+            "Selected tree must be the dedicated $TEST_ROOT_NAME test root",
+        )
+
+        val permissions: TreePermissionGateway = AndroidTreePermissionGateway(context.contentResolver)
+        val inspection = permissions.inspect(source.rootUri)
+        assume(
+            inspection is TreePermissionInspection.Available,
+            "The test tree needs an available persisted read grant; got $inspection",
+        )
+        val discovery = SelectedAudioDiscovery(
+            permissions = permissions,
+            treeReader = AndroidSafDocumentTreeReader(context.contentResolver),
+        )
+        val discovered = when (val result = discovery.discover(source)) {
+            is AudioDiscoveryResult.Completed -> result.files
+            is AudioDiscoveryResult.PermissionLost -> skip("Persisted SAF permission was lost: $result")
+            is AudioDiscoveryResult.SourceUnavailable -> skip("Selected SAF source unavailable: $result")
+            is AudioDiscoveryResult.InvalidSource -> error("Selected SAF source became invalid: $result")
+            is AudioDiscoveryResult.UnsupportedSource -> error("Selected SAF source type unsupported: $result")
+            is AudioDiscoveryResult.NotSelected -> error("Selected SAF source is not active: $result")
+            is AudioDiscoveryResult.Failed -> error("SAF discovery failed: $result")
+        }
+        val mp3 = discovered.singleOrNull { it.displayName == ROOT_MP3_NAME }
+            ?: error("Missing root MP3 fixture $ROOT_MP3_NAME")
+        val flac = discovered.singleOrNull { it.displayName == NESTED_FLAC_NAME }
+            ?: error("Missing nested FLAC fixture $NESTED_FLAC_NAME")
+        assertEquals(AudioFormat.MP3, mp3.format)
+        assertEquals(AudioFormat.FLAC, flac.format)
+
+        val hasher = SafFullFileHasher(context.contentResolver)
+        val mp3Hash = hasher.hash(mp3)
+        val flacHash = hasher.hash(flac)
+        assertTrue("MP3 hash failed: $mp3Hash", mp3Hash is FullFileHashResult.Success)
+        assertTrue("FLAC hash failed: $flacHash", flacHash is FullFileHashResult.Success)
+
+        val database = Room.inMemoryDatabaseBuilder(context, CatalogDatabase::class.java)
+            .addCallback(CatalogDatabaseCallback)
+            .build()
+        try {
+            database.librarySourceDao().insert(source)
+            val idFactory = IncrementingIdFactory()
+            val useCase = CatalogIngestionUseCase(
+                catalog = RoomCatalogRepository(database.trackDao(), database.locatorBindingDao()),
+                writer = CatalogIdentityTransaction(database),
+                hashIdentityAdapter = HashIdentityAdapter(),
+                idFactory = idFactory,
+                nowEpochMs = { 1_000L },
+            )
+
+            val firstMp3 = useCase.ingest(mp3, mp3Hash)
+            val firstFlac = useCase.ingest(flac, flacHash)
+            assertTrue("MP3 ingestion failed: $firstMp3", firstMp3 is CatalogIngestionResult.Written)
+            assertTrue("FLAC ingestion failed: $firstFlac", firstFlac is CatalogIngestionResult.Written)
+            assertEquals(2, database.trackDao().listLocations().map { it.trackId }.toSet().size)
+            assertEquals(2, database.trackDao().listLocations().size)
+            assertEquals(2, database.locatorBindingDao().listAll().size)
+
+            val repeatMp3 = useCase.ingest(mp3, mp3Hash)
+            val repeatFlac = useCase.ingest(flac, flacHash)
+            assertTrue("Repeated MP3 ingestion was not reused: $repeatMp3", repeatMp3 is CatalogIngestionResult.Reused)
+            assertTrue("Repeated FLAC ingestion was not reused: $repeatFlac", repeatFlac is CatalogIngestionResult.Reused)
+            assertEquals(2, database.trackDao().listLocations().map { it.trackId }.toSet().size)
+            assertEquals(2, database.trackDao().listLocations().size)
+            assertEquals(2, database.locatorBindingDao().listAll().size)
+            Log.i(TAG, "PASS|sourceId=${source.sourceId}|tracks=2|locations=2|bindings=2|crossFormatMerged=false")
+        } finally {
+            database.close()
+        }
+    }
+
+    private class IncrementingIdFactory : CatalogIdFactory {
+        private var next = 1
+
+        override fun newTrackId() = TrackId("real-saf-track-${next++}")
+
+        override fun newLocationId() = TrackLocationId("real-saf-location-${next++}")
     }
 
     private fun findSavedSourceReadOnly(context: Context, sourceId: String): LibrarySourceEntity? {

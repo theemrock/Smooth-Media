@@ -27,6 +27,9 @@ interface TrackDao {
     @Query("SELECT * FROM track_locations WHERE track_id = :trackId ORDER BY location_id")
     fun findLocations(trackId: String): List<TrackLocationEntity>
 
+    @Query("SELECT * FROM track_locations ORDER BY location_id")
+    fun listLocations(): List<TrackLocationEntity>
+
     @Transaction
     @Query("SELECT * FROM tracks WHERE track_id = :trackId")
     fun findTrackWithLocations(trackId: String): TrackWithLocations?

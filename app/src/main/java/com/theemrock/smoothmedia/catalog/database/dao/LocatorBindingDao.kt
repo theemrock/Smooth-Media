@@ -16,4 +16,7 @@ interface LocatorBindingDao {
 
     @Query("SELECT * FROM locator_bindings WHERE location_id = :locationId")
     fun findByLocation(locationId: String): LocatorBindingEntity?
+
+    @Query("SELECT * FROM locator_bindings ORDER BY locator")
+    fun listAll(): List<LocatorBindingEntity>
 }
