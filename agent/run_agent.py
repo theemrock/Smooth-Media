@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -364,7 +365,9 @@ def ask_model(history, deadline=None, tools=None):
             }
         except urllib.error.HTTPError as exc:
             if exc.code not in {429, 500, 502, 503, 504} or attempt == 2:
-                raise RuntimeError(f"OpenRouter HTTP {exc.code}") from None
+                detail = safe_http_error_detail(exc)
+                suffix = f": {detail}" if detail else ""
+                raise RuntimeError(f"OpenRouter HTTP {exc.code}{suffix}") from None
             retry_delay = 5 * (attempt + 1)
             if deadline is not None and time.monotonic() + retry_delay + 15 >= deadline:
                 raise RuntimeError("Agent time limit reached while retrying OpenRouter") from None
@@ -379,6 +382,51 @@ def ask_model(history, deadline=None, tools=None):
                 raise RuntimeError("Agent time limit reached while retrying OpenRouter") from None
             time.sleep(retry_delay)
     raise RuntimeError("Model unavailable")
+
+
+def safe_http_error_detail(error):
+    """Extract structural provider details without exposing response text or payloads."""
+    try:
+        raw = error.read(8192)
+    except (OSError, ValueError):
+        return ""
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace"))
+    except (json.JSONDecodeError, UnicodeError):
+        return ""
+    provider_error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(provider_error, dict):
+        return ""
+    message = provider_error.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return ""
+    lower_message = message.lower()
+    if "tool" in lower_message and ("message" in lower_message
+                                     or "call" in lower_message
+                                     or "sequence" in lower_message):
+        category = "tool-message-validation"
+    elif "context" in lower_message:
+        category = "context-limit"
+    elif "model" in lower_message:
+        category = "model-request"
+    elif "invalid" in lower_message or "parameter" in lower_message:
+        category = "invalid-request"
+    else:
+        category = "provider-rejected-request"
+
+    fields = [f"category={category}"]
+    for key in ("code", "type"):
+        value = provider_error.get(key)
+        if isinstance(value, (int, float)):
+            fields.append(f"{key}={value}")
+        elif isinstance(value, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,64}", value):
+            fields.append(f"{key}={value}")
+    parameter = provider_error.get("param", provider_error.get("field"))
+    if parameter in {"messages", "tools", "model", "max_tokens", "temperature", "tool_choice"}:
+        fields.append(f"param={parameter}")
+    return " ".join(fields)
 
 
 def serialize_history_result(result):
