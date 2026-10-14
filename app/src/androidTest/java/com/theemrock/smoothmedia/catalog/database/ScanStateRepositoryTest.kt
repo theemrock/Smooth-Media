@@ -18,6 +18,12 @@ import com.theemrock.smoothmedia.catalog.database.entity.SourceScanCheckpointEnt
 import com.theemrock.smoothmedia.catalog.repository.LeaseRecoveryResult
 import com.theemrock.smoothmedia.catalog.repository.RoomLibrarySourceRepository
 import com.theemrock.smoothmedia.catalog.repository.RoomScanStateRepository
+import com.theemrock.smoothmedia.catalog.repository.ScanLifecycleResult
+import com.theemrock.smoothmedia.catalog.repository.ScanRecoveryResult
+import com.theemrock.smoothmedia.catalog.scan.ScanSessionOrchestrator
+import com.theemrock.smoothmedia.discovery.AudioDiscoveryResult
+import com.theemrock.smoothmedia.discovery.AudioFormat
+import com.theemrock.smoothmedia.discovery.DiscoveredAudioFile
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -66,6 +72,54 @@ class ScanStateRepositoryTest {
         assertEquals(SourcePermissionState.LOST, stored.permissionState)
         assertEquals(SourceAvailability.PERMISSION_LOST, stored.availability)
         assertEquals(0, stored.persistedPermissionFlags)
+    }
+
+    @Test
+    fun interruptedProcessing_onPausedSession_isResetForRetry() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        repository.recordCandidate(candidate("scan-1", state = ScanCandidateState.PROCESSING))
+        assertTrue(repository.pauseSession("scan-1", 2_000) is ScanLifecycleResult.Applied)
+
+        val result = repository.recoverInterruptedSession("scan-1", 3_000)
+
+        assertEquals(ScanRecoveryResult.Recovered("scan-1", 1), result)
+        assertEquals(ScanCandidateState.DISCOVERED, repository.findCandidate("scan-1", "source-1", "candidate-1")!!.state)
+    }
+
+    @Test
+    fun interruptedProcessing_withLiveLease_isNotTouched() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        repository.recordCandidate(candidate("scan-1", state = ScanCandidateState.PROCESSING))
+
+        val result = repository.recoverInterruptedSession("scan-1", 3_000)
+
+        assertEquals(ScanRecoveryResult.Rejected(ScanRecoveryResult.RejectionReason.LIVE_SESSION), result)
+        assertEquals(ScanCandidateState.PROCESSING, repository.findCandidate("scan-1", "source-1", "candidate-1")!!.state)
+    }
+
+    @Test
+    fun orphanedRunningSession_resetsProcessingAndBecomesPaused() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        repository.recordCandidate(candidate("scan-1", state = ScanCandidateState.PROCESSING))
+        assertEquals(1, database.scanDao().releaseLease("scan-1"))
+
+        val result = repository.recoverInterruptedSession("scan-1", 3_000)
+
+        assertEquals(ScanRecoveryResult.Recovered("scan-1", 1), result)
+        assertEquals(ScanSessionStatus.PAUSED, repository.findSession("scan-1")!!.status)
+        assertEquals(ScanCandidateState.DISCOVERED, repository.findCandidate("scan-1", "source-1", "candidate-1")!!.state)
+    }
+
+    @Test
+    fun interruptedProcessing_onCancelledSession_isNotAutoRestarted() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        assertTrue(repository.cancelSession("scan-1", 2_000) is ScanLifecycleResult.Applied)
+        repository.recordCandidate(candidate("scan-1", state = ScanCandidateState.PROCESSING))
+
+        val result = repository.recoverInterruptedSession("scan-1", 3_000)
+
+        assertEquals(ScanRecoveryResult.Rejected(ScanRecoveryResult.RejectionReason.CANCELLED_SESSION), result)
+        assertEquals(ScanCandidateState.PROCESSING, repository.findCandidate("scan-1", "source-1", "candidate-1")!!.state)
     }
 
     @Test
@@ -177,6 +231,148 @@ class ScanStateRepositoryTest {
         assertNotNull(repository.findSession("scan-2"))
     }
 
+    @Test
+    fun pauseAndResume_preserveCheckpointAndLeaseLifecycle() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        repository.updateCheckpoint(
+            sessionId = "scan-1",
+            sourceId = "source-1",
+            continuationToken = "cursor-7",
+            discoveredCount = 7,
+            processedCount = 3,
+            coverage = ScanCheckpointCoverage.PARTIAL,
+            updatedAtEpochMs = 2_000,
+        )
+
+        assertTrue(repository.pauseSession("scan-1", 3_000) is ScanLifecycleResult.Applied)
+        assertEquals(ScanSessionStatus.PAUSED, repository.findSession("scan-1")!!.status)
+        assertNull(database.scanDao().findActiveLease())
+        assertEquals("cursor-7", repository.findCheckpoint("scan-1", "source-1")!!.continuationToken)
+
+        assertTrue(repository.resumeSession("scan-1", 4_000) is ScanLifecycleResult.Applied)
+        assertEquals(ScanSessionStatus.RUNNING, repository.findSession("scan-1")!!.status)
+        assertEquals("scan-1", database.scanDao().findActiveLease()!!.sessionId)
+        assertEquals("cursor-7", repository.findCheckpoint("scan-1", "source-1")!!.continuationToken)
+    }
+
+    @Test
+    fun invalidLifecycleTransitions_areRejectedWithoutMutation() {
+        assertTrue(repository.pauseSession("missing", 2_000) is ScanLifecycleResult.Rejected)
+
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        assertTrue(repository.pauseSession("scan-1", 2_000) is ScanLifecycleResult.Applied)
+        assertTrue(repository.pauseSession("scan-1", 3_000) is ScanLifecycleResult.Rejected)
+        assertTrue(repository.cancelSession("scan-1", 4_000) is ScanLifecycleResult.Applied)
+        assertTrue(repository.resumeSession("scan-1", 5_000) is ScanLifecycleResult.Rejected)
+        assertTrue(repository.cancelSession("scan-1", 6_000) is ScanLifecycleResult.Rejected)
+        assertEquals(ScanSessionStatus.CANCELLED, repository.findSession("scan-1")!!.status)
+        assertNull(database.scanDao().findActiveLease())
+    }
+
+    @Test
+    fun resume_isRejectedWhenAnotherScanOwnsTheGlobalLease() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        assertTrue(repository.pauseSession("scan-1", 2_000) is ScanLifecycleResult.Applied)
+        repository.startSession(session("scan-2"), listOf(checkpoint("scan-2")))
+
+        val result = repository.resumeSession("scan-1", 3_000)
+
+        assertEquals(ScanLifecycleResult.RejectionReason.ACTIVE_SCAN_EXISTS, (result as ScanLifecycleResult.Rejected).reason)
+        assertEquals(ScanSessionStatus.PAUSED, repository.findSession("scan-1")!!.status)
+        assertEquals("scan-2", database.scanDao().findActiveLease()!!.sessionId)
+    }
+
+    @Test
+    fun cancelledSession_doesNotResumeThroughStaleLeaseRecovery() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        assertTrue(repository.cancelSession("scan-1", 2_000) is ScanLifecycleResult.Applied)
+
+        val result = repository.recoverStaleLeaseAndStart(
+            session = session("scan-2"),
+            checkpoints = listOf(checkpoint("scan-2")),
+        )
+
+        assertEquals(LeaseRecoveryResult.Started("scan-2", recoveredStaleLease = false), result)
+        assertEquals("scan-2", database.scanDao().findActiveLease()!!.sessionId)
+    }
+
+    @Test
+    fun orchestrator_recordsDiscoveredCandidatesAndCompletesSession() {
+        val files = listOf(discovered("one"), discovered("two"))
+        val orchestrator = ScanSessionOrchestrator(
+            state = repository,
+            discover = { AudioDiscoveryResult.Completed("source-1", files, skippedUnreadableCount = 0) },
+        )
+
+        val result = orchestrator.start(session("scan-1"), source())
+
+        assertTrue(result is ScanSessionOrchestrator.Result.Completed)
+        assertEquals(ScanSessionStatus.COMPLETED, repository.findSession("scan-1")!!.status)
+        assertNotNull(repository.findCandidate("scan-1", "source-1", "one"))
+        assertNotNull(repository.findCandidate("scan-1", "source-1", "two"))
+        assertEquals(ScanCheckpointCoverage.COMPLETE, repository.findCheckpoint("scan-1", "source-1")!!.coverage)
+    }
+
+    @Test
+    fun orchestrator_pauseAndResume_preservesCheckpointAndSkipsExistingCandidates() {
+        val files = listOf(discovered("one"), discovered("two"))
+        var beforeCount = 0
+        val orchestrator = ScanSessionOrchestrator(
+            state = repository,
+            discover = { AudioDiscoveryResult.Completed("source-1", files, skippedUnreadableCount = 0) },
+            beforeCandidate = { sessionId, _ ->
+                if (beforeCount++ == 1) repository.pauseSession(sessionId, 2_000)
+            },
+        )
+
+        val paused = orchestrator.start(session("scan-1"), source())
+        assertTrue(paused is ScanSessionOrchestrator.Result.Paused)
+        assertNotNull(repository.findCandidate("scan-1", "source-1", "one"))
+        assertNull(repository.findCandidate("scan-1", "source-1", "two"))
+
+        val resumed = orchestrator.resume("scan-1", source(), 3_000)
+
+        assertTrue(resumed is ScanSessionOrchestrator.Result.Completed)
+        assertNotNull(repository.findCandidate("scan-1", "source-1", "two"))
+        assertEquals(ScanSessionStatus.COMPLETED, repository.findSession("scan-1")!!.status)
+    }
+
+    @Test
+    fun orchestrator_cancelStopsBeforeRecordingNextCandidate() {
+        val files = listOf(discovered("one"), discovered("two"))
+        var beforeCount = 0
+        val orchestrator = ScanSessionOrchestrator(
+            state = repository,
+            discover = { AudioDiscoveryResult.Completed("source-1", files, skippedUnreadableCount = 0) },
+            beforeCandidate = { sessionId, _ ->
+                if (beforeCount++ == 1) repository.cancelSession(sessionId, 2_000)
+            },
+        )
+
+        val result = orchestrator.start(session("scan-1"), source())
+
+        assertTrue(result is ScanSessionOrchestrator.Result.Cancelled)
+        assertNotNull(repository.findCandidate("scan-1", "source-1", "one"))
+        assertNull(repository.findCandidate("scan-1", "source-1", "two"))
+        assertEquals(ScanSessionStatus.CANCELLED, repository.findSession("scan-1")!!.status)
+    }
+
+    @Test
+    fun orchestrator_rejectsUnavailableSourceWithoutStartingSession() {
+        val unavailable = source().copy(
+            availability = SourceAvailability.UNAVAILABLE,
+        )
+        val orchestrator = ScanSessionOrchestrator(
+            state = repository,
+            discover = { error("discovery must not run") },
+        )
+
+        val result = orchestrator.start(session("scan-1"), unavailable)
+
+        assertTrue(result is ScanSessionOrchestrator.Result.Rejected)
+        assertNull(repository.findSession("scan-1"))
+    }
+
     private fun inMemoryDatabase() = Room.inMemoryDatabaseBuilder(context, CatalogDatabase::class.java)
         .addCallback(CatalogDatabaseCallback)
         .build()
@@ -214,6 +410,17 @@ class ScanStateRepositoryTest {
         state = state,
         locationId = null,
         updatedAtEpochMs = 1_000,
+    )
+
+    private fun discovered(documentId: String) = DiscoveredAudioFile(
+        sourceId = "source-1",
+        uri = "content://tree/music/$documentId",
+        documentId = documentId,
+        displayName = "$documentId.mp3",
+        format = AudioFormat.MP3,
+        mimeType = "audio/mpeg",
+        sizeBytes = 10,
+        modifiedAtEpochMs = 1_000,
     )
 
     private fun source() = LibrarySourceEntity(

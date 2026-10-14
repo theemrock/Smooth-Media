@@ -38,9 +38,41 @@ interface ScanStateRepository {
         candidateKey: String,
     ): ScanCandidateEntity?
 
+    fun updateCandidateState(
+        sessionId: String,
+        sourceId: String,
+        candidateKey: String,
+        state: com.theemrock.smoothmedia.catalog.database.entity.ScanCandidateState,
+        locationId: String?,
+        updatedAtEpochMs: Long,
+    ): Boolean
+
+    fun recoverInterruptedSession(sessionId: String, updatedAtEpochMs: Long): ScanRecoveryResult
+
     fun completeSession(sessionId: String, completedAtEpochMs: Long)
 
+    fun pauseSession(sessionId: String, updatedAtEpochMs: Long): ScanLifecycleResult
+
+    fun resumeSession(sessionId: String, updatedAtEpochMs: Long): ScanLifecycleResult
+
+    fun cancelSession(sessionId: String, updatedAtEpochMs: Long): ScanLifecycleResult
+
+    fun failSession(sessionId: String, updatedAtEpochMs: Long): ScanLifecycleResult
+
     fun isMissingReconciliationAllowed(sessionId: String, sourceId: String): Boolean
+}
+
+sealed interface ScanLifecycleResult {
+    data class Applied(val sessionId: String, val status: com.theemrock.smoothmedia.catalog.database.entity.ScanSessionStatus) : ScanLifecycleResult
+
+    data class Rejected(val reason: RejectionReason) : ScanLifecycleResult
+
+    enum class RejectionReason {
+        NOT_FOUND,
+        INVALID_STATE,
+        ACTIVE_SCAN_EXISTS,
+        LEASE_NOT_OWNED,
+    }
 }
 
 sealed interface LeaseRecoveryResult {
@@ -50,4 +82,17 @@ sealed interface LeaseRecoveryResult {
     ) : LeaseRecoveryResult
 
     data class ResumeRequired(val sessionId: String) : LeaseRecoveryResult
+}
+
+sealed interface ScanRecoveryResult {
+    data class Recovered(val sessionId: String, val resetCandidates: Int) : ScanRecoveryResult
+
+    data class Rejected(val reason: RejectionReason) : ScanRecoveryResult
+
+    enum class RejectionReason {
+        NOT_FOUND,
+        LIVE_SESSION,
+        CANCELLED_SESSION,
+        TERMINAL_SESSION,
+    }
 }

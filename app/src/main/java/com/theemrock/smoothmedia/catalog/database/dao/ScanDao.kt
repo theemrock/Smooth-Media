@@ -103,6 +103,22 @@ interface ScanDao {
 
     @Query(
         """
+        UPDATE scan_candidates
+        SET state = :retryableState,
+            location_id = NULL,
+            updated_at_epoch_ms = :updatedAtEpochMs
+        WHERE session_id = :sessionId AND state = :processingState
+        """,
+    )
+    fun resetProcessingCandidates(
+        sessionId: String,
+        processingState: ScanCandidateState,
+        retryableState: ScanCandidateState,
+        updatedAtEpochMs: Long,
+    ): Int
+
+    @Query(
+        """
         UPDATE scan_sessions
         SET status = :status,
             updated_at_epoch_ms = :updatedAtEpochMs,
