@@ -27,6 +27,8 @@ MAX_INVENTORY_FILES = 200
 MAX_FILE_BYTES = 100_000
 MAX_CONTENT_CHARS = 60_000
 MAX_HISTORY_RESULT_CHARS = 10_000
+MAX_REQUEST_BYTES = 48_000
+MAX_OUTPUT_TOKENS = 2048
 
 # Read access is intentionally narrow: source, tests, task and build entrypoints.
 READ_FILES = {
@@ -310,11 +312,19 @@ def ask_model(history, deadline=None, tools=None):
         "model": MODEL,
         "messages": [{"role": "system", "content": SYSTEM}, *history],
         "temperature": 0,
-        "max_tokens": 10000,
+        "max_tokens": MAX_OUTPUT_TOKENS,
         "tools": TOOLS if tools is None else tools,
         "tool_choice": "auto",
         "parallel_tool_calls": False,
     }
+    encoded_payload = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    if len(encoded_payload) > MAX_REQUEST_BYTES:
+        raise RuntimeError(
+            f"Request budget exceeded: bytes={len(encoded_payload)} "
+            f"messages={len(payload['messages'])} limit={MAX_REQUEST_BYTES}"
+        )
+    print(f"REQUEST: bytes={len(encoded_payload)} messages={len(payload['messages'])} "
+          f"tools={len(payload['tools'])} max_tokens={MAX_OUTPUT_TOKENS}", flush=True)
     for attempt in range(3):
         if deadline is None:
             request_timeout = 120
@@ -325,7 +335,7 @@ def ask_model(history, deadline=None, tools=None):
             request_timeout = max(1, min(120, int(remaining - 15)))
         request = urllib.request.Request(
             "https://openrouter.ai/api/v1/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
+            data=encoded_payload,
             headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
             method="POST",
         )
@@ -516,6 +526,7 @@ def main():
     writes = test_count = 0
     discovery_steps = delivery_steps = invalid_steps = 0
     discovery_notice_sent = False
+    read_cache = set()
     status = "INCOMPLETE"
     summary = ""
     change_revision = 0
@@ -587,9 +598,15 @@ def main():
                         result = {"error": "Discovery limit reached; use write, test, or finish"}
                     else:
                         discovery_steps += 1
-                        result = safe_read(action.get("path"))
-                        if "content" in result:
-                            inspected.add(relative_path(action["path"])[0])
+                        rel, _ = relative_path(action.get("path"))
+                        if rel in read_cache:
+                            result = {"status": "already_read", "path": rel,
+                                      "instruction": "Use the earlier file content; do not read this path again."}
+                        else:
+                            result = safe_read(action.get("path"))
+                            if "content" in result:
+                                inspected.add(rel)
+                                read_cache.add(rel)
                 elif tool == "write":
                     delivery_steps += 1
                     if writes >= MAX_WRITES:
