@@ -28,4 +28,23 @@ interface CatalogExclusionDao {
         algorithmVersion: Int,
         digest: String,
     ): List<CatalogExclusionEntity>
+
+    @Query(
+        """
+        SELECT EXISTS(
+            SELECT 1 FROM catalog_exclusions
+            WHERE (source_id = :sourceId AND locator = :locator)
+               OR (file_hash_algorithm_name = :algorithmName
+                   AND file_hash_algorithm_version = :algorithmVersion
+                   AND file_hash_digest = :digest)
+        )
+        """,
+    )
+    fun isExcluded(
+        sourceId: String,
+        locator: String,
+        algorithmName: String,
+        algorithmVersion: Int,
+        digest: String,
+    ): Boolean
 }

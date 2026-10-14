@@ -83,6 +83,15 @@ interface ScanDao {
 
     @Query(
         """
+        SELECT * FROM scan_candidates
+        WHERE session_id = :sessionId AND source_id = :sourceId
+        ORDER BY candidate_key
+        """,
+    )
+    fun listCandidates(sessionId: String, sourceId: String): List<ScanCandidateEntity>
+
+    @Query(
+        """
         UPDATE scan_candidates
         SET state = :state,
             location_id = :locationId,

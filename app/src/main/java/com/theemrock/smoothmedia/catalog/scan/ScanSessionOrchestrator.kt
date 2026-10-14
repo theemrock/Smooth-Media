@@ -172,7 +172,11 @@ class ScanSessionOrchestrator(
             continuationToken = null,
             discoveredCount = discovery.files.size,
             processedCount = processedCount,
-            coverage = ScanCheckpointCoverage.COMPLETE,
+            coverage = if (discovery.skippedUnreadableCount == 0) {
+                ScanCheckpointCoverage.COMPLETE
+            } else {
+                ScanCheckpointCoverage.PARTIAL
+            },
             updatedAtEpochMs = nowEpochMs(),
         )
         state.completeSession(sessionId, nowEpochMs())
