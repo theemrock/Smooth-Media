@@ -4,6 +4,7 @@ import json
 import os
 import tempfile
 import unittest
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
@@ -63,6 +64,92 @@ class AskModelTest(unittest.TestCase):
             {tool["function"]["name"] for tool in payload["tools"]},
         )
         self.assertFalse(payload["parallel_tool_calls"])
+
+    def test_json_text_fallback_becomes_agent_action(self):
+        response_data = {
+            "id": "generation-text",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": '{"tool":"finish","summary":"done"}',
+                },
+            }],
+        }
+
+        def fake_urlopen(request, timeout):
+            return io.BytesIO(json.dumps(response_data).encode("utf-8"))
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy-test-value"}), \
+                patch.object(run_agent.urllib.request, "urlopen", side_effect=fake_urlopen):
+            reply = run_agent.ask_model([])
+
+        self.assertEqual({"tool": "finish", "summary": "done"}, json.loads(reply["action"]))
+        self.assertIsNone(reply["tool_call_id"])
+
+    def test_multiturn_native_history_preserves_protocol_order(self):
+        first = self.native_response()
+        second = {
+            "id": "generation-second",
+            "object": "chat.completion",
+            "choices": [{
+                "index": 0,
+                "finish_reason": "stop",
+                "message": {
+                    "role": "assistant",
+                    "content": '{"tool":"finish","summary":"done"}',
+                },
+            }],
+        }
+        responses = iter([first, second])
+        requests = []
+
+        def fake_urlopen(request, timeout):
+            requests.append(json.loads(request.data))
+            return io.BytesIO(json.dumps(next(responses)).encode("utf-8"))
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy-test-value"}), \
+                patch.object(run_agent.urllib.request, "urlopen", side_effect=fake_urlopen):
+            first_reply = run_agent.ask_model([])
+            history = []
+            run_agent.append_history(history, first_reply, {"entries": ["app/src/Main.kt"]})
+            second_reply = run_agent.ask_model(history)
+
+        self.assertEqual({"tool": "finish", "summary": "done"}, json.loads(second_reply["action"]))
+        self.assertEqual("assistant", requests[1]["messages"][-2]["role"])
+        self.assertEqual("call-test", requests[1]["messages"][-2]["tool_calls"][0]["id"])
+        self.assertEqual("tool", requests[1]["messages"][-1]["role"])
+        self.assertEqual("call-test", requests[1]["messages"][-1]["tool_call_id"])
+        self.assertEqual(
+            {"entries": ["app/src/Main.kt"]},
+            json.loads(requests[1]["messages"][-1]["content"]),
+        )
+
+    def test_http_400_reports_safe_provider_detail(self):
+        body = json.dumps({
+            "error": {
+                "message": "Invalid tool result: Bearer super-secret-value malformed message sequence",
+                "code": 400,
+                "metadata": {"raw": "Bearer super-secret-value"},
+            },
+        }).encode("utf-8")
+        error = urllib.error.HTTPError(
+            "https://openrouter.ai/api/v1/chat/completions",
+            400,
+            "Bad Request",
+            {},
+            io.BytesIO(body),
+        )
+
+        with patch.dict(os.environ, {"OPENROUTER_API_KEY": "dummy-test-value"}), \
+                patch.object(run_agent.urllib.request, "urlopen", side_effect=error):
+            with self.assertRaisesRegex(RuntimeError, "HTTP 400.*malformed message sequence") as caught:
+                run_agent.ask_model([])
+
+        self.assertNotIn("super-secret-value", str(caught.exception))
+        self.assertNotIn("Authorization", str(caught.exception))
 
     def test_timeout_is_retried_before_returning_action(self):
         attempts = iter([TimeoutError("timed out"), self.native_response()])

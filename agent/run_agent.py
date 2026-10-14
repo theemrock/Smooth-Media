@@ -3,6 +3,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -364,7 +365,9 @@ def ask_model(history, deadline=None, tools=None):
             }
         except urllib.error.HTTPError as exc:
             if exc.code not in {429, 500, 502, 503, 504} or attempt == 2:
-                raise RuntimeError(f"OpenRouter HTTP {exc.code}") from None
+                detail = safe_http_error_detail(exc)
+                suffix = f": {detail}" if detail else ""
+                raise RuntimeError(f"OpenRouter HTTP {exc.code}{suffix}") from None
             retry_delay = 5 * (attempt + 1)
             if deadline is not None and time.monotonic() + retry_delay + 15 >= deadline:
                 raise RuntimeError("Agent time limit reached while retrying OpenRouter") from None
@@ -379,6 +382,34 @@ def ask_model(history, deadline=None, tools=None):
                 raise RuntimeError("Agent time limit reached while retrying OpenRouter") from None
             time.sleep(retry_delay)
     raise RuntimeError("Model unavailable")
+
+
+def safe_http_error_detail(error):
+    """Extract a short, redacted provider message without exposing response payloads."""
+    try:
+        raw = error.read(8192)
+    except (OSError, ValueError):
+        return ""
+    if not raw:
+        return ""
+    try:
+        payload = json.loads(raw.decode("utf-8", errors="replace"))
+    except (json.JSONDecodeError, UnicodeError):
+        return ""
+    provider_error = payload.get("error") if isinstance(payload, dict) else None
+    if not isinstance(provider_error, dict):
+        return ""
+    message = provider_error.get("message")
+    if not isinstance(message, str) or not message.strip():
+        return ""
+    message = re.sub(r"(?i)bearer\s+\S+", "Bearer [redacted]", message)
+    message = re.sub(
+        r"(?i)(api[_-]?key|authorization|secret|token)\s*[:=]\s*\S+",
+        r"\1=[redacted]",
+        message,
+    )
+    message = re.sub(r"https?://\S+", "[url]", message)
+    return " ".join(message.split())[:240]
 
 
 def serialize_history_result(result):
