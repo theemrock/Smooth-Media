@@ -16,12 +16,16 @@ MODEL = "cohere/north-mini-code:free"
 REPORT = ROOT / "agent" / "REPORT.md"
 TASK = ROOT / "agent" / "TASK.md"
 
-MAX_STEPS = 16
+MAX_DISCOVERY_STEPS = 8
+MAX_DELIVERY_STEPS = 10
+MAX_INVALID_STEPS = 4
 MAX_SECONDS = 600
 MAX_WRITES = 6
 MAX_TESTS = 3
+MAX_INVENTORY_FILES = 200
 MAX_FILE_BYTES = 100_000
 MAX_CONTENT_CHARS = 60_000
+MAX_HISTORY_RESULT_CHARS = 10_000
 
 # Read access is intentionally narrow: source, tests, task and build entrypoints.
 READ_FILES = {
@@ -48,13 +52,15 @@ Read agent/TASK.md and complete ONLY the task specified there.
 Use exactly one provided function tool per response.
 If native function tools are unavailable, return exactly one JSON object (no markdown).
 Tools:
-{"tool":"list","path":"app/src"}
+{"tool":"list","path":"app/src"}  (one call returns a recursive source inventory)
 {"tool":"read","path":"app/src/main/AndroidManifest.xml"}
 {"tool":"write","path":"app/src/test/java/example/ExampleTest.kt","content":"..."}
 {"tool":"test","task":"testDebugUnitTest"}
 {"tool":"finish","summary":"..."}
 Rules:
 - Inspect relevant code before modifying it.
+- Start with one list call for app/src. Do not walk package directories one level at a time.
+- Discovery is limited. Select and read only the source and test files relevant to the task.
 - Make a small change, plus a meaningful automated test.
 - Preserve the existing architecture and behavior.
 - Do not modify Gradle configuration, workflows or agent scripts.
@@ -69,7 +75,10 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "list",
-            "description": "List an allowed repository directory.",
+            "description": (
+                "Return a bounded recursive inventory of readable files below an allowed "
+                "repository directory. One app/src call replaces package-by-package listing."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {"path": {"type": "string"}},
@@ -187,16 +196,29 @@ def safe_list(name):
     if not listable(rel) or not path.is_dir():
         return {"error": "Directory not allowed or not found"}
     entries = []
-    for item in sorted(path.iterdir()):
-        if item.is_symlink() or item.name.startswith(".") or item.name in BLOCKED_NAMES:
-            continue
-        child = item.relative_to(ROOT).as_posix()
-        if item.is_dir():
-            if listable(child):
-                entries.append(child + "/")
-        elif readable(child):
-            entries.append(child)
-    return {"entries": entries[:100]}
+    for current, directories, files in os.walk(path, followlinks=False):
+        current_path = Path(current)
+        directories[:] = sorted(
+            directory for directory in directories
+            if not directory.startswith(".")
+            and directory not in BLOCKED_NAMES
+            and not (current_path / directory).is_symlink()
+            and listable((current_path / directory).relative_to(ROOT).as_posix())
+        )
+        for filename in sorted(files):
+            item = current_path / filename
+            if (filename.startswith(".") or filename in BLOCKED_NAMES
+                    or item.is_symlink()):
+                continue
+            child = item.relative_to(ROOT).as_posix()
+            if readable(child):
+                entries.append(child)
+                if len(entries) > MAX_INVENTORY_FILES:
+                    return {
+                        "entries": entries[:MAX_INVENTORY_FILES],
+                        "truncated": True,
+                    }
+    return {"entries": entries, "truncated": False}
 
 
 def safe_read(name):
@@ -279,7 +301,7 @@ def native_tool_action(message):
     return json.dumps({"tool": name, **values}, ensure_ascii=False)
 
 
-def ask_model(history, deadline=None):
+def ask_model(history, deadline=None, tools=None):
     key = os.environ.get("OPENROUTER_API_KEY")
     if not key:
         raise RuntimeError("OPENROUTER_API_KEY missing")
@@ -288,7 +310,7 @@ def ask_model(history, deadline=None):
         "messages": [{"role": "system", "content": SYSTEM}, *history],
         "temperature": 0,
         "max_tokens": 10000,
-        "tools": TOOLS,
+        "tools": TOOLS if tools is None else tools,
         "tool_choice": "auto",
         "parallel_tool_calls": False,
     }
@@ -359,8 +381,52 @@ def ask_model(history, deadline=None):
     raise RuntimeError("Model unavailable")
 
 
+def serialize_history_result(result):
+    result_content = json.dumps(result, ensure_ascii=False)
+    if len(result_content) <= MAX_HISTORY_RESULT_CHARS:
+        return result_content
+    if isinstance(result, dict) and isinstance(result.get("entries"), list):
+        entries = result["entries"]
+        compact = {
+            **{key: value for key, value in result.items() if key != "entries"},
+            "entries": [],
+            "truncated": True,
+            "total_entries": len(entries),
+        }
+        for entry in entries:
+            compact["entries"].append(entry)
+            candidate = json.dumps(compact, ensure_ascii=False)
+            if len(candidate) > MAX_HISTORY_RESULT_CHARS:
+                compact["entries"].pop()
+                break
+        return json.dumps(compact, ensure_ascii=False)
+    if isinstance(result, dict):
+        for field in ("content", "output"):
+            value = result.get(field)
+            if not isinstance(value, str):
+                continue
+            compact = {
+                **result,
+                field: "",
+                "truncated": True,
+                "original_chars": len(value),
+            }
+            overhead = len(json.dumps(compact, ensure_ascii=False))
+            compact[field] = value[:max(0, MAX_HISTORY_RESULT_CHARS - overhead)]
+            candidate = json.dumps(compact, ensure_ascii=False)
+            if len(candidate) > MAX_HISTORY_RESULT_CHARS:
+                compact[field] = compact[field][:
+                    max(0, len(compact[field]) - (len(candidate) - MAX_HISTORY_RESULT_CHARS))
+                ]
+            return json.dumps(compact, ensure_ascii=False)
+    return json.dumps({
+        "error": "Tool result exceeded history limit",
+        "truncated": True,
+    })
+
+
 def append_history(history, reply, result):
-    result_content = json.dumps(result, ensure_ascii=False)[:10000]
+    result_content = serialize_history_result(result)
     if reply["tool_call_id"]:
         history.extend([
             reply["assistant"],
@@ -400,6 +466,8 @@ def main():
     history, events, tests = [], [], []
     changed, inspected = set(), set()
     writes = test_count = 0
+    discovery_steps = delivery_steps = invalid_steps = 0
+    discovery_notice_sent = False
     status = "INCOMPLETE"
     summary = ""
     change_revision = 0
@@ -409,18 +477,45 @@ def main():
             raise RuntimeError("agent/TASK.md not found")
         task = TASK.read_text(encoding="utf-8")
         history.append({"role": "user", "content": "Execute this task:\n\n" + task})
-        for step in range(MAX_STEPS):
+        step = 0
+        while True:
             remaining = MAX_SECONDS - (time.monotonic() - started)
             if remaining <= 15:
                 status = "TIME LIMIT"
                 break
-            reply = ask_model(history, deadline=started + MAX_SECONDS)
+            if (delivery_steps >= MAX_DELIVERY_STEPS
+                    or invalid_steps >= MAX_INVALID_STEPS):
+                break
+            discovery_available = discovery_steps < MAX_DISCOVERY_STEPS
+            if not discovery_available and not discovery_notice_sent:
+                history.append({
+                    "role": "user",
+                    "content": (
+                        "Discovery budget exhausted. Use the files already inspected and "
+                        "continue with write, test, or finish."
+                    ),
+                })
+                discovery_notice_sent = True
+            active_names = {"write", "test", "finish"}
+            if discovery_available:
+                active_names.update({"list", "read"})
+            active_tools = [
+                tool for tool in TOOLS
+                if tool["function"]["name"] in active_names
+            ]
+            step += 1
+            reply = ask_model(
+                history,
+                deadline=started + MAX_SECONDS,
+                tools=active_tools,
+            )
             raw = reply["action"]
             try:
                 action = json.loads(raw)
                 if not isinstance(action, dict):
                     raise ValueError("Expected object")
             except (ValueError, TypeError):
+                invalid_steps += 1
                 events.append({"tool": "parse", "result": "Invalid JSON"})
                 history.extend([
                     {"role": "assistant", "content": raw[:3000]},
@@ -429,15 +524,26 @@ def main():
                 continue
             tool = action.get("tool")
             target = action.get("path", action.get("task", ""))
-            print(f"STEP {step + 1}: {tool} {target}", flush=True)
+            print(f"STEP {step}: {tool} {target}", flush=True)
             try:
                 if tool == "list":
-                    result = safe_list(action.get("path", "."))
+                    if discovery_steps >= MAX_DISCOVERY_STEPS:
+                        invalid_steps += 1
+                        result = {"error": "Discovery limit reached; use write, test, or finish"}
+                    else:
+                        discovery_steps += 1
+                        result = safe_list(action.get("path", "."))
                 elif tool == "read":
-                    result = safe_read(action.get("path"))
-                    if "content" in result:
-                        inspected.add(relative_path(action["path"])[0])
+                    if discovery_steps >= MAX_DISCOVERY_STEPS:
+                        invalid_steps += 1
+                        result = {"error": "Discovery limit reached; use write, test, or finish"}
+                    else:
+                        discovery_steps += 1
+                        result = safe_read(action.get("path"))
+                        if "content" in result:
+                            inspected.add(relative_path(action["path"])[0])
                 elif tool == "write":
+                    delivery_steps += 1
                     if writes >= MAX_WRITES:
                         result = {"error": "Write limit reached"}
                     else:
@@ -451,6 +557,7 @@ def main():
                                 change_revision += 1
                                 changed.add(rel)
                 elif tool == "test":
+                    delivery_steps += 1
                     if test_count >= MAX_TESTS:
                         result = {"error": "Test limit reached"}
                     else:
@@ -462,10 +569,12 @@ def main():
                         if ok and action.get("task") == "testDebugUnitTest":
                             passed_revision = change_revision
                 elif tool == "finish":
+                    delivery_steps += 1
                     result = {"status": "finished"}
                     if isinstance(action.get("summary"), str):
                         summary = action["summary"].strip()[:2000]
                 else:
+                    invalid_steps += 1
                     result = {"error": "Unknown tool"}
             except (ValueError, OSError, UnicodeError) as exc:
                 result = {"error": f"{type(exc).__name__}: {exc}"}
