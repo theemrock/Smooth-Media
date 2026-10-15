@@ -24,6 +24,25 @@ import com.theemrock.smoothmedia.catalog.scan.ManualScanController
 import com.theemrock.smoothmedia.catalog.scan.ManualScanProgress
 import com.theemrock.smoothmedia.catalog.scan.ManualScanResult
 import com.theemrock.smoothmedia.catalog.scan.ScanSessionOrchestrator
+import com.theemrock.smoothmedia.library.LibraryViewModel
+import com.theemrock.smoothmedia.library.LibraryCollectionType
+import com.theemrock.smoothmedia.library.LibraryCollectionViewModel
+import com.theemrock.smoothmedia.library.LibraryCollectionRow
+import com.theemrock.smoothmedia.library.LibraryTrackFilter
+import com.theemrock.smoothmedia.library.RoomLibraryRepository
+import com.theemrock.smoothmedia.ui.LibraryScreen
+import com.theemrock.smoothmedia.ui.LibraryCollectionScreen
+import com.theemrock.smoothmedia.metadata.AndroidAudioMetadataReader
+import com.theemrock.smoothmedia.metadata.MetadataBatchProgress
+import com.theemrock.smoothmedia.metadata.MetadataBatchCoordinator
+import com.theemrock.smoothmedia.metadata.MetadataContinuousSessionCoordinator
+import com.theemrock.smoothmedia.metadata.MetadataContinuousSessionResult
+import com.theemrock.smoothmedia.metadata.MetadataSessionLaunchGate
+import com.theemrock.smoothmedia.metadata.MetadataSessionProgress
+import com.theemrock.smoothmedia.metadata.MetadataSessionStatus
+import com.theemrock.smoothmedia.metadata.MetadataMissingTrackPageCoordinator
+import com.theemrock.smoothmedia.metadata.RoomTrackMetadataRepository
+import com.theemrock.smoothmedia.metadata.TrackMetadataEnrichmentUseCase
 import com.theemrock.smoothmedia.source.AndroidSelectedTreeParser
 import com.theemrock.smoothmedia.source.SourceRegistryFactory
 import com.theemrock.smoothmedia.source.SourceRegistryRuntime
@@ -36,6 +55,7 @@ import com.theemrock.smoothmedia.ui.sourceRegistrationMessage
 import com.theemrock.smoothmedia.ui.sourceRemovalMessage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicBoolean
 
 private val DarkColorScheme = darkColorScheme(
     primary = Color(0xFF19C3E6),
@@ -61,10 +81,26 @@ class MainActivity : ComponentActivity() {
     private lateinit var runtime: SourceRegistryRuntime
     private lateinit var executor: ExecutorService
     private lateinit var scanController: ManualScanController
+    private lateinit var metadataCoordinator: MetadataMissingTrackPageCoordinator
+    private lateinit var metadataSessionCoordinator: MetadataContinuousSessionCoordinator
     private var sources by mutableStateOf<List<LibrarySourceEntity>>(emptyList())
     private var statusMessage by mutableStateOf<String?>(null)
     private var scanMessage by mutableStateOf<String?>(null)
     private var scanningSourceId by mutableStateOf<String?>(null)
+    private var metadataMissingCount by mutableStateOf(0)
+    private var metadataRunning by mutableStateOf(false)
+    private var metadataProgress by mutableStateOf<MetadataBatchProgress?>(null)
+    private var metadataSessionRunning by mutableStateOf(false)
+    private var metadataSessionStatus by mutableStateOf<MetadataSessionStatus?>(null)
+    private var metadataSessionProgress by mutableStateOf<MetadataSessionProgress?>(null)
+    private var showLibrary by mutableStateOf(false)
+    private var showCollections by mutableStateOf(false)
+    private lateinit var libraryViewModel: LibraryViewModel
+    private lateinit var collectionViewModel: LibraryCollectionViewModel
+    private lateinit var libraryRepository: RoomLibraryRepository
+    private val metadataCancelRequested = AtomicBoolean(false)
+    private val metadataSessionCancelRequested = AtomicBoolean(false)
+    private val metadataLaunchGate = MetadataSessionLaunchGate()
 
     private val treePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
@@ -90,25 +126,102 @@ class MainActivity : ComponentActivity() {
         runtime = SourceRegistryFactory.create(this)
         executor = Executors.newSingleThreadExecutor()
         scanController = ManualScanController(runtime.database, contentResolver)
+        val metadataRepository = RoomTrackMetadataRepository(runtime.database.trackMetadataDao())
+        val metadataEnrichment = TrackMetadataEnrichmentUseCase(
+            trackDao = runtime.database.trackDao(),
+            bindingDao = runtime.database.locatorBindingDao(),
+            exclusionDao = runtime.database.catalogExclusionDao(),
+            metadata = metadataRepository,
+            reader = AndroidAudioMetadataReader(this),
+        )
+        val metadataBatch = MetadataBatchCoordinator(metadataEnrichment::enrichTrack)
+        metadataCoordinator = MetadataMissingTrackPageCoordinator(
+            listMissingTrackIds = runtime.database.trackMetadataDao()::listTrackIdsMissingMetadata,
+            batch = metadataBatch,
+        )
+        metadataSessionCoordinator = MetadataContinuousSessionCoordinator(
+            page = metadataCoordinator,
+            countMissing = runtime.database.trackMetadataDao()::countTracksMissingMetadata,
+        )
+        libraryRepository = RoomLibraryRepository(
+            runtime.database.libraryDao(),
+        )
+        libraryViewModel = LibraryViewModel(
+            pageLoader = libraryRepository::loadPage,
+            totalLoader = libraryRepository::countTracks,
+            filteredPageLoader = libraryRepository::loadFilteredPage,
+            filteredTotalLoader = libraryRepository::countFilteredTracks,
+        )
+        collectionViewModel = LibraryCollectionViewModel(
+            pageLoader = libraryRepository::loadCollections,
+            totalLoader = libraryRepository::countCollections,
+        )
         setContent {
             SmoothMediaTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    SourceManagementScreen(
-                        sources = sources,
-                        statusMessage = listOfNotNull(statusMessage, scanMessage).joinToString("\n").ifBlank { null },
-                        scanningSourceId = scanningSourceId,
-                        onAdd = { treePicker.launch(TreePickerIntentFactory.create()) },
-                        onRefresh = { refreshSources() },
-                        onRemove = { sourceId -> removeSource(sourceId) },
-                        onScan = { sourceId -> startScan(sourceId) },
-                    )
+                    if (showCollections) {
+                        LibraryCollectionScreen(
+                            state = collectionViewModel.state.value,
+                            onNearEnd = { executor.execute { collectionViewModel.loadNextPage() } },
+                            onRetry = { executor.execute { collectionViewModel.retry() } },
+                            onSongs = {
+                                showCollections = false
+                                showLibrary = true
+                            },
+                            onCollection = ::openCollection,
+                            onCollectionSelected = { row -> openCollectionSongs(collectionViewModel.state.value.type, row) },
+                            onSources = {
+                                showCollections = false
+                                showLibrary = false
+                            },
+                        )
+                    } else if (showLibrary) {
+                        LibraryScreen(
+                            state = libraryViewModel.state.value,
+                            onNearEnd = { executor.execute { libraryViewModel.loadNextPage() } },
+                            onRetry = { executor.execute { libraryViewModel.retry() } },
+                            onSources = {
+                                showLibrary = false
+                                showCollections = false
+                            },
+                            onCollection = ::openCollection,
+                        )
+                    } else {
+                        SourceManagementScreen(
+                            sources = sources,
+                            statusMessage = listOfNotNull(statusMessage, scanMessage).joinToString("\n").ifBlank { null },
+                            scanningSourceId = scanningSourceId,
+                            onAdd = { treePicker.launch(TreePickerIntentFactory.create()) },
+                            onRefresh = { refreshSources() },
+                            onRemove = { sourceId -> removeSource(sourceId) },
+                            onScan = { sourceId -> startScan(sourceId) },
+                            onLibrary = {
+                                showLibrary = true
+                                showCollections = false
+                            },
+                            metadataMissingCount = metadataMissingCount,
+                            metadataRunning = metadataRunning,
+                            metadataProgress = metadataProgress,
+                            onMetadataStart = { startMetadataPage() },
+                            onMetadataStop = { stopMetadataPage() },
+                            metadataSessionRunning = metadataSessionRunning,
+                            metadataSessionStatus = metadataSessionStatus,
+                            metadataSessionProgress = metadataSessionProgress,
+                            onMetadataSessionStart = { startMetadataSession() },
+                            onMetadataSessionStop = { stopMetadataSession() },
+                        )
+                    }
                 }
             }
         }
         loadAndRefreshSources()
+        loadMetadataMissingCount()
+        executor.execute { libraryViewModel.loadInitial() }
     }
 
     override fun onDestroy() {
+        metadataCancelRequested.set(true)
+        metadataSessionCancelRequested.set(true)
         if (::executor.isInitialized && ::runtime.isInitialized) {
             executor.execute { runtime.close() }
             executor.shutdown()
@@ -170,6 +283,109 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 scanningSourceId = null
                 scanMessage = scanResultMessage(result)
+            }
+        }
+    }
+
+    private fun startMetadataPage() {
+        if (!metadataLaunchGate.tryAcquire()) return
+        metadataRunning = true
+        metadataSessionStatus = null
+        metadataCancelRequested.set(false)
+        metadataProgress = null
+        executor.execute {
+            val result = runCatching {
+                metadataCoordinator.runPage(
+                    cancellationRequested = metadataCancelRequested::get,
+                    onProgress = ::postMetadataProgress,
+                )
+            }
+            runOnUiThread {
+                metadataLaunchGate.release()
+                if (isDestroyed) return@runOnUiThread
+                metadataRunning = false
+                result.onFailure { metadataProgress = null }
+                result.getOrNull()?.let { metadataProgress = it.batch.progress }
+                loadMetadataMissingCount()
+            }
+        }
+    }
+
+    private fun stopMetadataPage() {
+        metadataCancelRequested.set(true)
+    }
+
+    private fun startMetadataSession() {
+        if (!metadataLaunchGate.tryAcquire()) return
+        metadataSessionRunning = true
+        metadataSessionStatus = null
+        metadataSessionProgress = MetadataSessionProgress.empty()
+        metadataSessionCancelRequested.set(false)
+        executor.execute {
+            val result = runCatching {
+                metadataSessionCoordinator.runSession(
+                    cancellationRequested = metadataSessionCancelRequested::get,
+                    onProgress = ::postMetadataSessionProgress,
+                )
+            }.getOrElse { error ->
+                MetadataContinuousSessionResult(
+                    status = MetadataSessionStatus.ERROR,
+                    progress = metadataSessionProgress ?: MetadataSessionProgress.empty(),
+                    errorMessage = error.message,
+                )
+            }
+            metadataLaunchGate.release()
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                metadataSessionRunning = false
+                metadataSessionStatus = result.status
+                metadataSessionProgress = result.progress
+                loadMetadataMissingCount()
+            }
+        }
+    }
+
+    private fun stopMetadataSession() {
+        metadataSessionCancelRequested.set(true)
+    }
+
+    private fun openCollection(type: LibraryCollectionType) {
+        showCollections = true
+        showLibrary = false
+        executor.execute { collectionViewModel.loadInitial(type) }
+    }
+
+    private fun openCollectionSongs(type: LibraryCollectionType, row: LibraryCollectionRow) {
+        val filter = when (type) {
+            LibraryCollectionType.ALBUMS -> LibraryTrackFilter.Album(row.title, row.subtitle.orEmpty())
+            LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
+            LibraryCollectionType.GENRES -> LibraryTrackFilter.Genre(row.title)
+            LibraryCollectionType.FOLDERS -> LibraryTrackFilter.Folder(row.key)
+        }
+        showCollections = false
+        showLibrary = true
+        executor.execute { libraryViewModel.loadInitial(filter, row.title) }
+    }
+
+    private fun postMetadataProgress(progress: MetadataBatchProgress) {
+        runOnUiThread {
+            if (!isDestroyed) metadataProgress = progress
+        }
+    }
+
+    private fun postMetadataSessionProgress(progress: MetadataSessionProgress) {
+        runOnUiThread {
+            if (!isDestroyed) metadataSessionProgress = progress
+        }
+    }
+
+    private fun loadMetadataMissingCount() {
+        if (!::executor.isInitialized || !::runtime.isInitialized) return
+        executor.execute {
+            val count = runCatching { runtime.database.trackMetadataDao().countTracksMissingMetadata() }
+                .getOrDefault(0)
+            runOnUiThread {
+                if (!isDestroyed) metadataMissingCount = count
             }
         }
     }

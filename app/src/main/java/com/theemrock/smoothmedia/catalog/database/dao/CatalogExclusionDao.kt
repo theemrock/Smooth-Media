@@ -8,6 +8,13 @@ import com.theemrock.smoothmedia.catalog.database.entity.CatalogExclusionEntity
 
 @Dao
 interface CatalogExclusionDao {
+    @Query(
+        "SELECT EXISTS(" +
+            "SELECT 1 FROM catalog_exclusions " +
+            "WHERE source_id = :sourceId AND locator = :locator)",
+    )
+    fun isLocatorExcluded(sourceId: String, locator: String): Boolean
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     fun insert(exclusion: CatalogExclusionEntity)
 

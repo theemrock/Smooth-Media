@@ -16,10 +16,41 @@ android {
         applicationId = "com.theemrock.smoothmedia"
         minSdk = 33
         targetSdk = 35
-        versionCode = 1003
-        versionName = "v0.0.01.003"
+        versionCode = 1004
+        versionName = "v0.0.01.004"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+    }
+
+    signingConfigs {
+        create("smoothRelease") {
+            val signingKeys = listOf(
+                "SMOOTH_SIGNING_STORE_FILE",
+                "SMOOTH_SIGNING_STORE_PASSWORD",
+                "SMOOTH_SIGNING_KEY_ALIAS",
+                "SMOOTH_SIGNING_KEY_PASSWORD",
+            )
+            val signingValues = signingKeys.associateWith { providers.environmentVariable(it).orNull }
+            val configured = signingValues.values.any { !it.isNullOrBlank() }
+            if (configured) {
+                signingKeys.forEach { name ->
+                    require(!signingValues[name].isNullOrBlank()) { "Missing signing environment variable: $name" }
+                }
+                val path = signingValues.getValue("SMOOTH_SIGNING_STORE_FILE")!!
+                require(file(path).isFile) { "Release keystore file not found" }
+                storeFile = file(path)
+                storePassword = signingValues.getValue("SMOOTH_SIGNING_STORE_PASSWORD")
+                keyAlias = signingValues.getValue("SMOOTH_SIGNING_KEY_ALIAS")
+                keyPassword = signingValues.getValue("SMOOTH_SIGNING_KEY_PASSWORD")
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            signingConfig = signingConfigs.getByName("smoothRelease")
+        }
     }
 
     buildFeatures {

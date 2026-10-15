@@ -5,6 +5,7 @@
     <string name="source_registry_description">Only folders you choose are registered. Each selected folder includes all of its subfolders.</string>
     <string name="add_folder">Add folder</string>
     <string name="refresh_sources">Refresh access</string>
+    <string name="open_library">Songs</string>
     <string name="remove_source">Remove source</string>
     <string name="retry_permission_release">Retry permission release</string>
     <string name="no_sources">No music source is registered.</string>
@@ -39,4 +40,17 @@
     <string name="scan_discovery_failed">Scan discovery failed.</string>
     <string name="scan_candidate_failed">Scan stopped at candidate: %1$s</string>
     <string name="scan_rejected">Scan could not be started for this source.</string>
+    <string name="metadata_title">Metadata enrichment</string>
+    <string name="metadata_missing_count">Tracks missing metadata: %1$d</string>
+    <string name="metadata_process_page">Process 10 tracks</string>
+    <string name="metadata_session_start">Start continuous</string>
+    <string name="metadata_session_stop">Stop continuous</string>
+    <string name="metadata_session_running">Metadata session running</string>
+    <string name="metadata_session_completed">Metadata session completed</string>
+    <string name="metadata_session_stopped">Metadata session stopped</string>
+    <string name="metadata_session_error">Metadata session failed. Existing metadata was kept.</string>
+    <string name="metadata_session_progress">Session: pages %1$d, processed %2$d, success: %3$d, skipped: %4$d, failed: %5$d</string>
+    <string name="metadata_stop">Stop</string>
+    <string name="metadata_progress">Metadata: %1$d/%2$d, success: %3$d, skipped: %4$d, failed: %5$d</string>
+    <string name="metadata_error">Metadata processing could not be completed. Existing metadata was kept.</string>
 </resources>

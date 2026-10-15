@@ -3,6 +3,7 @@ package com.theemrock.smoothmedia.catalog.database
 import androidx.room.Database
 import androidx.room.RoomDatabase
 import com.theemrock.smoothmedia.catalog.database.dao.LibrarySourceDao
+import com.theemrock.smoothmedia.catalog.database.dao.LibraryDao
 import com.theemrock.smoothmedia.catalog.database.dao.LocatorBindingDao
 import com.theemrock.smoothmedia.catalog.database.dao.CatalogExclusionDao
 import com.theemrock.smoothmedia.catalog.database.dao.ScanDao
@@ -16,8 +17,10 @@ import com.theemrock.smoothmedia.catalog.database.entity.ScanSessionEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceScanCheckpointEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackLocationEntity
+import com.theemrock.smoothmedia.catalog.database.entity.TrackMetadataEntity
+import com.theemrock.smoothmedia.catalog.database.entity.TrackMetadataOverrideEntity
 
-private const val CATALOG_SCHEMA_VERSION = 2
+private const val CATALOG_SCHEMA_VERSION = 3
 
 @Database(
     entities = [
@@ -30,6 +33,8 @@ private const val CATALOG_SCHEMA_VERSION = 2
         SourceScanCheckpointEntity::class,
         ScanCandidateEntity::class,
         CatalogExclusionEntity::class,
+        TrackMetadataEntity::class,
+        TrackMetadataOverrideEntity::class,
     ],
     version = CATALOG_SCHEMA_VERSION,
     exportSchema = true,
@@ -39,11 +44,15 @@ abstract class CatalogDatabase : RoomDatabase() {
 
     abstract fun librarySourceDao(): LibrarySourceDao
 
+    abstract fun libraryDao(): LibraryDao
+
     abstract fun locatorBindingDao(): LocatorBindingDao
 
     abstract fun scanDao(): ScanDao
 
     abstract fun catalogExclusionDao(): CatalogExclusionDao
+
+    abstract fun trackMetadataDao(): com.theemrock.smoothmedia.catalog.database.dao.TrackMetadataDao
 
     companion object {
         const val SCHEMA_VERSION = CATALOG_SCHEMA_VERSION

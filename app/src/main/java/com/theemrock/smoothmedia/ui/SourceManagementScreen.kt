@@ -27,6 +27,9 @@ import com.theemrock.smoothmedia.R
 import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceAvailability
 import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
+import com.theemrock.smoothmedia.metadata.MetadataBatchProgress
+import com.theemrock.smoothmedia.metadata.MetadataSessionProgress
+import com.theemrock.smoothmedia.metadata.MetadataSessionStatus
 import com.theemrock.smoothmedia.source.SourceRefreshResult
 import com.theemrock.smoothmedia.source.SourceRegistrationResult
 import com.theemrock.smoothmedia.source.SourceRemovalResult
@@ -40,6 +43,17 @@ fun SourceManagementScreen(
     onRemove: (String) -> Unit,
     scanningSourceId: String? = null,
     onScan: (String) -> Unit = {},
+    onLibrary: () -> Unit = {},
+    metadataMissingCount: Int = 0,
+    metadataRunning: Boolean = false,
+    metadataProgress: MetadataBatchProgress? = null,
+    onMetadataStart: () -> Unit = {},
+    onMetadataStop: () -> Unit = {},
+    metadataSessionRunning: Boolean = false,
+    metadataSessionStatus: MetadataSessionStatus? = null,
+    metadataSessionProgress: MetadataSessionProgress? = null,
+    onMetadataSessionStart: () -> Unit = {},
+    onMetadataSessionStop: () -> Unit = {},
 ) {
     Column(
         modifier = Modifier
@@ -60,12 +74,15 @@ fun SourceManagementScreen(
             style = MaterialTheme.typography.bodyMedium,
         )
         Spacer(modifier = Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-            Button(onClick = onAdd) {
-                Text(stringResource(R.string.add_folder))
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Button(onClick = onAdd, modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.add_folder), maxLines = 1, softWrap = false)
             }
-            OutlinedButton(onClick = onRefresh) {
-                Text(stringResource(R.string.refresh_sources))
+            OutlinedButton(onClick = onRefresh, modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.refresh_sources), maxLines = 1, softWrap = false)
+            }
+            OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f)) {
+                Text(stringResource(R.string.open_library), maxLines = 1, softWrap = false)
             }
         }
         statusMessage?.let {
@@ -73,12 +90,98 @@ fun SourceManagementScreen(
             Text(text = it, style = MaterialTheme.typography.bodyMedium)
         }
         Spacer(modifier = Modifier.height(16.dp))
+        MetadataSection(
+            missingCount = metadataMissingCount,
+            running = metadataRunning,
+            progress = metadataProgress,
+            onStart = onMetadataStart,
+            onStop = onMetadataStop,
+            sessionRunning = metadataSessionRunning,
+            sessionStatus = metadataSessionStatus,
+            sessionProgress = metadataSessionProgress,
+            onSessionStart = onMetadataSessionStart,
+            onSessionStop = onMetadataSessionStop,
+        )
+        Spacer(modifier = Modifier.height(16.dp))
         if (sources.isEmpty()) {
             Text(stringResource(R.string.no_sources))
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(sources, key = { it.sourceId }) { source ->
                     SourceCard(source, scanningSourceId, onRemove, onScan)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun MetadataSection(
+    missingCount: Int,
+    running: Boolean,
+    progress: MetadataBatchProgress?,
+    onStart: () -> Unit,
+    onStop: () -> Unit,
+    sessionRunning: Boolean,
+    sessionStatus: MetadataSessionStatus?,
+    sessionProgress: MetadataSessionProgress?,
+    onSessionStart: () -> Unit,
+    onSessionStop: () -> Unit,
+) {
+    Card(modifier = Modifier.fillMaxWidth()) {
+        Column(modifier = Modifier.padding(16.dp)) {
+            Text(stringResource(R.string.metadata_title), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.metadata_missing_count, missingCount))
+            when {
+                sessionRunning -> Text(stringResource(R.string.metadata_session_running))
+                sessionStatus == MetadataSessionStatus.COMPLETED ->
+                    Text(stringResource(R.string.metadata_session_completed))
+                sessionStatus == MetadataSessionStatus.STOPPED ->
+                    Text(stringResource(R.string.metadata_session_stopped))
+                sessionStatus == MetadataSessionStatus.ERROR ->
+                    Text(stringResource(R.string.metadata_session_error))
+            }
+            progress?.let {
+                Text(
+                    stringResource(
+                        R.string.metadata_progress,
+                        it.processed,
+                        it.total,
+                        it.succeeded,
+                        it.skipped,
+                        it.failed,
+                    ),
+                )
+            }
+            sessionProgress?.let {
+                Text(
+                    stringResource(
+                        R.string.metadata_session_progress,
+                        it.pages,
+                        it.processed,
+                        it.succeeded,
+                        it.skipped,
+                        it.failed,
+                    ),
+                )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            if (sessionRunning) {
+                OutlinedButton(onClick = onSessionStop) {
+                    Text(stringResource(R.string.metadata_session_stop))
+                }
+            } else if (running) {
+                OutlinedButton(onClick = onStop) {
+                    Text(stringResource(R.string.metadata_stop))
+                }
+            } else {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onSessionStart, enabled = missingCount > 0) {
+                        Text(stringResource(R.string.metadata_session_start))
+                    }
+                    OutlinedButton(onClick = onStart, enabled = missingCount > 0) {
+                        Text(stringResource(R.string.metadata_process_page))
+                    }
                 }
             }
         }

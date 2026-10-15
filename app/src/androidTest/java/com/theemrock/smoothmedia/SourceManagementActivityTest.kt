@@ -9,6 +9,8 @@ import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.junit4.createAndroidComposeRule
+import androidx.compose.ui.test.assertCountEquals
+import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -18,6 +20,8 @@ import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceType
 import com.theemrock.smoothmedia.catalog.database.entity.SourceAvailability
 import com.theemrock.smoothmedia.catalog.database.entity.SourcePermissionState
 import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
+import com.theemrock.smoothmedia.metadata.MetadataSessionProgress
+import com.theemrock.smoothmedia.metadata.MetadataSessionStatus
 import com.theemrock.smoothmedia.source.SourceRegistrationResult
 import com.theemrock.smoothmedia.ui.DeviceOrientationPolicy
 import com.theemrock.smoothmedia.ui.SourceManagementScreen
@@ -98,6 +102,109 @@ class SourceManagementActivityTest {
             R.string.source_permission_persisted_storage_failed,
             sourceRegistrationMessage(SourceRegistrationResult.PermissionPersistedButStorageFailed),
         )
+    }
+
+    @Test
+    fun metadataSection_exposesSinglePageControlsWithoutStartingWork() {
+        composeRule.activityRule.scenario.onActivity { activity ->
+            activity.setContent {
+                MaterialTheme {
+                    SourceManagementScreen(
+                        sources = emptyList(),
+                        statusMessage = null,
+                        onAdd = {},
+                        onRefresh = {},
+                        onRemove = {},
+                        metadataMissingCount = 12,
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.metadata_title))
+            .assertIsDisplayed()
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.metadata_process_page))
+            .assertIsDisplayed()
+        composeRule.onNodeWithText(
+            composeRule.activity.getString(R.string.metadata_missing_count, 12),
+        ).assertIsDisplayed()
+    }
+
+    @Test
+    fun metadataSession_requiresExplicitStart_andShowsTerminalState() {
+        var starts = 0
+        composeRule.activityRule.scenario.onActivity { activity ->
+            activity.setContent {
+                MaterialTheme {
+                    SourceManagementScreen(
+                        sources = emptyList(),
+                        statusMessage = null,
+                        onAdd = {},
+                        onRefresh = {},
+                        onRemove = {},
+                        metadataMissingCount = 12,
+                        onMetadataSessionStart = { starts++ },
+                    )
+                }
+            }
+        }
+
+        composeRule.onAllNodesWithText(composeRule.activity.getString(R.string.metadata_session_running))
+            .assertCountEquals(0)
+        assertEquals(0, starts)
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.metadata_session_start))
+            .performClick()
+        assertEquals(1, starts)
+
+        composeRule.activityRule.scenario.onActivity { activity ->
+            activity.setContent {
+                MaterialTheme {
+                    SourceManagementScreen(
+                        sources = emptyList(),
+                        statusMessage = null,
+                        onAdd = {},
+                        onRefresh = {},
+                        onRemove = {},
+                        metadataMissingCount = 0,
+                        metadataSessionStatus = MetadataSessionStatus.COMPLETED,
+                        metadataSessionProgress = MetadataSessionProgress(
+                            pages = 2,
+                            processed = 12,
+                            succeeded = 10,
+                            skipped = 1,
+                            failed = 1,
+                            missingCount = 0,
+                        ),
+                    )
+                }
+            }
+        }
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.metadata_session_completed))
+            .assertIsDisplayed()
+    }
+
+    @Test
+    fun sourceScreen_exposesSongsAction_withoutStartingScan() {
+        var opened = 0
+        composeRule.activityRule.scenario.onActivity { activity ->
+            activity.setContent {
+                MaterialTheme {
+                    SourceManagementScreen(
+                        sources = emptyList(),
+                        statusMessage = null,
+                        onAdd = {},
+                        onRefresh = {},
+                        onRemove = {},
+                        onLibrary = { opened++ },
+                    )
+                }
+            }
+        }
+
+        composeRule.onNodeWithText(composeRule.activity.getString(R.string.open_library))
+            .assertIsDisplayed()
+            .performClick()
+        assertEquals(1, opened)
     }
 
     private fun source(
