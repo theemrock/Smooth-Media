@@ -23,6 +23,7 @@ class ScanSessionOrchestrator(
     private val discover: (LibrarySourceEntity) -> AudioDiscoveryResult,
     private val beforeCandidate: (sessionId: String, file: DiscoveredAudioFile) -> Unit = { _, _ -> },
     private val processor: ScanCandidateProcessor? = null,
+    private val afterCandidate: (sessionId: String, file: DiscoveredAudioFile, result: CandidateProcessingResult.Completed) -> Unit = { _, _, _ -> },
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
 ) {
     fun start(session: ScanSessionEntity, source: LibrarySourceEntity): Result {
@@ -100,58 +101,75 @@ class ScanSessionOrchestrator(
             } else {
                 alreadyRecorded++
             }
-            if (processor != null && existing?.state != ScanCandidateState.COMPLETED) {
-                state.updateCandidateState(
-                    sessionId,
-                    source.sourceId,
-                    file.documentId,
-                    ScanCandidateState.PROCESSING,
-                    null,
-                    nowEpochMs(),
-                )
-                when (val processed = processor.process(sessionId, file)) {
+            var completedResult: CandidateProcessingResult.Completed? = null
+            if (processor != null && (existing?.state != ScanCandidateState.COMPLETED || processor.reprocessCompletedCandidates())) {
+                val reprocessingCompleted = existing?.state == ScanCandidateState.COMPLETED
+                if (!reprocessingCompleted) {
+                    state.updateCandidateState(
+                        sessionId,
+                        source.sourceId,
+                        file.documentId,
+                        ScanCandidateState.PROCESSING,
+                        null,
+                        nowEpochMs(),
+                    )
+                }
+                when (val processed = if (reprocessingCompleted) {
+                    processor.processCompletedCandidate(sessionId, file, existing!!)
+                } else {
+                    processor.process(sessionId, file)
+                }) {
                     is CandidateProcessingResult.Completed -> {
-                        state.updateCandidateState(
-                            sessionId,
-                            source.sourceId,
-                            file.documentId,
-                            ScanCandidateState.COMPLETED,
-                            processed.locationId,
-                            nowEpochMs(),
-                        )
+                        if (!reprocessingCompleted) {
+                            state.updateCandidateState(
+                                sessionId,
+                                source.sourceId,
+                                file.documentId,
+                                ScanCandidateState.COMPLETED,
+                                processed.locationId,
+                                nowEpochMs(),
+                            )
+                        }
+                        completedResult = processed
                     }
                     is CandidateProcessingResult.Failed -> {
-                        state.updateCandidateState(
-                            sessionId,
-                            source.sourceId,
-                            file.documentId,
-                            ScanCandidateState.DISCOVERED,
-                            null,
-                            nowEpochMs(),
-                        )
+                        if (!reprocessingCompleted) {
+                            state.updateCandidateState(
+                                sessionId,
+                                source.sourceId,
+                                file.documentId,
+                                ScanCandidateState.DISCOVERED,
+                                null,
+                                nowEpochMs(),
+                            )
+                        }
                         state.failSession(sessionId, nowEpochMs())
                         return Result.CandidateFailed(sessionId, file.documentId, processed.reason)
                     }
                     CandidateProcessingResult.Paused -> {
-                        state.updateCandidateState(
-                            sessionId,
-                            source.sourceId,
-                            file.documentId,
-                            ScanCandidateState.DISCOVERED,
-                            null,
-                            nowEpochMs(),
-                        )
+                        if (!reprocessingCompleted) {
+                            state.updateCandidateState(
+                                sessionId,
+                                source.sourceId,
+                                file.documentId,
+                                ScanCandidateState.DISCOVERED,
+                                null,
+                                nowEpochMs(),
+                            )
+                        }
                         return Result.Paused(sessionId, processedCount)
                     }
                     CandidateProcessingResult.Cancelled -> {
-                        state.updateCandidateState(
-                            sessionId,
-                            source.sourceId,
-                            file.documentId,
-                            ScanCandidateState.DISCOVERED,
-                            null,
-                            nowEpochMs(),
-                        )
+                        if (!reprocessingCompleted) {
+                            state.updateCandidateState(
+                                sessionId,
+                                source.sourceId,
+                                file.documentId,
+                                ScanCandidateState.DISCOVERED,
+                                null,
+                                nowEpochMs(),
+                            )
+                        }
                         return Result.Cancelled(sessionId, processedCount)
                     }
                 }
@@ -165,6 +183,7 @@ class ScanSessionOrchestrator(
                 coverage = ScanCheckpointCoverage.PARTIAL,
                 updatedAtEpochMs = nowEpochMs(),
             )
+            completedResult?.let { afterCandidate(sessionId, file, it) }
         }
         state.updateCheckpoint(
             sessionId = sessionId,

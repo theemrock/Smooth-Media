@@ -19,6 +19,7 @@ import com.theemrock.smoothmedia.discovery.AndroidSafDocumentTreeReader
 import com.theemrock.smoothmedia.discovery.HashIdentityAdapter
 import com.theemrock.smoothmedia.discovery.SafFullFileHasher
 import com.theemrock.smoothmedia.discovery.SelectedAudioDiscovery
+import com.theemrock.smoothmedia.metadata.MetadataEnrichmentResult
 import com.theemrock.smoothmedia.source.AndroidTreePermissionGateway
 import java.util.UUID
 
@@ -28,6 +29,7 @@ class ManualScanController(
     contentResolver: ContentResolver,
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
     private val newSessionId: () -> String = { UUID.randomUUID().toString() },
+    private val enrichMetadata: ((String) -> MetadataEnrichmentResult)? = null,
 ) {
     private val state = RoomScanStateRepository(database)
     private val discovery = SelectedAudioDiscovery(
@@ -78,6 +80,8 @@ class ManualScanController(
         resume: Boolean,
         onProgress: (ManualScanProgress) -> Unit,
     ): ManualScanResult {
+        var enrichedCount = 0
+        var metadataFailedCount = 0
         val orchestrator = ScanSessionOrchestrator(
             state = state,
             discover = discovery::discover,
@@ -90,6 +94,8 @@ class ManualScanController(
                         processedCount = checkpoint?.processedCount ?: 0,
                         discoveredCount = checkpoint?.discoveredCount ?: 0,
                         errorCount = 0,
+                        enrichedCount = enrichedCount,
+                        metadataFailedCount = metadataFailedCount,
                     ),
                 )
             },
@@ -97,7 +103,37 @@ class ManualScanController(
                 state = state,
                 hash = hasher::hash,
                 ingest = ingestion::ingest,
+                enrichMetadata = enrichMetadata,
+                enrichExistingLocation = enrichMetadata?.let { enrich ->
+                    { locationId ->
+                        val trackId = database.trackDao().findLocation(locationId)?.trackId
+                        if (trackId == null) {
+                            com.theemrock.smoothmedia.metadata.MetadataEnrichmentResult.TrackNotFound(locationId)
+                        } else {
+                            enrich(trackId)
+                        }
+                    }
+                },
             ),
+            afterCandidate = { sessionId, _, result ->
+                when (result.metadataResult) {
+                    ScanMetadataResult.ENRICHED -> enrichedCount++
+                    ScanMetadataResult.FAILED -> metadataFailedCount++
+                    ScanMetadataResult.SKIPPED -> Unit
+                }
+                val checkpoint = state.findCheckpoint(sessionId, source.sourceId)
+                onProgress(
+                    ManualScanProgress(
+                        sessionId = sessionId,
+                        status = state.findSession(sessionId)?.status ?: ScanSessionStatus.RUNNING,
+                        processedCount = (checkpoint?.processedCount ?: 0) + 1,
+                        discoveredCount = checkpoint?.discoveredCount ?: 0,
+                        errorCount = 0,
+                        enrichedCount = enrichedCount,
+                        metadataFailedCount = metadataFailedCount,
+                    ),
+                )
+            },
             nowEpochMs = nowEpochMs,
         )
         val result = if (resume) {
@@ -118,11 +154,15 @@ class ManualScanController(
                     is ScanSessionOrchestrator.Result.Completed -> result.skippedUnreadableCount
                     else -> 0
                 },
+                enrichedCount = enrichedCount,
+                metadataFailedCount = metadataFailedCount,
             ),
         )
         return result.toManualResult(
             defaultSessionId = session.sessionId,
             processedCount = checkpoint?.processedCount ?: 0,
+            enrichedCount = enrichedCount,
+            metadataFailedCount = metadataFailedCount,
         )
     }
 
@@ -141,12 +181,16 @@ class ManualScanController(
     private fun ScanSessionOrchestrator.Result.toManualResult(
         defaultSessionId: String,
         processedCount: Int,
+        enrichedCount: Int,
+        metadataFailedCount: Int,
     ): ManualScanResult = when (this) {
         is ScanSessionOrchestrator.Result.Completed -> ManualScanResult.Completed(
             sessionId = sessionId,
             skippedUnreadableCount = skippedUnreadableCount,
             processedCount = processedCount,
             successfulCount = (processedCount - skippedUnreadableCount).coerceAtLeast(0),
+            enrichedCount = enrichedCount,
+            metadataFailedCount = metadataFailedCount,
         )
         is ScanSessionOrchestrator.Result.Paused -> ManualScanResult.Paused(sessionId)
         is ScanSessionOrchestrator.Result.Cancelled -> ManualScanResult.Cancelled(sessionId)
@@ -169,6 +213,8 @@ data class ManualScanProgress(
     val processedCount: Int,
     val discoveredCount: Int,
     val errorCount: Int,
+    val enrichedCount: Int = 0,
+    val metadataFailedCount: Int = 0,
 )
 
 sealed interface ManualScanResult {
@@ -177,6 +223,8 @@ sealed interface ManualScanResult {
         val skippedUnreadableCount: Int,
         val processedCount: Int = 0,
         val successfulCount: Int = 0,
+        val enrichedCount: Int = 0,
+        val metadataFailedCount: Int = 0,
     ) : ManualScanResult
     data class Paused(val sessionId: String) : ManualScanResult
     data class Cancelled(val sessionId: String) : ManualScanResult

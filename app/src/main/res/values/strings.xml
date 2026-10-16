@@ -32,8 +32,8 @@
     <string name="scan_source">Scan</string>
     <string name="scan_running">Scanning…</string>
     <string name="scan_starting">Starting scan…</string>
-    <string name="scan_progress">Scan progress: %1$d/%2$d, errors: %3$d</string>
-    <string name="scan_completed">Scan completed. Processed: %1$d, successful: %2$d, errors: %3$d</string>
+    <string name="scan_progress">Scan progress: %1$d/%2$d, enriched: %4$d, metadata failed: %5$d, errors: %3$d</string>
+    <string name="scan_completed">Scan completed. Processed: %1$d, successful: %2$d, errors: %3$d, enriched: %4$d, metadata failed: %5$d</string>
     <string name="scan_paused">Scan paused.</string>
     <string name="scan_cancelled">Scan cancelled.</string>
     <string name="scan_already_active">Another scan is already active.</string>

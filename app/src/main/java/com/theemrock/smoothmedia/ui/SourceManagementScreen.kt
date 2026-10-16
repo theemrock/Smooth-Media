@@ -54,6 +54,7 @@ fun SourceManagementScreen(
     metadataSessionProgress: MetadataSessionProgress? = null,
     onMetadataSessionStart: () -> Unit = {},
     onMetadataSessionStop: () -> Unit = {},
+    showStandaloneMetadataControls: Boolean = true,
 ) {
     Column(
         modifier = Modifier
@@ -90,19 +91,21 @@ fun SourceManagementScreen(
             Text(text = it, style = MaterialTheme.typography.bodyMedium)
         }
         Spacer(modifier = Modifier.height(16.dp))
-        MetadataSection(
-            missingCount = metadataMissingCount,
-            running = metadataRunning,
-            progress = metadataProgress,
-            onStart = onMetadataStart,
-            onStop = onMetadataStop,
-            sessionRunning = metadataSessionRunning,
-            sessionStatus = metadataSessionStatus,
-            sessionProgress = metadataSessionProgress,
-            onSessionStart = onMetadataSessionStart,
-            onSessionStop = onMetadataSessionStop,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
+        if (showStandaloneMetadataControls) {
+            MetadataSection(
+                missingCount = metadataMissingCount,
+                running = metadataRunning,
+                progress = metadataProgress,
+                onStart = onMetadataStart,
+                onStop = onMetadataStop,
+                sessionRunning = metadataSessionRunning,
+                sessionStatus = metadataSessionStatus,
+                sessionProgress = metadataSessionProgress,
+                onSessionStart = onMetadataSessionStart,
+                onSessionStop = onMetadataSessionStop,
+            )
+            Spacer(modifier = Modifier.height(16.dp))
+        }
         if (sources.isEmpty()) {
             Text(stringResource(R.string.no_sources))
         } else {

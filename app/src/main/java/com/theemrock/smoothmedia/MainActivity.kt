@@ -227,7 +227,6 @@ class MainActivity : ComponentActivity() {
             }
         }
         onBackPressedDispatcher.addCallback(this, libraryBackCallback)
-        scanController = ManualScanController(runtime.database, contentResolver)
         val metadataRepository = RoomTrackMetadataRepository(runtime.database.trackMetadataDao())
         val metadataEnrichment = TrackMetadataEnrichmentUseCase(
             trackDao = runtime.database.trackDao(),
@@ -235,6 +234,11 @@ class MainActivity : ComponentActivity() {
             exclusionDao = runtime.database.catalogExclusionDao(),
             metadata = metadataRepository,
             reader = AndroidAudioMetadataReader(this),
+        )
+        scanController = ManualScanController(
+            database = runtime.database,
+            contentResolver = contentResolver,
+            enrichMetadata = metadataEnrichment::enrichTrack,
         )
         val metadataBatch = MetadataBatchCoordinator(metadataEnrichment::enrichTrack)
         metadataCoordinator = MetadataMissingTrackPageCoordinator(
@@ -428,6 +432,7 @@ class MainActivity : ComponentActivity() {
                             metadataSessionProgress = metadataSessionProgress,
                             onMetadataSessionStart = { startMetadataSession() },
                             onMetadataSessionStop = { stopMetadataSession() },
+                            showStandaloneMetadataControls = false,
                         )
                     }
                 }
@@ -769,6 +774,8 @@ class MainActivity : ComponentActivity() {
                 progress.processedCount,
                 progress.discoveredCount,
                 progress.errorCount,
+                progress.enrichedCount,
+                progress.metadataFailedCount,
             )
         }
     }
@@ -779,6 +786,8 @@ class MainActivity : ComponentActivity() {
             result.processedCount,
             result.successfulCount,
             result.skippedUnreadableCount,
+            result.enrichedCount,
+            result.metadataFailedCount,
         )
         is ManualScanResult.Paused -> getString(R.string.scan_paused)
         is ManualScanResult.Cancelled -> getString(R.string.scan_cancelled)
