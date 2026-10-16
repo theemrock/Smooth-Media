@@ -805,11 +805,21 @@ Bu tabloda bulunan “doğrulanacak” işler kullanıcı kararını değiştirm
 
 ---
 
+## 128. Kişisel/kurumsal bilgi ve güvenli checkpoint (bağlayıcı)
+
+- **Ortak kaynak:** `SMOOTH_PRODUCT_FAMILY.md` içindeki **Kişisel ve kurumsal bilgi koruma standardı** bütün Smooth Media kaynak, test, belge, Codex, Git ve yayın işlemleri için asgari zorunluluktur. Aile standardı Media'nın diğer anayasa maddelerini geçersiz kılmaz.
+- **Özel veri sınırı:** Gerçek cihazın Room kataloğu, Track/TrackLocation kimlikleri, SAF URI/grant'leri, kullanıcı metadata override'ları, playlist, history, preference, artwork ve ses dosyaları gizlilik denetimi veya checkpoint amacıyla silinmez, sıfırlanmaz, taşınmaz, değiştirilmez. `pm clear`, uninstall, destructive migration/rescan ve müzik dosyasına tag yazma güvenlik temizliği yöntemi değildir.
+- **Denetim:** Değişen/tracked/untracked/staged proje içeriği; `altek`, `emrah`, `alkanat` ve diğer kişisel/kurumsal göstergeler; mutlak/escape edilmiş Windows kullanıcı yolları, e-posta, token, parola, keystore secret ve özel anahtarlar için kapsamlı kontrol edilir. Git geçmişindeki author/committer metadata'sı ayrıca sınıflandırılır; `noreply`, bot, teknik kimlik ve gerçek kişisel adres ayrılır. `Grill Me` proje yöntem adıdır, tek başına hassas bulgu değildir.
+- **STOP ve onay:** Doğrulanmış hassas Git geçmişi sızıntısı veya çözümlenmemiş yayın riski varsa checkpoint/push/Release durur. History rewrite, force push, kimlik/imza değişikliği ve veri kaybı riski taşıyan işlem açık kullanıcı kararı olmadan yapılmaz. Salt izinli liste dışı commit e-postası, hassas veri olduğu ayrıca doğrulanmadan geçmiş temizliği emri doğurmaz.
+- **Checkpoint kapsamı:** Kirli çalışma ağacındaki P02A ve diğer özellikler ayrı incelenir; kapsam dışı tracked/untracked çalışmalar korunur. Seçici staging, staged diff/secret kontrolü, test/build, commit/tag/push ve remote doğrulaması birbirinden ayrı raporlanır. P02A'nın doğrulanmamış kabul kriterleri FULL PASS diye etiketlenmez.
+
+---
+
 # XXIX. KAYNAK UZLAŞTIRMA / DEĞİŞİKLİK KAYDI
 
 ## Revizyon ilkeleri
 
-1. Kaynak MD'deki **1–102 madde numaraları korunmuştur**. Yeni hükümler 103–127 olarak eklenmiştir.
+1. Kaynak MD'deki **1–102 madde numaraları korunmuştur**. Grill Me hükümleri 103–127 olarak, aile güvenlik standardına bağlı §128 ise 2026-10-16 tarihinde eklenmiştir.
 2. Kaynak içindeki “potansiyel”, “ileride olabilir” metinleri, açık Grill Me kararlarını geçersiz kılamaz.
 3. Önceki bir özelliğin yasaklanması başka bir özelliğin de yasaklandığı anlamına gelmez: örneğin **M3U yok** fakat portable backup var; **tag writer yok** fakat fiziksel delete var; **otomatik scan yok** fakat removable source rebind var.
 4. Bu dosyaya karar olarak yazılmamış teknik ayrıntı uygulama aşamasında keşif/test konusudur; geliştirme ekibi kullanıcı adına politika seçmez.
@@ -874,5 +884,7 @@ Bu tabloda bulunan “doğrulanacak” işler kullanıcı kararını değiştirm
 10. **Tarama manuel, seçilen kökleri kapsayan, idempotent ve kesintiden devam edebilirdir.**
 11. **P01 production player değildir; P01X yalnız developer smoke, P02 Playback Foundation'dır.**
 12. **Üçüncü taraf GPL kodu bağımsız Smooth implementation'a kopyalanmaz.**
+
+**2026-10-16 ek kaydı:** §128 kişisel/kurumsal bilgi koruma ve güvenli checkpoint standardı eklendi; önceki katalog/oynatma kararları değiştirilmedi.
 
 **Belge sonu.**

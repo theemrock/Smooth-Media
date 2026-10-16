@@ -2,6 +2,10 @@ package com.theemrock.smoothmedia.library
 
 import androidx.compose.runtime.MutableState
 import androidx.compose.runtime.mutableStateOf
+import java.util.concurrent.ScheduledExecutorService
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
+import java.util.concurrent.TimeUnit
 import androidx.sqlite.db.SimpleSQLiteQuery
 import com.theemrock.smoothmedia.catalog.database.dao.LibraryDao
 
@@ -28,7 +32,20 @@ data class LibrarySong(
     val metadataState: LibraryMetadataState,
     val locationState: LibraryLocationState,
     val locationCount: Int,
-)
+) {
+    /** Derived from persisted location state; no new catalog state is introduced. */
+    val isAccessible: Boolean
+        get() = locationState == LibraryLocationState.AVAILABLE
+
+    val accessibilityDescription: String
+        get() = when (locationState) {
+            LibraryLocationState.AVAILABLE -> "Available"
+            LibraryLocationState.MISSING -> "Unavailable: file missing"
+            LibraryLocationState.UNAVAILABLE -> "Unavailable: source unavailable"
+            LibraryLocationState.PERMISSION_LOST -> "Unavailable: permission lost"
+            LibraryLocationState.UNKNOWN -> "Availability unknown"
+        }
+}
 
 data class LibraryPage(
     val songs: List<LibrarySong>,
@@ -47,12 +64,134 @@ data class LibraryCollectionRow(
     val title: String,
     val subtitle: String?,
     val trackCount: Int,
+    val albumCount: Int = 0,
+    val mp3Count: Int = 0,
+    val flacCount: Int = 0,
+)
+
+val LibraryCollectionRow.artistStatsLine: String
+    get() = "$albumCount albums · $trackCount songs"
+
+val LibraryCollectionRow.artistFormatLabels: List<String>
+    get() = buildList {
+        if (mp3Count > 0) add("$mp3Count MP3")
+        if (flacCount > 0) add("$flacCount FLAC")
+    }
+
+data class LibraryArtworkCandidate(
+    val trackId: String,
+    val locationId: String,
+    val locator: String,
 )
 
 data class LibraryCollectionPage(
     val collections: List<LibraryCollectionRow>,
     val hasMore: Boolean,
 )
+
+enum class LibrarySearchCategory { SONGS, ARTISTS, ALBUMS, GENRES, FOLDERS }
+
+data class LibrarySearchPage(
+    val songs: List<LibrarySong> = emptyList(),
+    val artists: List<LibraryCollectionRow> = emptyList(),
+    val albums: List<LibraryCollectionRow> = emptyList(),
+    val genres: List<LibraryCollectionRow> = emptyList(),
+    val folders: List<LibraryCollectionRow> = emptyList(),
+) {
+    val isEmpty: Boolean
+        get() = songs.isEmpty() && artists.isEmpty() && albums.isEmpty() && genres.isEmpty() && folders.isEmpty()
+}
+
+object LibrarySearchQuery {
+    fun normalize(query: String): String? = query.trim().takeIf { it.isNotEmpty() }
+    /** TRACKS_SQL and collection search use instr(), so the bound value is a literal needle. */
+    fun likeArgument(query: String): String = query
+    fun snapshotKey(query: String, songs: List<LibrarySong>): String =
+        "search:${query.trim()}:${songs.joinToString(",") { it.trackId }}"
+    fun tracksSql(): String = TRACKS_SQL
+
+    const val TRACKS_SQL = """
+        SELECT DISTINCT t.track_id AS trackId,
+            COALESCE(title_override.value,m.normalizedTitle) AS title,
+            COALESCE(artist_override.value,m.normalizedArtist) AS artist,
+            COALESCE(album_override.value,m.normalizedAlbum) AS album,
+            COALESCE(CAST(duration_override.value AS INTEGER),m.normalizedDurationMs) AS durationMs,
+            CASE WHEN m.trackId IS NULL THEN 0 ELSE 1 END AS metadataPresent,
+            CASE WHEN title_override.value IS NOT NULL THEN 'AVAILABLE' ELSE m.normalizedTitleStatus END AS titleStatus,
+            CASE WHEN artist_override.value IS NOT NULL THEN 'AVAILABLE' ELSE m.normalizedArtistStatus END AS artistStatus,
+            CASE WHEN album_override.value IS NOT NULL THEN 'AVAILABLE' ELSE m.normalizedAlbumStatus END AS albumStatus,
+            CASE WHEN EXISTS (SELECT 1 FROM track_locations x LEFT JOIN locator_bindings xb ON xb.location_id=x.location_id LEFT JOIN catalog_exclusions xe ON xe.source_id=x.source_id AND xe.locator=xb.locator WHERE x.track_id=t.track_id AND x.availability='AVAILABLE' AND xe.exclusion_id IS NULL) THEN 'AVAILABLE'
+                 WHEN EXISTS (SELECT 1 FROM track_locations x LEFT JOIN locator_bindings xb ON xb.location_id=x.location_id LEFT JOIN catalog_exclusions xe ON xe.source_id=x.source_id AND xe.locator=xb.locator WHERE x.track_id=t.track_id AND x.availability='MISSING' AND xe.exclusion_id IS NULL) THEN 'MISSING'
+                 WHEN EXISTS (SELECT 1 FROM track_locations x LEFT JOIN locator_bindings xb ON xb.location_id=x.location_id LEFT JOIN catalog_exclusions xe ON xe.source_id=x.source_id AND xe.locator=xb.locator WHERE x.track_id=t.track_id AND x.availability='PERMISSION_LOST' AND xe.exclusion_id IS NULL) THEN 'PERMISSION_LOST'
+                 ELSE 'UNAVAILABLE' END AS locationState,
+            (SELECT COUNT(*) FROM track_locations x LEFT JOIN locator_bindings xb ON xb.location_id=x.location_id LEFT JOIN catalog_exclusions xe ON xe.source_id=x.source_id AND xe.locator=xb.locator WHERE x.track_id=t.track_id AND xe.exclusion_id IS NULL) AS locationCount
+        FROM tracks t
+        LEFT JOIN track_metadata m ON m.trackId=t.track_id
+        LEFT JOIN track_metadata_overrides title_override ON title_override.trackId=t.track_id AND title_override.fieldName='TITLE'
+        LEFT JOIN track_metadata_overrides artist_override ON artist_override.trackId=t.track_id AND artist_override.fieldName='ARTIST'
+        LEFT JOIN track_metadata_overrides album_override ON album_override.trackId=t.track_id AND album_override.fieldName='ALBUM'
+        LEFT JOIN track_metadata_overrides duration_override ON duration_override.trackId=t.track_id AND duration_override.fieldName='DURATION_MS'
+        LEFT JOIN track_locations l ON l.track_id=t.track_id
+        LEFT JOIN locator_bindings b ON b.location_id=l.location_id
+        LEFT JOIN catalog_exclusions e ON e.source_id=l.source_id AND e.locator=b.locator
+        WHERE t.catalog_lifecycle='ACTIVE' AND e.exclusion_id IS NULL AND
+            (instr(lower(COALESCE(title_override.value,m.normalizedTitle,'')),lower(?))>0 OR instr(lower(COALESCE(artist_override.value,m.normalizedArtist,'')),lower(?))>0 OR instr(lower(COALESCE(album_override.value,m.normalizedAlbum,'')),lower(?))>0 OR instr(lower(COALESCE(m.normalizedGenres,'')),lower(?))>0 OR instr(lower(COALESCE(l.path,'')),lower(?))>0)
+        ORDER BY CASE WHEN COALESCE(title_override.value,m.normalizedTitle,'')='' THEN 1 ELSE 0 END, COALESCE(title_override.value,m.normalizedTitle,'') COLLATE NOCASE, t.track_id
+        LIMIT ? OFFSET ?
+    """
+}
+
+interface LibrarySearchRepository {
+    fun search(query: String, limit: Int = 50, offset: Int = 0): LibrarySearchPage
+}
+
+data class LibrarySearchUiState(
+    val query: String = "",
+    val loading: Boolean = false,
+    val loaded: Boolean = false,
+    val results: LibrarySearchPage = LibrarySearchPage(),
+    val errorMessage: String? = null,
+)
+
+class LibrarySearchViewModel(
+    private val repository: LibrarySearchRepository,
+    private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor(),
+) {
+    val state: MutableState<LibrarySearchUiState> = mutableStateOf(LibrarySearchUiState())
+    private var pending: ScheduledFuture<*>? = null
+    private var generation = 0L
+
+    fun onQueryChanged(value: String) {
+        generation += 1
+        val requestGeneration = generation
+        pending?.cancel(false)
+        if (LibrarySearchQuery.normalize(value) == null) {
+            state.value = LibrarySearchUiState(query = value)
+            return
+        }
+        state.value = state.value.copy(query = value, loading = true, loaded = false, errorMessage = null)
+        pending = scheduler.schedule({
+            runCatching { repository.search(value) }
+                .onSuccess { result ->
+                    if (requestGeneration == generation) {
+                        state.value = LibrarySearchUiState(query = value, loaded = true, results = result)
+                    }
+                }
+                .onFailure { error ->
+                    if (requestGeneration == generation) {
+                        state.value = LibrarySearchUiState(query = value, loaded = true, errorMessage = error.message ?: "Search failed")
+                    }
+                }
+        }, 250, TimeUnit.MILLISECONDS)
+    }
+
+    fun clear() = onQueryChanged("")
+
+    fun close() {
+        pending?.cancel(false)
+        scheduler.shutdownNow()
+    }
+}
 
 sealed interface LibraryTrackFilter {
     data class Album(val album: String, val albumArtist: String) : LibraryTrackFilter
@@ -105,6 +244,11 @@ interface LibraryCollectionRepository {
     fun countCollections(type: LibraryCollectionType): Int
 }
 
+interface LibraryArtworkCandidateRepository {
+    fun loadAlbumArtworkCandidates(album: String, albumArtist: String, limit: Int): List<LibraryArtworkCandidate>
+    fun loadTrackArtworkCandidates(trackId: String, limit: Int): List<LibraryArtworkCandidate>
+}
+
 interface FilteredLibraryRepository {
     fun loadFilteredPage(filter: LibraryTrackFilter, offset: Int, limit: Int): LibraryPage
     fun countFilteredTracks(filter: LibraryTrackFilter): Int
@@ -112,7 +256,29 @@ interface FilteredLibraryRepository {
 
 class RoomLibraryRepository(
     private val dao: LibraryDao,
-) : LibraryRepository, LibraryCollectionRepository, FilteredLibraryRepository {
+) : LibraryRepository, LibraryCollectionRepository, FilteredLibraryRepository, LibraryArtworkCandidateRepository, LibrarySearchRepository {
+    override fun search(query: String, limit: Int, offset: Int): LibrarySearchPage {
+        val normalized = LibrarySearchQuery.normalize(query) ?: return LibrarySearchPage()
+        require(limit > 0) { "limit must be positive" }
+        require(offset >= 0) { "offset must be non-negative" }
+        val arg = LibrarySearchQuery.likeArgument(normalized)
+        val args = arrayOf<Any?>(arg, arg, arg, arg, arg, limit, offset)
+        val categoryArgs = arrayOf<Any?>(arg, limit, offset)
+        return LibrarySearchPage(
+            songs = dao.searchTracksRaw(SimpleSQLiteQuery(LibrarySearchQuery.tracksSql(), args)).map(LibraryTrackRow::toLibrarySong),
+            artists = dao.searchCollectionsRaw(SimpleSQLiteQuery(searchCollectionSql("artist"), categoryArgs)),
+            albums = dao.searchCollectionsRaw(SimpleSQLiteQuery(searchCollectionSql("album"), categoryArgs)),
+            genres = dao.searchCollectionsRaw(SimpleSQLiteQuery(searchCollectionSql("genre"), categoryArgs)),
+            folders = dao.searchCollectionsRaw(SimpleSQLiteQuery(searchCollectionSql("path"), categoryArgs)),
+        )
+    }
+
+    private fun searchCollectionSql(column: String): String = when (column) {
+        "artist" -> "SELECT artist AS `key`, artist AS title, NULL AS subtitle, COUNT(DISTINCT trackId) AS trackCount, 0 AS albumCount, 0 AS mp3Count, 0 AS flacCount FROM (SELECT t.track_id AS trackId, COALESCE(o.value,m.normalizedArtist) AS artist FROM tracks t LEFT JOIN track_metadata m ON m.trackId=t.track_id LEFT JOIN track_metadata_overrides o ON o.trackId=t.track_id AND o.fieldName='ARTIST' WHERE t.catalog_lifecycle='ACTIVE') WHERE artist IS NOT NULL AND trim(artist)<>'' AND instr(lower(artist),lower(?))>0 GROUP BY artist ORDER BY artist COLLATE NOCASE LIMIT ? OFFSET ?"
+        "album" -> "SELECT album AS `key`, album AS title, NULL AS subtitle, COUNT(DISTINCT trackId) AS trackCount, 0 AS albumCount, 0 AS mp3Count, 0 AS flacCount FROM (SELECT t.track_id AS trackId, COALESCE(o.value,m.normalizedAlbum) AS album FROM tracks t LEFT JOIN track_metadata m ON m.trackId=t.track_id LEFT JOIN track_metadata_overrides o ON o.trackId=t.track_id AND o.fieldName='ALBUM' WHERE t.catalog_lifecycle='ACTIVE') WHERE album IS NOT NULL AND trim(album)<>'' AND instr(lower(album),lower(?))>0 GROUP BY album ORDER BY album COLLATE NOCASE LIMIT ? OFFSET ?"
+        "genre" -> "SELECT genre AS `key`, genre AS title, NULL AS subtitle, COUNT(DISTINCT trackId) AS trackCount, 0 AS albumCount, 0 AS mp3Count, 0 AS flacCount FROM (SELECT t.track_id AS trackId, COALESCE(o.value,m.normalizedGenres) AS genre FROM tracks t LEFT JOIN track_metadata m ON m.trackId=t.track_id LEFT JOIN track_metadata_overrides o ON o.trackId=t.track_id AND o.fieldName='GENRE' WHERE t.catalog_lifecycle='ACTIVE') WHERE genre IS NOT NULL AND trim(genre)<>'' AND instr(lower(genre),lower(?))>0 GROUP BY genre ORDER BY genre COLLATE NOCASE LIMIT ? OFFSET ?"
+        else -> "SELECT path AS `key`, path AS title, NULL AS subtitle, COUNT(DISTINCT trackId) AS trackCount, 0 AS albumCount, 0 AS mp3Count, 0 AS flacCount FROM (SELECT t.track_id AS trackId, l.path AS path FROM tracks t JOIN track_locations l ON l.track_id=t.track_id WHERE t.catalog_lifecycle='ACTIVE') WHERE path IS NOT NULL AND trim(path)<>'' AND instr(lower(path),lower(?))>0 GROUP BY path ORDER BY path COLLATE NOCASE LIMIT ? OFFSET ?"
+    }
     override fun loadPage(offset: Int, limit: Int): LibraryPage {
         require(offset >= 0) { "offset must be non-negative" }
         require(limit > 0) { "limit must be positive" }
@@ -150,6 +316,19 @@ class RoomLibraryRepository(
         LibraryCollectionType.GENRES -> dao.countGenres()
         LibraryCollectionType.FOLDERS -> dao.countFolders()
     }
+
+    override fun loadAlbumArtworkCandidates(
+        album: String,
+        albumArtist: String,
+        limit: Int,
+    ): List<LibraryArtworkCandidate> = dao.loadAlbumArtworkCandidates(album, albumArtist, limit)
+        .map { LibraryArtworkCandidate(it.trackId, it.locationId, it.locator) }
+
+    override fun loadTrackArtworkCandidates(
+        trackId: String,
+        limit: Int,
+    ): List<LibraryArtworkCandidate> = dao.loadTrackArtworkCandidates(trackId, limit)
+        .map { LibraryArtworkCandidate(it.trackId, it.locationId, it.locator) }
 
     override fun loadFilteredPage(filter: LibraryTrackFilter, offset: Int, limit: Int): LibraryPage {
         require(offset >= 0) { "offset must be non-negative" }
@@ -217,6 +396,7 @@ data class LibraryUiState(
     val hasMore: Boolean = true,
     val errorMessage: String? = null,
     val heading: String = "Your library",
+    val isFiltered: Boolean = false,
 )
 
 class LibraryViewModel(
@@ -231,11 +411,23 @@ class LibraryViewModel(
     private var nextOffset = 0
     private var currentFilter: LibraryTrackFilter? = null
     private var currentHeading = "Your library"
+    private var savedScrollIndex = 0
+    private var savedScrollOffset = 0
+
+    val scrollIndex: Int get() = savedScrollIndex
+    val scrollOffset: Int get() = savedScrollOffset
+
+    fun saveScrollPosition(index: Int, offset: Int) {
+        savedScrollIndex = index.coerceAtLeast(0)
+        savedScrollOffset = offset.coerceAtLeast(0)
+    }
 
     fun loadInitial(pageSize: Int = DEFAULT_PAGE_SIZE) = loadInitial(null, "Your library", pageSize)
 
     fun loadInitial(filter: LibraryTrackFilter?, heading: String, pageSize: Int = DEFAULT_PAGE_SIZE) {
         if (state.value.loading) return
+        savedScrollIndex = 0
+        savedScrollOffset = 0
         this.pageSize = pageSize
         currentFilter = filter
         currentHeading = heading
@@ -253,12 +445,14 @@ class LibraryViewModel(
                 loaded = true,
                 hasMore = page.hasMore,
                 heading = currentHeading,
+                isFiltered = filter != null,
             )
         }.onFailure { error ->
             state.value = LibraryUiState(
                 loaded = true,
                 errorMessage = error.message ?: "Library could not be loaded",
                 heading = currentHeading,
+                isFiltered = filter != null,
             )
         }
     }
@@ -284,6 +478,26 @@ class LibraryViewModel(
                     errorMessage = error.message ?: "More songs could not be loaded",
                 )
             }
+    }
+
+    /** Loads the current source query with its existing filter and deterministic ordering. */
+    fun snapshotCurrentList(): List<LibrarySong> {
+        val result = mutableListOf<LibrarySong>()
+        var offset = 0
+        do {
+            val page = currentFilter?.let { filter ->
+                (filteredPageLoader ?: error("Filtered library is unavailable"))(filter, offset, pageSize)
+            } ?: pageLoader(offset, pageSize)
+            result += page.songs
+            offset += page.songs.size
+            if (page.songs.isEmpty() || !page.hasMore) break
+        } while (true)
+        return result
+    }
+
+    fun currentSnapshotKey(): String = buildString {
+        append(currentHeading)
+        currentFilter?.let { append(":").append(it) }
     }
 
     fun retry() {

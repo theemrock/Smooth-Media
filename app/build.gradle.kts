@@ -84,6 +84,8 @@ dependencies {
     implementation(libs.compose.material3)
     implementation(libs.room.runtime)
     implementation(libs.sqlite.framework)
+    implementation(libs.media3.exoplayer)
+    implementation(libs.media3.session)
 
     ksp(libs.room.compiler)
 

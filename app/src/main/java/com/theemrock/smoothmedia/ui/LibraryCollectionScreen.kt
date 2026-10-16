@@ -16,8 +16,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items as listItems
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
@@ -39,6 +42,10 @@ import androidx.compose.ui.unit.sp
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryCollectionType
 import com.theemrock.smoothmedia.library.LibraryCollectionUiState
+import com.theemrock.smoothmedia.library.artistFormatLabels
+import com.theemrock.smoothmedia.library.artistStatsLine
+import com.theemrock.smoothmedia.artwork.AndroidArtworkResolver
+import com.theemrock.smoothmedia.artwork.ArtworkRequest
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 private val CollectionInk = Color(0xFF080B0D)
@@ -56,6 +63,7 @@ fun LibraryCollectionScreen(
     onCollection: (LibraryCollectionType) -> Unit,
     onCollectionSelected: (LibraryCollectionRow) -> Unit = {},
     onSources: () -> Unit,
+    artworkResolver: AndroidArtworkResolver? = null,
 ) {
     Surface(color = CollectionInk, modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
@@ -69,7 +77,7 @@ fun LibraryCollectionScreen(
                 state.errorMessage != null -> CollectionError(state.errorMessage, onRetry)
                 !state.loaded || (state.loading && state.collections.isEmpty()) -> CollectionLoading()
                 state.collections.isEmpty() -> CollectionEmpty(state.type)
-                else -> CollectionGrid(state, onNearEnd, onCollectionSelected)
+                else -> CollectionGrid(state, onNearEnd, onCollectionSelected, artworkResolver)
             }
         }
     }
@@ -103,35 +111,68 @@ private fun CollectionGrid(
     state: LibraryCollectionUiState,
     onNearEnd: () -> Unit,
     onCollection: (LibraryCollectionRow) -> Unit,
+    artworkResolver: AndroidArtworkResolver?,
 ) {
-    val gridState = rememberLazyGridState()
     val latestNearEnd = rememberUpdatedState(onNearEnd)
     val latestState = rememberUpdatedState(state)
-    LaunchedEffect(gridState) {
-        snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
-            .distinctUntilChanged()
-            .collect { last ->
-                val current = latestState.value
-                if (!current.loading && current.errorMessage == null && current.hasMore && last >= current.collections.lastIndex - 5) {
-                    latestNearEnd.value()
+
+    if (state.type == LibraryCollectionType.ARTISTS) {
+        val listState = rememberLazyListState()
+        LaunchedEffect(listState) {
+            snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+                .distinctUntilChanged()
+                .collect { last ->
+                    val current = latestState.value
+                    if (!current.loading && current.errorMessage == null && current.hasMore && last >= current.collections.lastIndex - 5) {
+                        latestNearEnd.value()
+                    }
+                }
+        }
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            listItems(state.collections, key = { it.key }) { collection ->
+                CollectionCard(collection, state.type, artworkResolver) { onCollection(collection) }
+            }
+            item {
+                if (state.loading) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = CollectionCyan, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
                 }
             }
-    }
-    LazyVerticalGrid(
-        state = gridState,
-        columns = GridCells.Fixed(2),
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        horizontalArrangement = Arrangement.spacedBy(10.dp),
-        verticalArrangement = Arrangement.spacedBy(10.dp),
-    ) {
-        items(state.collections, key = { it.key }) { collection ->
-            CollectionCard(collection, state.type) { onCollection(collection) }
         }
-        item {
-            if (state.loading) {
-                Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = CollectionCyan, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+    } else {
+        val gridState = rememberLazyGridState()
+        LaunchedEffect(gridState) {
+            snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+                .distinctUntilChanged()
+                .collect { last ->
+                    val current = latestState.value
+                    if (!current.loading && current.errorMessage == null && current.hasMore && last >= current.collections.lastIndex - 5) {
+                        latestNearEnd.value()
+                    }
+                }
+        }
+        LazyVerticalGrid(
+            state = gridState,
+            columns = GridCells.Fixed(2),
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            gridItems(state.collections, key = { it.key }) { collection ->
+                CollectionCard(collection, state.type, artworkResolver) { onCollection(collection) }
+            }
+            item {
+                if (state.loading) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = CollectionCyan, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
                 }
             }
         }
@@ -139,7 +180,12 @@ private fun CollectionGrid(
 }
 
 @Composable
-private fun CollectionCard(collection: LibraryCollectionRow, type: LibraryCollectionType, onClick: () -> Unit) {
+private fun CollectionCard(
+    collection: LibraryCollectionRow,
+    type: LibraryCollectionType,
+    artworkResolver: AndroidArtworkResolver?,
+    onClick: () -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
@@ -149,18 +195,30 @@ private fun CollectionCard(collection: LibraryCollectionRow, type: LibraryCollec
             .background(Brush.linearGradient(listOf(CollectionPanel, CollectionInk)))
             .padding(12.dp),
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(if (type == LibraryCollectionType.ALBUMS) 116.dp else 72.dp)
-                .clip(RoundedCornerShape(8.dp))
-                .background(Brush.linearGradient(listOf(Color(0xFF172A31), Color(0xFF071014))))
-                .border(1.dp, CollectionCyan.copy(alpha = .55f), RoundedCornerShape(8.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            Text(collectionGlyph(type), color = CollectionCyan, fontSize = 32.sp)
+        if (type != LibraryCollectionType.ARTISTS) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(if (type == LibraryCollectionType.ALBUMS) 116.dp else 72.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(Brush.linearGradient(listOf(Color(0xFF172A31), Color(0xFF071014))))
+                    .border(1.dp, CollectionCyan.copy(alpha = .55f), RoundedCornerShape(8.dp)),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (type == LibraryCollectionType.ALBUMS && artworkResolver != null) {
+                    LibraryArtwork(
+                        request = ArtworkRequest.Album(collection.title, collection.subtitle.orEmpty()),
+                        resolver = artworkResolver,
+                        modifier = Modifier.fillMaxSize(),
+                        contentDescription = "Album artwork for ${collection.title}",
+                        targetPx = 256,
+                    )
+                } else {
+                    Text(collectionGlyph(type), color = CollectionCyan, fontSize = 32.sp)
+                }
+            }
+            Spacer(modifier = Modifier.height(8.dp))
         }
-        Spacer(modifier = Modifier.height(8.dp))
         Text(
             collection.title,
             color = Color.White,
@@ -168,10 +226,23 @@ private fun CollectionCard(collection: LibraryCollectionRow, type: LibraryCollec
             maxLines = 2,
             overflow = TextOverflow.Ellipsis,
         )
-        collection.subtitle?.takeIf { it.isNotBlank() }?.let {
-            Text(it, color = CollectionMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        if (type == LibraryCollectionType.ARTISTS) {
+            Text(collection.artistStatsLine, color = CollectionMuted, fontSize = 11.sp)
+            val formatLabels = collection.artistFormatLabels
+            if (formatLabels.isNotEmpty()) {
+                Text(
+                    formatLabels.joinToString(" · "),
+                    color = CollectionCyan,
+                    fontSize = 10.sp,
+                    letterSpacing = .4.sp,
+                )
+            }
+        } else {
+            collection.subtitle?.takeIf { it.isNotBlank() }?.let {
+                Text(it, color = CollectionMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Text("${collection.trackCount} TRACKS", color = CollectionCyan, fontSize = 10.sp, letterSpacing = .7.sp)
         }
-        Text("${collection.trackCount} TRACKS", color = CollectionCyan, fontSize = 10.sp, letterSpacing = .7.sp)
     }
 }
 

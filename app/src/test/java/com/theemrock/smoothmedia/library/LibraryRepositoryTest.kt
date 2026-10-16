@@ -53,6 +53,22 @@ class LibraryRepositoryTest {
     }
 
     @Test
+    fun availabilityPresentation_dimsEveryStateWithoutAvailableLocation() {
+        listOf(
+            LibraryLocationState.MISSING,
+            LibraryLocationState.UNAVAILABLE,
+            LibraryLocationState.PERMISSION_LOST,
+            LibraryLocationState.UNKNOWN,
+        ).forEach { state ->
+            val song = song("track-${state.name}").copy(locationState = state)
+            assertEquals(false, song.isAccessible)
+            assertTrue(song.accessibilityDescription.contains("unavailable", ignoreCase = true) ||
+                song.accessibilityDescription.contains("unknown", ignoreCase = true))
+        }
+        assertEquals(true, song("available").isAccessible)
+    }
+
+    @Test
     fun viewModel_loadsPagedState_andNeverLoadsAllTracksAtOnce() {
         val calls = mutableListOf<Pair<Int, Int>>()
         val pages = mapOf(
@@ -103,6 +119,22 @@ class LibraryRepositoryTest {
     }
 
     @Test
+    fun artistCollectionRow_exposesRealStats_andOmitsZeroFormatLabels() {
+        val row = LibraryCollectionRow(
+            key = "artist-1",
+            title = "Artist",
+            subtitle = null,
+            trackCount = 7,
+            albumCount = 3,
+            mp3Count = 7,
+            flacCount = 0,
+        )
+
+        assertEquals("3 albums · 7 songs", row.artistStatsLine)
+        assertEquals(listOf("7 MP3"), row.artistFormatLabels)
+    }
+
+    @Test
     fun viewModels_stopAtLastPage_withoutDuplicateRequests() {
         var songCalls = 0
         val songs = LibraryViewModel(
@@ -130,6 +162,93 @@ class LibraryRepositoryTest {
         collections.loadNextPage()
         collections.loadNextPage()
         assertEquals(2, collectionCalls)
+    }
+
+    @Test
+    fun libraryViewModel_clearingFilter_resetsPagingAndHeading() {
+        val calls = mutableListOf<Pair<Int, Int>>()
+        val viewModel = LibraryViewModel(
+            pageLoader = { offset, limit ->
+                calls += offset to limit
+                LibraryPage(listOf(song("all-$offset")), hasMore = false)
+            },
+            totalLoader = { 1 },
+            filteredPageLoader = { _, offset, limit ->
+                calls += offset to limit
+                LibraryPage(listOf(song("filtered-$offset")), hasMore = false)
+            },
+            filteredTotalLoader = { 1 },
+        )
+
+        viewModel.loadInitial(LibraryTrackFilter.Artist("Faithless"), "Faithless", pageSize = 1)
+        viewModel.loadInitial(null, "Your library", pageSize = 1)
+
+        assertEquals(listOf(0 to 1, 0 to 1), calls)
+        assertEquals("Your library", viewModel.state.value.heading)
+        assertEquals(false, viewModel.state.value.isFiltered)
+    }
+
+    @Test
+    fun snapshotCurrentListUsesActiveFilterAndStablePageOrder() {
+        val calls = mutableListOf<Pair<Int, Int>>()
+        val viewModel = LibraryViewModel(
+            pageLoader = { _, _ -> error("unfiltered loader must not be used") },
+            totalLoader = { 0 },
+            filteredPageLoader = { _, offset, limit ->
+                calls += offset to limit
+                when (offset) {
+                    0 -> LibraryPage(listOf(song("filtered-1"), song("filtered-2")), hasMore = true)
+                    2 -> LibraryPage(listOf(song("filtered-3")), hasMore = false)
+                    else -> LibraryPage(emptyList(), hasMore = false)
+                }
+            },
+            filteredTotalLoader = { 3 },
+        )
+
+        viewModel.loadInitial(LibraryTrackFilter.Artist("Artist"), "Artist", pageSize = 2)
+
+        assertEquals(listOf("filtered-1", "filtered-2", "filtered-3"), viewModel.snapshotCurrentList().map { it.trackId })
+        assertEquals(listOf(0 to 2, 0 to 2, 2 to 2), calls)
+    }
+
+    @Test
+    fun snapshotCurrentListSupports7049TracksWithoutUsingLoadedPageOnly() {
+        val viewModel = LibraryViewModel(
+            pageLoader = { offset, limit ->
+                val remaining = (7049 - offset).coerceAtLeast(0)
+                val count = minOf(limit, remaining)
+                LibraryPage(
+                    songs = (0 until count).map { index -> song("track-${offset + index}") },
+                    hasMore = offset + count < 7049,
+                )
+            },
+            totalLoader = { 7049 },
+        )
+        viewModel.loadInitial(pageSize = 50)
+
+        val snapshot = viewModel.snapshotCurrentList()
+
+        assertEquals(7049, snapshot.size)
+        assertEquals("track-0", snapshot.first().trackId)
+        assertEquals("track-3524", snapshot[3524].trackId)
+        assertEquals("track-7048", snapshot.last().trackId)
+    }
+
+    @Test
+    fun scrollPositionBelongsToViewModelAndResetsForNewSource() {
+        val viewModel = LibraryViewModel(
+            pageLoader = { _, _ -> LibraryPage(listOf(song("track-1")), false) },
+            totalLoader = { 1 },
+        )
+
+        viewModel.loadInitial()
+        viewModel.saveScrollPosition(17, 23)
+        assertEquals(17, viewModel.scrollIndex)
+        assertEquals(23, viewModel.scrollOffset)
+
+        viewModel.loadInitial()
+        assertEquals(0, viewModel.scrollIndex)
+        assertEquals(0, viewModel.scrollOffset)
     }
 
     private fun song(id: String) = LibrarySong(

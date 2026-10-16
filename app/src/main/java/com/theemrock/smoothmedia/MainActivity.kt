@@ -3,6 +3,7 @@ package com.theemrock.smoothmedia
 import android.app.Activity
 import android.os.Bundle
 import androidx.activity.ComponentActivity
+import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
@@ -30,6 +31,19 @@ import com.theemrock.smoothmedia.library.LibraryCollectionViewModel
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryTrackFilter
 import com.theemrock.smoothmedia.library.RoomLibraryRepository
+import com.theemrock.smoothmedia.library.LibrarySearchViewModel
+import com.theemrock.smoothmedia.library.LibrarySong
+import com.theemrock.smoothmedia.library.LibraryMetadataState
+import com.theemrock.smoothmedia.library.LibraryLocationState
+import com.theemrock.smoothmedia.playback.CatalogPlaybackLocationResolver
+import com.theemrock.smoothmedia.playback.PlaybackEngineState
+import com.theemrock.smoothmedia.playback.PlaybackSessionClient
+import com.theemrock.smoothmedia.playback.PlaybackQueueController
+import com.theemrock.smoothmedia.playback.QueueItem
+import com.theemrock.smoothmedia.playback.RepeatMode
+import com.theemrock.smoothmedia.playback.PlaybackQueueStore
+import com.theemrock.smoothmedia.playback.QueueMode
+import com.theemrock.smoothmedia.artwork.AndroidArtworkResolver
 import com.theemrock.smoothmedia.ui.LibraryScreen
 import com.theemrock.smoothmedia.ui.LibraryCollectionScreen
 import com.theemrock.smoothmedia.metadata.AndroidAudioMetadataReader
@@ -50,12 +64,20 @@ import com.theemrock.smoothmedia.source.TreePickerIntentFactory
 import com.theemrock.smoothmedia.source.selectRefreshSummary
 import com.theemrock.smoothmedia.ui.DeviceOrientationPolicy
 import com.theemrock.smoothmedia.ui.SourceManagementScreen
+import com.theemrock.smoothmedia.ui.LibrarySearchScreen
+import com.theemrock.smoothmedia.ui.NowPlayingScreen
+import com.theemrock.smoothmedia.ui.EqualizerScreen
+import com.theemrock.smoothmedia.ui.QueueScreen
+import com.theemrock.smoothmedia.eq.AdaptiveEqState
+import com.theemrock.smoothmedia.eq.EqualizerBand
+import com.theemrock.smoothmedia.eq.EqualizerProfileStore
 import com.theemrock.smoothmedia.ui.sourceRefreshMessage
 import com.theemrock.smoothmedia.ui.sourceRegistrationMessage
 import com.theemrock.smoothmedia.ui.sourceRemovalMessage
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.math.abs
 
 private val DarkColorScheme = darkColorScheme(
     primary = Color(0xFF19C3E6),
@@ -95,9 +117,28 @@ class MainActivity : ComponentActivity() {
     private var metadataSessionProgress by mutableStateOf<MetadataSessionProgress?>(null)
     private var showLibrary by mutableStateOf(false)
     private var showCollections by mutableStateOf(false)
+    private var showSearch by mutableStateOf(false)
+    private var showNowPlaying by mutableStateOf(false)
+    private var showEqualizer by mutableStateOf(false)
+    private var showQueue by mutableStateOf(false)
+    private var nowPlayingSong by mutableStateOf<LibrarySong?>(null)
+    private var playbackState by mutableStateOf(PlaybackEngineState())
+    private var equalizerBands by mutableStateOf<List<EqualizerBand>>(emptyList())
+    private var manualEqualizerLevels by mutableStateOf<Map<Short, Int>>(emptyMap())
+    private var manualEqualizerEnabled by mutableStateOf(true)
+    private var lastPlaybackEntryId: String? = null
+    private var lastPersistedPlaybackPosition = 0L
+    private lateinit var equalizerProfileStore: EqualizerProfileStore
     private lateinit var libraryViewModel: LibraryViewModel
     private lateinit var collectionViewModel: LibraryCollectionViewModel
     private lateinit var libraryRepository: RoomLibraryRepository
+    private lateinit var artworkResolver: AndroidArtworkResolver
+    private lateinit var searchViewModel: LibrarySearchViewModel
+    private lateinit var playbackClient: PlaybackSessionClient
+    private val queueController = PlaybackQueueController()
+    private lateinit var queueStore: PlaybackQueueStore
+    private var filteredCollectionType by mutableStateOf<LibraryCollectionType?>(null)
+    private lateinit var libraryBackCallback: OnBackPressedCallback
     private val metadataCancelRequested = AtomicBoolean(false)
     private val metadataSessionCancelRequested = AtomicBoolean(false)
     private val metadataLaunchGate = MetadataSessionLaunchGate()
@@ -125,6 +166,67 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         runtime = SourceRegistryFactory.create(this)
         executor = Executors.newSingleThreadExecutor()
+        equalizerProfileStore = EqualizerProfileStore(this)
+        manualEqualizerLevels = equalizerProfileStore.readLevels()
+        manualEqualizerEnabled = equalizerProfileStore.isManualEnabled()
+        queueStore = PlaybackQueueStore(this)
+        queueController.restore(queueStore.read())
+        playbackClient = PlaybackSessionClient(
+            this,
+            onState = { state ->
+                val wasPlaying = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING
+                playbackState = state
+                queueController.setPosition(state.positionMs)
+                val bands = playbackClient.equalizerBands()
+                if (bands.isNotEmpty()) equalizerBands = bands
+                if (wasPlaying && state.status != com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING) {
+                    persistQueue()
+                    lastPersistedPlaybackPosition = state.positionMs
+                }
+            },
+            onQueueState = { entryId, position ->
+                queueController.syncCurrentEntry(entryId, position)
+                val entryChanged = entryId != null && entryId != lastPlaybackEntryId
+                if (entryChanged) {
+                    lastPlaybackEntryId = entryId
+                    val index = queueController.state.value.items.indexOfFirst { it.entryId == entryId }
+                    if (index >= 0) updateNowPlayingItem(index)
+                }
+                if (entryChanged || abs(position - lastPersistedPlaybackPosition) >= 5_000L) {
+                    persistQueue()
+                    lastPersistedPlaybackPosition = position
+                }
+            },
+        )
+        libraryBackCallback = object : OnBackPressedCallback(true) {
+            override fun handleOnBackPressed() {
+                val type = filteredCollectionType
+                if (showLibrary && type != null) {
+                    returnToCollections(type)
+                    return
+                }
+                val next = com.theemrock.smoothmedia.ui.MainNavigationBack.handle(
+                    com.theemrock.smoothmedia.ui.MainNavigationState(
+                        showLibrary = showLibrary,
+                        showCollections = showCollections,
+                        showSearch = showSearch,
+                        showNowPlaying = showNowPlaying,
+                        showEqualizer = showEqualizer,
+                        showQueue = showQueue,
+                    ),
+                )
+                if (next == null) finish() else {
+                    showLibrary = next.showLibrary
+                    showCollections = next.showCollections
+                    showSearch = next.showSearch
+                    showNowPlaying = next.showNowPlaying
+                    showEqualizer = next.showEqualizer
+                    showQueue = next.showQueue
+                    updateLibraryBackCallback()
+                }
+            }
+        }
+        onBackPressedDispatcher.addCallback(this, libraryBackCallback)
         scanController = ManualScanController(runtime.database, contentResolver)
         val metadataRepository = RoomTrackMetadataRepository(runtime.database.trackMetadataDao())
         val metadataEnrichment = TrackMetadataEnrichmentUseCase(
@@ -146,6 +248,8 @@ class MainActivity : ComponentActivity() {
         libraryRepository = RoomLibraryRepository(
             runtime.database.libraryDao(),
         )
+        artworkResolver = AndroidArtworkResolver(contentResolver, libraryRepository)
+        searchViewModel = LibrarySearchViewModel(libraryRepository)
         libraryViewModel = LibraryViewModel(
             pageLoader = libraryRepository::loadPage,
             totalLoader = libraryRepository::countTracks,
@@ -159,21 +263,121 @@ class MainActivity : ComponentActivity() {
         setContent {
             SmoothMediaTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
-                    if (showCollections) {
+                    if (showQueue) {
+                        QueueScreen(
+                            state = queueController.state.value,
+                            onBack = { showQueue = false },
+                            onRemove = { queueController.remove(it); persistQueue(); syncQueueToSession(playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING) },
+                            onClear = {
+                                queueController.clear()
+                                playbackClient.clearQueue()
+                                persistQueue()
+                                nowPlayingSong = null
+                                playbackState = PlaybackEngineState()
+                            },
+                            onMoveUp = { index -> queueController.reorder(index, index - 1); persistQueue(); syncQueueToSession(playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true) },
+                            onMoveDown = { index -> queueController.reorder(index, index + 1); persistQueue(); syncQueueToSession(playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true) },
+                            onSelect = ::playQueueIndex,
+                            onNext = ::playNext,
+                            onPrevious = ::playPrevious,
+                            onShuffle = {
+                                queueController.setShuffle(!queueController.state.value.shuffle)
+                                playbackClient.setShuffle(queueController.state.value.shuffle)
+                                persistQueue()
+                                syncQueueToSession(playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true)
+                            },
+                            onRepeat = {
+                                val next = when (queueController.state.value.repeat) {
+                                    RepeatMode.OFF -> RepeatMode.ALL
+                                    RepeatMode.ALL -> RepeatMode.ONE
+                                    RepeatMode.ONE -> RepeatMode.OFF
+                                }
+                                queueController.setRepeat(next)
+                                playbackClient.setRepeat(next)
+                                persistQueue()
+                            },
+                        )
+                    } else if (showEqualizer) {
+                        EqualizerScreen(
+                            adaptiveState = AdaptiveEqState.fromMeasuredLevels(emptyMap()),
+                            manualLevels = manualEqualizerLevels,
+                            bands = equalizerBands,
+                            enabled = manualEqualizerEnabled,
+                            onEnabledChanged = { enabled ->
+                                manualEqualizerEnabled = enabled
+                                equalizerProfileStore.writeManualEnabled(enabled)
+                                playbackClient.setEqualizerEnabled(enabled)
+                            },
+                            onReset = {
+                                val flat = equalizerBands.associate { it.id to 0 }
+                                manualEqualizerLevels = flat
+                                playbackClient.applyManualEqualizer(flat)
+                            },
+                            onManualLevelChanged = { band, level ->
+                                val next = manualEqualizerLevels + (band to level)
+                                manualEqualizerLevels = next
+                                equalizerProfileStore.writeLevels(next)
+                                playbackClient.applyManualEqualizer(next)
+                            },
+                            onBack = { showEqualizer = false },
+                        )
+                    } else if (showNowPlaying && nowPlayingSong != null) {
+                        NowPlayingScreen(
+                            song = nowPlayingSong!!,
+                            state = playbackState,
+                            onBack = { showNowPlaying = false },
+                            onPause = playbackClient::pause,
+                            onResume = playbackClient::resume,
+                            onSeek = playbackClient::seekTo,
+                            onEqualizer = { showEqualizer = true },
+                            onQueue = { showQueue = true },
+                            onNext = ::playNext,
+                            onPrevious = ::playPrevious,
+                            onShuffle = {
+                                queueController.setShuffle(!queueController.state.value.shuffle)
+                                playbackClient.setShuffle(queueController.state.value.shuffle)
+                                persistQueue()
+                                syncQueueToSession(playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true)
+                            },
+                            onRepeat = {
+                                val next = when (queueController.state.value.repeat) {
+                                    RepeatMode.OFF -> RepeatMode.ALL
+                                    RepeatMode.ALL -> RepeatMode.ONE
+                                    RepeatMode.ONE -> RepeatMode.OFF
+                                }
+                                queueController.setRepeat(next)
+                                playbackClient.setRepeat(next)
+                                persistQueue()
+                            },
+                            artworkResolver = artworkResolver,
+                        )
+                    } else if (showSearch) {
+                        LibrarySearchScreen(
+                            state = searchViewModel.state.value,
+                            onQueryChanged = searchViewModel::onQueryChanged,
+                            onClear = searchViewModel::clear,
+                            onSong = { song ->
+                                val visibleSongs = searchViewModel.state.value.results.songs
+                                playSong(song, visibleSongs, com.theemrock.smoothmedia.library.LibrarySearchQuery.snapshotKey(searchViewModel.state.value.query, visibleSongs))
+                            },
+                            onBack = { showSearch = false },
+                        )
+                    } else if (showCollections) {
                         LibraryCollectionScreen(
                             state = collectionViewModel.state.value,
                             onNearEnd = { executor.execute { collectionViewModel.loadNextPage() } },
                             onRetry = { executor.execute { collectionViewModel.retry() } },
                             onSongs = {
-                                showCollections = false
-                                showLibrary = true
+                                showAllSongs()
                             },
                             onCollection = ::openCollection,
                             onCollectionSelected = { row -> openCollectionSongs(collectionViewModel.state.value.type, row) },
                             onSources = {
                                 showCollections = false
                                 showLibrary = false
+                                updateLibraryBackCallback()
                             },
+                            artworkResolver = artworkResolver,
                         )
                     } else if (showLibrary) {
                         LibraryScreen(
@@ -183,8 +387,24 @@ class MainActivity : ComponentActivity() {
                             onSources = {
                                 showLibrary = false
                                 showCollections = false
+                                updateLibraryBackCallback()
                             },
+                            onSongs = ::showAllSongs,
                             onCollection = ::openCollection,
+                            onSearch = { showSearch = true },
+                            onSong = { song -> playSong(song) },
+                            playbackState = playbackState.takeIf { nowPlayingSong != null },
+                            miniPlayerSong = nowPlayingSong,
+                            onMiniPlayerOpen = { showNowPlaying = true },
+                            onMiniPlayerPause = playbackClient::pause,
+                            onMiniPlayerResume = playbackClient::resume,
+                            onMiniPlayerNext = ::playNext,
+                            onAddToQueue = ::addToQueue,
+                            onPlayNext = ::playNextSong,
+                            artworkResolver = artworkResolver,
+                            initialScrollIndex = libraryViewModel.scrollIndex,
+                            initialScrollOffset = libraryViewModel.scrollOffset,
+                            onScrollPositionChanged = libraryViewModel::saveScrollPosition,
                         )
                     } else {
                         SourceManagementScreen(
@@ -196,8 +416,7 @@ class MainActivity : ComponentActivity() {
                             onRemove = { sourceId -> removeSource(sourceId) },
                             onScan = { sourceId -> startScan(sourceId) },
                             onLibrary = {
-                                showLibrary = true
-                                showCollections = false
+                                showAllSongs()
                             },
                             metadataMissingCount = metadataMissingCount,
                             metadataRunning = metadataRunning,
@@ -217,16 +436,136 @@ class MainActivity : ComponentActivity() {
         loadAndRefreshSources()
         loadMetadataMissingCount()
         executor.execute { libraryViewModel.loadInitial() }
+        executor.execute { syncQueueToSession(playWhenReady = false) }
     }
 
     override fun onDestroy() {
         metadataCancelRequested.set(true)
         metadataSessionCancelRequested.set(true)
+        persistQueue()
+        if (::playbackClient.isInitialized) playbackClient.close()
+        if (::searchViewModel.isInitialized) searchViewModel.close()
         if (::executor.isInitialized && ::runtime.isInitialized) {
             executor.execute { runtime.close() }
             executor.shutdown()
         }
         super.onDestroy()
+    }
+
+    private fun playSong(song: LibrarySong, sourceSongs: List<LibrarySong>? = null, sourceSnapshotKey: String? = null) {
+        executor.execute {
+            val location = CatalogPlaybackLocationResolver(runtime.database).resolve(song.trackId).firstOrNull()
+            val source = sourceSongs?.takeIf { list -> list.any { it.trackId == song.trackId } }
+                ?: libraryViewModel.snapshotCurrentList().ifEmpty { listOf(song) }
+            val selectedIndex = source.indexOfFirst { it.trackId == song.trackId }.coerceAtLeast(0)
+            val items = source.map { entry ->
+                QueueItem(
+                    trackId = entry.trackId,
+                    title = entry.title,
+                    artist = entry.artist,
+                    album = entry.album,
+                    durationMs = entry.durationMs,
+                )
+            }
+            runOnUiThread {
+                nowPlayingSong = song
+                showNowPlaying = true
+                if (location != null) {
+                    queueController.startGhost(items, selectedIndex, sourceSnapshotKey ?: libraryViewModel.currentSnapshotKey())
+                    persistQueue()
+                    syncQueueToSession(playWhenReady = true)
+                } else playbackState = PlaybackEngineState(
+                    status = com.theemrock.smoothmedia.playback.PlaybackStatus.ERROR,
+                    trackId = song.trackId,
+                    errorMessage = "No accessible SAF location",
+                )
+            }
+        }
+    }
+
+    private fun addToQueue(song: LibrarySong) = enqueueSong(song, playNext = false)
+
+    private fun playNextSong(song: LibrarySong) = enqueueSong(song, playNext = true)
+
+    private fun enqueueSong(song: LibrarySong, playNext: Boolean) {
+        if (!song.isAccessible) return
+        executor.execute {
+            val location = CatalogPlaybackLocationResolver(runtime.database).resolve(song.trackId).firstOrNull()
+            runOnUiThread {
+                if (location == null) return@runOnUiThread
+                val item = QueueItem(trackId = song.trackId, title = song.title, artist = song.artist, album = song.album, durationMs = song.durationMs)
+                val added = if (queueController.state.value.mode == QueueMode.GHOST) {
+                    queueController.takeOverUserQueue(item, playNext)
+                } else if (playNext) {
+                    queueController.playNext(item)
+                } else {
+                    queueController.add(item)
+                }
+                if (added) {
+                    persistQueue()
+                    syncQueueToSession(
+                        playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING,
+                        preservePosition = true,
+                    )
+                }
+            }
+        }
+    }
+
+    private fun playQueueIndex(index: Int) {
+        if (!queueController.select(index)) return
+        showQueueItem(index)
+        persistQueue()
+        syncQueueToSession(playWhenReady = true)
+    }
+
+    private fun playNext() {
+        val next = queueController.next() ?: return
+        showQueueItem(next)
+        persistQueue()
+        syncQueueToSession(playWhenReady = true)
+    }
+
+    private fun playPrevious() {
+        val previous = queueController.previous() ?: return
+        showQueueItem(previous)
+        persistQueue()
+        syncQueueToSession(playWhenReady = true)
+    }
+
+    private fun syncQueueToSession(playWhenReady: Boolean, preservePosition: Boolean = false) {
+        val items = queueController.orderedForPlayback()
+        if (items.isEmpty()) return
+        val currentEntryId = queueController.state.value.current?.entryId
+        val startIndex = items.indexOfFirst { it.entryId == currentEntryId }.coerceAtLeast(0)
+        executor.execute {
+            val resolver = CatalogPlaybackLocationResolver(runtime.database)
+            val locations = items.mapNotNull { item -> resolver.resolve(item.trackId).firstOrNull()?.let { item.entryId to it } }.toMap()
+            runOnUiThread { playbackClient.loadQueue(items, locations, startIndex = startIndex, startPositionMs = if (preservePosition) playbackState.positionMs else 0L, playWhenReady = playWhenReady) }
+        }
+    }
+
+    private fun showQueueItem(index: Int) {
+        updateNowPlayingItem(index)
+        showNowPlaying = true
+    }
+
+    private fun updateNowPlayingItem(index: Int) {
+        val item = queueController.state.value.items.getOrNull(index) ?: return
+        nowPlayingSong = LibrarySong(
+            trackId = item.trackId,
+            title = item.title.ifBlank { item.trackId },
+            artist = item.artist,
+            album = item.album,
+            durationMs = item.durationMs,
+            metadataState = LibraryMetadataState.COMPLETE,
+            locationState = LibraryLocationState.AVAILABLE,
+            locationCount = 1,
+        )
+    }
+
+    private fun persistQueue() {
+        if (::queueStore.isInitialized) queueStore.write(queueController.state.value)
     }
 
     private fun loadAndRefreshSources() {
@@ -352,6 +691,8 @@ class MainActivity : ComponentActivity() {
     private fun openCollection(type: LibraryCollectionType) {
         showCollections = true
         showLibrary = false
+        filteredCollectionType = null
+        updateLibraryBackCallback()
         executor.execute { collectionViewModel.loadInitial(type) }
     }
 
@@ -364,7 +705,37 @@ class MainActivity : ComponentActivity() {
         }
         showCollections = false
         showLibrary = true
+        filteredCollectionType = type
+        updateLibraryBackCallback()
         executor.execute { libraryViewModel.loadInitial(filter, row.title) }
+    }
+
+    private fun showAllSongs() {
+        if (showLibrary && filteredCollectionType == null && libraryViewModel.state.value.loaded) {
+            updateLibraryBackCallback()
+            return
+        }
+        showCollections = false
+        showLibrary = true
+        filteredCollectionType = null
+        updateLibraryBackCallback()
+        executor.execute { libraryViewModel.loadInitial(null, "Your library") }
+    }
+
+    private fun returnToCollections(type: LibraryCollectionType) {
+        showCollections = true
+        showLibrary = false
+        filteredCollectionType = null
+        updateLibraryBackCallback()
+        if (collectionViewModel.state.value.type != type || !collectionViewModel.state.value.loaded) {
+            executor.execute { collectionViewModel.loadInitial(type) }
+        }
+    }
+
+    private fun updateLibraryBackCallback() {
+        if (::libraryBackCallback.isInitialized) {
+            libraryBackCallback.isEnabled = true
+        }
     }
 
     private fun postMetadataProgress(progress: MetadataBatchProgress) {

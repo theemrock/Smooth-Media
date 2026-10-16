@@ -5,10 +5,17 @@ import androidx.room.Query
 import androidx.room.RawQuery
 import androidx.sqlite.db.SupportSQLiteQuery
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
+import com.theemrock.smoothmedia.library.LibraryArtworkCandidate
 import com.theemrock.smoothmedia.library.LibraryTrackRow
 
 @Dao
 interface LibraryDao {
+    @RawQuery
+    fun searchTracksRaw(query: SupportSQLiteQuery): List<LibraryTrackRow>
+
+    @RawQuery
+    fun searchCollectionsRaw(query: SupportSQLiteQuery): List<LibraryCollectionRow>
+
     @RawQuery
     fun loadTracksRaw(query: SupportSQLiteQuery): List<LibraryTrackRow>
 
@@ -159,7 +166,10 @@ interface LibraryDao {
             album || char(31) || albumArtist AS `key`,
             album AS title,
             NULLIF(albumArtist, '') AS subtitle,
-            COUNT(DISTINCT trackId) AS trackCount
+            COUNT(DISTINCT trackId) AS trackCount,
+            0 AS albumCount,
+            0 AS mp3Count,
+            0 AS flacCount
         FROM (
             SELECT
                 t.track_id AS trackId,
@@ -204,19 +214,81 @@ interface LibraryDao {
 
     @Query(
         """
+        SELECT t.track_id AS trackId, l.location_id AS locationId, b.locator AS locator
+        FROM tracks AS t
+        JOIN track_locations AS l ON l.track_id = t.track_id
+        JOIN locator_bindings AS b ON b.location_id = l.location_id
+        LEFT JOIN catalog_exclusions AS e
+            ON e.source_id = l.source_id AND e.locator = b.locator
+        LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
+        LEFT JOIN track_metadata_overrides AS artist_override
+            ON artist_override.trackId = t.track_id AND artist_override.fieldName = 'ARTIST'
+        LEFT JOIN track_metadata_overrides AS album_override
+            ON album_override.trackId = t.track_id AND album_override.fieldName = 'ALBUM'
+        LEFT JOIN track_metadata_overrides AS album_artist_override
+            ON album_artist_override.trackId = t.track_id AND album_artist_override.fieldName = 'ALBUM_ARTIST'
+        WHERE t.catalog_lifecycle = 'ACTIVE'
+          AND l.availability = 'AVAILABLE'
+          AND e.exclusion_id IS NULL
+          AND COALESCE(album_override.value, m.normalizedAlbum) = :album
+          AND COALESCE(
+              album_artist_override.value,
+              m.normalizedAlbumArtist,
+              artist_override.value,
+              m.normalizedArtist,
+              ''
+          ) = :albumArtist
+        ORDER BY t.track_id, l.location_id
+        LIMIT :limit
+        """,
+    )
+    fun loadAlbumArtworkCandidates(album: String, albumArtist: String, limit: Int): List<LibraryArtworkCandidate>
+
+    @Query(
+        """
+        SELECT t.track_id AS trackId, l.location_id AS locationId, b.locator AS locator
+        FROM tracks AS t
+        JOIN track_locations AS l ON l.track_id = t.track_id
+        JOIN locator_bindings AS b ON b.location_id = l.location_id
+        LEFT JOIN catalog_exclusions AS e
+            ON e.source_id = l.source_id AND e.locator = b.locator
+        WHERE t.track_id = :trackId
+          AND t.catalog_lifecycle = 'ACTIVE'
+          AND l.availability = 'AVAILABLE'
+          AND e.exclusion_id IS NULL
+        ORDER BY t.track_id, l.location_id
+        LIMIT :limit
+        """,
+    )
+    fun loadTrackArtworkCandidates(trackId: String, limit: Int): List<LibraryArtworkCandidate>
+
+    @Query(
+        """
         SELECT
             artist AS `key`,
             artist AS title,
             NULL AS subtitle,
-            COUNT(DISTINCT trackId) AS trackCount
+            COUNT(DISTINCT trackId) AS trackCount,
+            COUNT(DISTINCT CASE WHEN album IS NOT NULL AND trim(album) <> '' THEN album END) AS albumCount,
+            COUNT(DISTINCT CASE WHEN hasMp3 = 1 THEN trackId END) AS mp3Count,
+            COUNT(DISTINCT CASE WHEN hasFlac = 1 THEN trackId END) AS flacCount
         FROM (
             SELECT
                 t.track_id AS trackId,
-                COALESCE(artist_override.value, m.normalizedArtist) AS artist
+                COALESCE(artist_override.value, m.normalizedArtist) AS artist,
+                COALESCE(album_override.value, m.normalizedAlbum) AS album,
+                MAX(CASE WHEN l.format = 'MP3' AND e.exclusion_id IS NULL THEN 1 ELSE 0 END) AS hasMp3,
+                MAX(CASE WHEN l.format = 'FLAC' AND e.exclusion_id IS NULL THEN 1 ELSE 0 END) AS hasFlac
             FROM tracks AS t
             LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
             LEFT JOIN track_metadata_overrides AS artist_override
                 ON artist_override.trackId = t.track_id AND artist_override.fieldName = 'ARTIST'
+            LEFT JOIN track_metadata_overrides AS album_override
+                ON album_override.trackId = t.track_id AND album_override.fieldName = 'ALBUM'
+            LEFT JOIN track_locations AS l ON l.track_id = t.track_id
+            LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
+            LEFT JOIN catalog_exclusions AS e
+                ON e.source_id = l.source_id AND e.locator = b.locator
             WHERE t.catalog_lifecycle = 'ACTIVE'
               AND (
                   NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id = t.track_id)
@@ -231,6 +303,7 @@ interface LibraryDao {
                         AND visible_e.exclusion_id IS NULL
                   )
               )
+            GROUP BY t.track_id, artist, album
         )
         WHERE artist IS NOT NULL AND trim(artist) <> ''
         GROUP BY artist
@@ -246,7 +319,10 @@ interface LibraryDao {
             genre AS `key`,
             genre AS title,
             NULL AS subtitle,
-            COUNT(DISTINCT trackId) AS trackCount
+            COUNT(DISTINCT trackId) AS trackCount,
+            0 AS albumCount,
+            0 AS mp3Count,
+            0 AS flacCount
         FROM (
             SELECT
                 t.track_id AS trackId,
@@ -284,7 +360,10 @@ interface LibraryDao {
             path AS `key`,
             path AS title,
             NULL AS subtitle,
-            COUNT(DISTINCT trackId) AS trackCount
+            COUNT(DISTINCT trackId) AS trackCount,
+            0 AS albumCount,
+            0 AS mp3Count,
+            0 AS flacCount
         FROM (
             SELECT
                 t.track_id AS trackId,

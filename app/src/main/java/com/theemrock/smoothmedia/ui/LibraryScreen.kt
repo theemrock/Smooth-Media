@@ -2,6 +2,7 @@ package com.theemrock.smoothmedia.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -25,11 +26,14 @@ import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
@@ -37,11 +41,16 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import com.theemrock.smoothmedia.library.LibraryLocationState
 import com.theemrock.smoothmedia.library.LibraryCollectionType
 import com.theemrock.smoothmedia.library.LibraryMetadataState
 import com.theemrock.smoothmedia.library.LibrarySong
 import com.theemrock.smoothmedia.library.LibraryUiState
+import com.theemrock.smoothmedia.playback.PlaybackEngineState
+import com.theemrock.smoothmedia.artwork.AndroidArtworkResolver
+import com.theemrock.smoothmedia.artwork.ArtworkRequest
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 private val Ink = Color(0xFF080B0D)
@@ -56,16 +65,44 @@ fun LibraryScreen(
     onNearEnd: () -> Unit,
     onRetry: () -> Unit = {},
     onSources: () -> Unit,
+    onSongs: () -> Unit = {},
     onCollection: (LibraryCollectionType) -> Unit = {},
+    onSearch: () -> Unit = {},
+    onSong: (LibrarySong) -> Unit = {},
+    onAddToQueue: (LibrarySong) -> Unit = {},
+    onPlayNext: (LibrarySong) -> Unit = {},
+    playbackState: PlaybackEngineState? = null,
+    miniPlayerSong: LibrarySong? = null,
+    onMiniPlayerOpen: () -> Unit = {},
+    onMiniPlayerPause: () -> Unit = {},
+    onMiniPlayerResume: () -> Unit = {},
+    onMiniPlayerNext: () -> Unit = {},
+    artworkResolver: AndroidArtworkResolver? = null,
+    initialScrollIndex: Int = 0,
+    initialScrollOffset: Int = 0,
+    onScrollPositionChanged: (Int, Int) -> Unit = { _, _ -> },
 ) {
     Surface(color = Ink, modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            LibraryHeader(state.heading, state.totalTracks, onSources, onCollection)
+            LibraryHeader(state.heading, state.isFiltered, state.totalTracks, onSources, onSongs, onCollection, onSearch)
             when {
                 state.errorMessage != null -> ErrorState(state.errorMessage, onRetry)
                 !state.loaded || (state.loading && state.songs.isEmpty()) -> LoadingState()
                 state.songs.isEmpty() -> EmptyState()
-                else -> SongsList(state, onNearEnd)
+                else -> Box(modifier = Modifier.weight(1f)) {
+                    SongsList(state, onNearEnd, artworkResolver, onSong, onAddToQueue, onPlayNext, initialScrollIndex, initialScrollOffset, onScrollPositionChanged)
+                }
+            }
+            if (playbackState != null && miniPlayerSong != null) {
+                MiniPlayer(
+                    song = miniPlayerSong,
+                    state = playbackState,
+                    onOpen = onMiniPlayerOpen,
+                    onPause = onMiniPlayerPause,
+                    onResume = onMiniPlayerResume,
+                    onNext = onMiniPlayerNext,
+                    artworkResolver = artworkResolver,
+                )
             }
         }
     }
@@ -74,9 +111,12 @@ fun LibraryScreen(
 @Composable
 private fun LibraryHeader(
     heading: String,
+    isFiltered: Boolean,
     totalTracks: Int,
     onSources: () -> Unit,
+    onSongs: () -> Unit,
     onCollection: (LibraryCollectionType) -> Unit,
+    onSearch: () -> Unit,
 ) {
     Column(modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 24.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -99,10 +139,13 @@ private fun LibraryHeader(
                 Text("SOURCES", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp)
             }
         }
+        OutlinedButton(onClick = onSearch, contentPadding = PaddingValues(horizontal = 12.dp)) {
+            Text("SEARCH", color = Cyan, fontSize = 11.sp, letterSpacing = 1.sp)
+        }
         Spacer(modifier = Modifier.height(24.dp))
         Row(verticalAlignment = Alignment.Bottom) {
             Column(modifier = Modifier.weight(1f)) {
-                Text("SONGS", color = Cyan, fontSize = 13.sp, letterSpacing = 2.sp)
+                Text(if (isFiltered) "FILTERED SONGS" else "SONGS", color = Cyan, fontSize = 13.sp, letterSpacing = 2.sp)
                 Text(
                     text = heading,
                     color = Color.White,
@@ -114,7 +157,7 @@ private fun LibraryHeader(
         }
         Spacer(modifier = Modifier.height(14.dp))
         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Cyan))
-        LibrarySectionTabs(selected = null, onSongs = {}, onCollection = onCollection)
+        LibrarySectionTabs(selected = null, onSongs = onSongs, onCollection = onCollection)
     }
 }
 
@@ -158,10 +201,16 @@ private fun RowScope.SectionTab(label: String, selected: Boolean, onClick: () ->
 }
 
 @Composable
-private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit) {
-    val listState = rememberLazyListState()
+private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResolver: AndroidArtworkResolver?, onSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit, initialScrollIndex: Int, initialScrollOffset: Int, onScrollPositionChanged: (Int, Int) -> Unit) {
+    val listState = rememberLazyListState(initialScrollIndex, initialScrollOffset)
     val latestNearEnd = rememberUpdatedState(onNearEnd)
     val latestState = rememberUpdatedState(state)
+    val latestScrollCallback = rememberUpdatedState(onScrollPositionChanged)
+    DisposableEffect(listState) {
+        onDispose {
+            latestScrollCallback.value(listState.firstVisibleItemIndex, listState.firstVisibleItemScrollOffset)
+        }
+    }
     LaunchedEffect(listState) {
         snapshotFlow { listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
             .distinctUntilChanged()
@@ -178,7 +227,7 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit) {
         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
-        items(state.songs, key = { it.trackId }) { song -> SongRow(song) }
+        items(state.songs, key = { it.trackId }) { song -> SongRow(song, artworkResolver, onSong, onAddToQueue, onPlayNext) }
         item {
             if (state.loading) {
                 Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
@@ -190,17 +239,30 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit) {
 }
 
 @Composable
-private fun SongRow(song: LibrarySong) {
+private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?, onSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
+            .alpha(if (song.isAccessible) 1f else .58f)
+            .semantics { contentDescription = song.accessibilityDescription }
+            .clickable(enabled = song.isAccessible) { onSong(song) }
             .clip(RoundedCornerShape(12.dp))
             .border(1.dp, Line, RoundedCornerShape(12.dp))
             .background(Brush.horizontalGradient(listOf(Panel, Ink)))
             .padding(10.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        AlbumPlaceholder()
+        if (artworkResolver == null) {
+            AlbumPlaceholder()
+        } else {
+            LibraryArtwork(
+                request = ArtworkRequest.Track(song.trackId),
+                resolver = artworkResolver,
+                modifier = Modifier.size(58.dp),
+                contentDescription = "Album artwork",
+                targetPx = 128,
+            )
+        }
         Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
             Text(song.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(song.artist, color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -211,6 +273,8 @@ private fun SongRow(song: LibrarySong) {
             }
         }
         Text(formatDuration(song.durationMs), color = Color.White, fontSize = 13.sp)
+        IconButton(onClick = { onPlayNext(song) }, enabled = song.isAccessible) { Text("+1", color = Cyan) }
+        IconButton(onClick = { onAddToQueue(song) }, enabled = song.isAccessible) { Text("+", color = Cyan) }
     }
 }
 
