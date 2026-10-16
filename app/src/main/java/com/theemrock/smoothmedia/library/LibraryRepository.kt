@@ -233,7 +233,16 @@ data class AlbumGroupingKey(
     val sourceId: String,
     val folderPrefix: String,
 ) {
-    fun encoded(): String = listOf(album, albumArtist, sourceId, folderPrefix).joinToString(GROUP_SEPARATOR.toString())
+    /** Matches the key emitted by the Room album queries. */
+    fun encoded(): String = buildString {
+        append(album)
+        append(LEGACY_SEPARATOR)
+        append(albumArtist)
+        append(GROUP_SEPARATOR)
+        append(sourceId)
+        append(GROUP_SEPARATOR)
+        append(folderPrefix)
+    }
 
     fun toFilter(): LibraryTrackFilter.Album =
         LibraryTrackFilter.Album(album, albumArtist, sourceId, folderPrefix)
@@ -245,9 +254,19 @@ data class AlbumGroupingKey(
         private const val LEGACY_SEPARATOR = '\u001F'
 
         fun decode(encoded: String, fallbackAlbum: String = "", fallbackAlbumArtist: String = ""): AlbumGroupingKey {
-            val parts = encoded.split(GROUP_SEPARATOR)
-            if (parts.size >= 4) {
-                return AlbumGroupingKey(parts[0], parts[1], parts[2], parts.drop(3).joinToString(GROUP_SEPARATOR.toString()))
+            val scopedParts = encoded.split(GROUP_SEPARATOR)
+            if (scopedParts.size >= 3 && scopedParts[0].contains(LEGACY_SEPARATOR)) {
+                val albumParts = scopedParts[0].split(LEGACY_SEPARATOR, limit = 2)
+                return AlbumGroupingKey(
+                    album = albumParts[0].ifBlank { fallbackAlbum },
+                    albumArtist = albumParts.getOrNull(1).orEmpty().ifBlank { fallbackAlbumArtist },
+                    sourceId = scopedParts[1].ifBlank { UNKNOWN_SOURCE },
+                    folderPrefix = scopedParts.drop(2).joinToString(GROUP_SEPARATOR.toString()).ifBlank { UNKNOWN_FOLDER },
+                )
+            }
+            // Accept the transient four-field helper format used by older local builds.
+            if (scopedParts.size >= 4) {
+                return AlbumGroupingKey(scopedParts[0], scopedParts[1], scopedParts[2], scopedParts.drop(3).joinToString(GROUP_SEPARATOR.toString()))
             }
             val legacy = encoded.split(LEGACY_SEPARATOR, limit = 2)
             return AlbumGroupingKey(
@@ -271,6 +290,7 @@ data class SuspiciousAlbumGrouping(
     val album: String,
     val sourceId: String,
     val folderPrefix: String,
+    val albumArtists: Set<String>,
     val trackArtists: Set<String>,
 )
 
@@ -282,14 +302,14 @@ fun findSuspiciousAlbumGroupings(inputs: List<AlbumGroupingInput>): List<Suspici
     inputs.groupBy {
         listOf(
             it.album.trim(),
-            it.albumArtist.trim(),
             it.sourceId.trim().ifBlank { AlbumGroupingKey.UNKNOWN_SOURCE },
             it.folderPrefix.trim().ifBlank { AlbumGroupingKey.UNKNOWN_FOLDER },
         )
     }.mapNotNull { (group, rows) ->
+        val albumArtists = rows.map { it.albumArtist.trim() }.filter { it.isNotBlank() }.toSet()
         val artists = rows.map { it.trackArtist.trim() }.filter { it.isNotBlank() }.toSet()
-        if (group[1].isBlank() && artists.size > 1) {
-            SuspiciousAlbumGrouping(group[0], group[2], group[3], artists)
+        if (albumArtists.size > 1 || (albumArtists.isEmpty() && artists.size > 1)) {
+            SuspiciousAlbumGrouping(group[0], group[1], group[2], albumArtists, artists)
         } else {
             null
         }
@@ -405,13 +425,23 @@ class RoomLibraryRepository(
                 LEFT JOIN track_metadata_overrides album_artist_override ON album_artist_override.trackId=t.track_id AND album_artist_override.fieldName='ALBUM_ARTIST'
                 LEFT JOIN scopes ON scopes.trackId=t.track_id
                 WHERE t.catalog_lifecycle='ACTIVE'
+            ),
+            canonical_albums AS (
+                SELECT album,
+                       CASE WHEN COUNT(DISTINCT NULLIF(albumArtist,''))=1
+                            THEN COALESCE(MIN(NULLIF(albumArtist,'')),'')
+                            ELSE '' END AS albumArtist,
+                       sourceId, folderPrefix,
+                       COUNT(DISTINCT trackId) AS trackCount
+                FROM albums
+                GROUP BY album, sourceId, folderPrefix
             )
             SELECT album || char(31) || albumArtist || char(30) || sourceId || char(30) || folderPrefix AS `key`,
                    album AS title, NULLIF(albumArtist,'') AS subtitle,
-                   COUNT(DISTINCT trackId) AS trackCount, 0 AS albumCount, 0 AS mp3Count, 0 AS flacCount
-            FROM albums
+                   trackCount, 0 AS albumCount, 0 AS mp3Count, 0 AS flacCount
+            FROM canonical_albums
             WHERE album IS NOT NULL AND trim(album)<>'' AND instr(lower(album),lower(?))>0
-            GROUP BY album, albumArtist, sourceId, folderPrefix
+            GROUP BY album, albumArtist, sourceId, folderPrefix, trackCount
             ORDER BY album COLLATE NOCASE, albumArtist COLLATE NOCASE, sourceId, folderPrefix
             LIMIT ? OFFSET ?
         """.trimIndent()
@@ -498,6 +528,7 @@ class RoomLibraryRepository(
         is LibraryTrackFilter.Album -> arrayOf(
             filter.album,
             filter.albumArtist,
+            filter.albumArtist,
             filter.sourceId,
             filter.folderPrefix,
             filter.sourceId,
@@ -516,7 +547,7 @@ class RoomLibraryRepository(
 
     private fun visibleTrackWhere(filter: LibraryTrackFilter): String {
         val criterion = when (filter) {
-            is LibraryTrackFilter.Album -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ALBUM'), m.normalizedAlbum)=? AND COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ALBUM_ARTIST'), m.normalizedAlbumArtist, '')=? AND ( (?='${AlbumGroupingKey.UNKNOWN_SOURCE}' AND ?='${AlbumGroupingKey.UNKNOWN_FOLDER}' AND NOT EXISTS (SELECT 1 FROM track_locations scope_l WHERE scope_l.track_id=t.track_id)) OR EXISTS (SELECT 1 FROM track_locations scope_l LEFT JOIN locator_bindings scope_b ON scope_b.location_id=scope_l.location_id WHERE scope_l.track_id=t.track_id AND COALESCE(scope_l.source_id,'${AlbumGroupingKey.UNKNOWN_SOURCE}')=? AND COALESCE(NULLIF(scope_l.path,''),scope_b.locator,'${AlbumGroupingKey.UNKNOWN_FOLDER}') LIKE ? || '%') )"
+            is LibraryTrackFilter.Album -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ALBUM'), m.normalizedAlbum)=? AND (?='' OR COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ALBUM_ARTIST'), m.normalizedAlbumArtist, '')=?) AND ( (?='${AlbumGroupingKey.UNKNOWN_SOURCE}' AND ?='${AlbumGroupingKey.UNKNOWN_FOLDER}' AND NOT EXISTS (SELECT 1 FROM track_locations scope_l WHERE scope_l.track_id=t.track_id)) OR EXISTS (SELECT 1 FROM track_locations scope_l LEFT JOIN locator_bindings scope_b ON scope_b.location_id=scope_l.location_id WHERE scope_l.track_id=t.track_id AND COALESCE(scope_l.source_id,'${AlbumGroupingKey.UNKNOWN_SOURCE}')=? AND COALESCE(NULLIF(scope_l.path,''),scope_b.locator,'${AlbumGroupingKey.UNKNOWN_FOLDER}') LIKE ? || '%') )"
             is LibraryTrackFilter.Artist -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ARTIST'), m.normalizedArtist)=?"
             is LibraryTrackFilter.Genre -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='GENRE'), m.normalizedGenres)=?"
             is LibraryTrackFilter.Folder -> "EXISTS (SELECT 1 FROM track_locations filter_l LEFT JOIN locator_bindings filter_b ON filter_b.location_id=filter_l.location_id LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_l.track_id=t.track_id AND filter_l.path=? AND filter_e.exclusion_id IS NULL)"

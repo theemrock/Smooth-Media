@@ -1,10 +1,9 @@
 # Smooth Media — Known Issues
 
-## Album grouping — OPEN / DEVICE FAIL
+## Album grouping — RESOLVED / DEVICE PASS
 
-- Derleme albümleri, farklı `Track Artist` değerleri nedeniyle `Albums` ekranında birden fazla albüm olarak görünebiliyor.
-- Genel albüm gruplama düzeltmesi uygulanmış olsa da sorun gerçek cihazda devam ediyor.
-- `164/164` JVM testi PASS olmasına rağmen cihaz doğrulaması FAIL.
-- Olası nedenler: eksik `AlbumArtist`, `sourceId`/`folderPrefix` ayrımı, mevcut katalog verileri veya aynı track için birden fazla fiziksel konum.
-- Bu sorun çözülmüş veya PASS olarak işaretlenmemelidir.
-- Sonraki adım: gerçek katalog üzerinde salt-okunur teşhis, ardından kanıtlanmış kök nedene yönelik düzeltme.
+- Albüm kimliği, Room sorgularındaki `album + albumArtist + sourceId + folderPrefix` anahtarıyla tutarlı encode/decode edilir.
+- Aynı kaynak ve klasör kapsamındaki derleme albümleri, farklı `Track Artist` değerlerine rağmen tek albüm altında gruplanır; parça sanatçıları korunur.
+- Farklı kaynak veya klasör kapsamlarındaki aynı adlı albümler ayrı tutulur.
+- Album Detail, Albums listesiyle aynı kanonik kimliği kullanır; Metallica / Load cihazda 14 şarkı ve 78:57, Blues Brothers 2000 cihazda 18 şarkı ve 61:16 olarak doğrulandı.
+- İlgili JVM regresyon testleri `168/168 PASS` olarak raporlandı; cihaz doğrulamasında farklı parça sanatçıları korundu.

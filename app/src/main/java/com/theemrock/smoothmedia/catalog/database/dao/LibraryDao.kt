@@ -211,18 +211,30 @@ interface LibraryDao {
                       WHERE visible_l.track_id = t.track_id AND visible_e.exclusion_id IS NULL
                   )
               )
+        ),
+        canonical_album_rows AS (
+            SELECT
+                album,
+                CASE WHEN COUNT(DISTINCT NULLIF(albumArtist, '')) = 1
+                     THEN COALESCE(MIN(NULLIF(albumArtist, '')), '')
+                     ELSE '' END AS albumArtist,
+                sourceId,
+                folderPrefix,
+                COUNT(DISTINCT trackId) AS trackCount
+            FROM album_rows
+            GROUP BY album, sourceId, folderPrefix
         )
         SELECT
             album || char(31) || albumArtist || char(30) || sourceId || char(30) || folderPrefix AS `key`,
             album AS title,
             NULLIF(albumArtist, '') AS subtitle,
-            COUNT(DISTINCT trackId) AS trackCount,
+            trackCount,
             0 AS albumCount,
             0 AS mp3Count,
             0 AS flacCount
-        FROM album_rows
+        FROM canonical_album_rows
         WHERE album IS NOT NULL AND trim(album) <> ''
-        GROUP BY album, albumArtist, sourceId, folderPrefix
+        GROUP BY album, albumArtist, sourceId, folderPrefix, trackCount
         ORDER BY album COLLATE NOCASE, albumArtist COLLATE NOCASE, sourceId, folderPrefix, `key`
         LIMIT :limit OFFSET :offset
         """,
@@ -309,7 +321,7 @@ interface LibraryDao {
             artist AS title,
             NULL AS subtitle,
             COUNT(DISTINCT trackId) AS trackCount,
-            COUNT(DISTINCT CASE WHEN album IS NOT NULL AND trim(album) <> '' THEN album || char(31) || albumArtist || char(30) || sourceId || char(30) || folderPrefix END) AS albumCount,
+            COUNT(DISTINCT CASE WHEN album IS NOT NULL AND trim(album) <> '' THEN album || char(30) || sourceId || char(30) || folderPrefix END) AS albumCount,
             COUNT(DISTINCT CASE WHEN hasMp3 = 1 THEN trackId END) AS mp3Count,
             COUNT(DISTINCT CASE WHEN hasFlac = 1 THEN trackId END) AS flacCount
         FROM (
@@ -460,7 +472,6 @@ interface LibraryDao {
         )
         SELECT COUNT(*) FROM (
             SELECT COALESCE(album_override.value, m.normalizedAlbum) AS album,
-                   COALESCE(album_artist_override.value, m.normalizedAlbumArtist, '') AS albumArtist,
                    COALESCE(scopes.sourceId, 'NO_SOURCE') AS sourceId,
                    COALESCE(scopes.folderPrefix, 'NO_FOLDER') AS folderPrefix
             FROM tracks AS t
@@ -479,7 +490,7 @@ interface LibraryDao {
                               WHERE visible_l.track_id = t.track_id AND visible_e.exclusion_id IS NULL))
               AND COALESCE(album_override.value, m.normalizedAlbum) IS NOT NULL
               AND trim(COALESCE(album_override.value, m.normalizedAlbum)) <> ''
-            GROUP BY album, albumArtist, sourceId, folderPrefix
+            GROUP BY album, sourceId, folderPrefix
         )
         """,
     )
