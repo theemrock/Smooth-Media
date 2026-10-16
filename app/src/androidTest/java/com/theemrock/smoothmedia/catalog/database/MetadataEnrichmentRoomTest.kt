@@ -63,7 +63,11 @@ class MetadataEnrichmentRoomTest {
         val result = useCase.enrichTrack("track-1")
 
         assertEquals(MetadataEnrichmentResult.Updated("track-1", "location-1"), result)
-        assertEquals("Song", repository.find("track-1")!!.effective.title.value)
+        val effective = repository.find("track-1")!!.effective
+        assertEquals("Song", effective.title.value)
+        assertEquals("Artist", effective.artist.value)
+        assertEquals("Album", effective.album.value)
+        assertEquals(1000L, effective.durationMs.value)
     }
 
     @Test

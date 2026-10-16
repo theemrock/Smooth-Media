@@ -1,6 +1,8 @@
 package com.theemrock.smoothmedia.metadata
 
 import android.net.Uri
+import androidx.room.Room
+import androidx.test.core.app.ApplicationProvider
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.theemrock.smoothmedia.catalog.database.CatalogDatabase
@@ -25,20 +27,17 @@ import org.junit.runner.RunWith
 class ControlledMetadataWritePilotTest {
     private val context = InstrumentationRegistry.getInstrumentation().targetContext
     private lateinit var database: CatalogDatabase
+    private lateinit var sourceDatabase: CatalogDatabase
 
     @Before
     fun openCatalog() {
-        database = CatalogDatabaseFactory.create(context)
-    }
+        sourceDatabase = CatalogDatabaseFactory.create(context)
+        database = Room.inMemoryDatabaseBuilder(
+            ApplicationProvider.getApplicationContext(),
+            CatalogDatabase::class.java,
+        ).build()
 
-    @After
-    fun closeCatalog() {
-        database.close()
-    }
-
-    @Test
-    fun writesOnlyPreviewSelectionThroughBoundedBatch() {
-        val source = database.librarySourceDao().listAll().firstOrNull { candidate ->
+        val source = sourceDatabase.librarySourceDao().listAll().firstOrNull { candidate ->
             candidate.sourceType == LibrarySourceType.SAF_TREE &&
                 candidate.selectionState == SourceSelectionState.ACTIVE &&
                 candidate.permissionState == SourcePermissionState.GRANTED &&
@@ -49,6 +48,46 @@ class ControlledMetadataWritePilotTest {
                 }
         }
         assumeTrue("No active SAF source with persisted read permission", source != null)
+
+        val selected = sourceDatabase.trackDao().listLocations()
+            .asSequence()
+            .filter { it.sourceId == source!!.sourceId && it.availability == LocationAvailability.AVAILABLE }
+            .filter { it.format == AudioFormat.MP3 || it.format == AudioFormat.FLAC }
+            .mapNotNull { location ->
+                val binding = sourceDatabase.locatorBindingDao().findByLocation(location.locationId)
+                    ?: return@mapNotNull null
+                if (sourceDatabase.catalogExclusionDao().isLocatorExcluded(location.sourceId, binding.locator)) {
+                    return@mapNotNull null
+                }
+                PreviewSelection(location.trackId, location.format, Uri.parse(binding.locator))
+            }
+            .distinctBy { it.trackId }
+            .toList()
+            .groupBy { it.format }
+            .flatMap { (_, candidates) -> candidates.take(MAX_PER_FORMAT) }
+        assumeTrue("Preview selection is not available", selected.size == EXPECTED_HASHES.size)
+
+        database.librarySourceDao().insert(source!!)
+        selected.map { it.trackId }.distinct().forEach { trackId ->
+            database.trackDao().insertTrack(sourceDatabase.trackDao().findTrack(trackId)!!)
+        }
+        selected.forEach { item ->
+            val location = sourceDatabase.trackDao().findLocations(item.trackId)
+                .first { it.format == item.format && it.availability == LocationAvailability.AVAILABLE }
+            database.trackDao().insertLocation(location)
+            database.locatorBindingDao().insert(sourceDatabase.locatorBindingDao().findByLocation(location.locationId)!!)
+        }
+    }
+
+    @After
+    fun closeCatalog() {
+        database.close()
+        sourceDatabase.close()
+    }
+
+    @Test
+    fun writesOnlyPreviewSelectionThroughBoundedBatch() {
+        val source = database.librarySourceDao().listAll().first()
 
         val selected = database.trackDao().listLocations()
             .asSequence()

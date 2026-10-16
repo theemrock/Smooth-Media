@@ -5,6 +5,7 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -14,6 +15,9 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -22,15 +26,19 @@ import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.snapshotFlow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material3.Button
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
@@ -54,7 +62,6 @@ import com.theemrock.smoothmedia.artwork.ArtworkRequest
 import kotlinx.coroutines.flow.distinctUntilChanged
 
 private val Ink = Color(0xFF080B0D)
-private val Panel = Color(0xFF10161A)
 private val Line = Color(0xFF26343B)
 private val Muted = Color(0xFFAAB9C2)
 private val Cyan = Color(0xFF19C3E6)
@@ -71,6 +78,8 @@ fun LibraryScreen(
     onSong: (LibrarySong) -> Unit = {},
     onAddToQueue: (LibrarySong) -> Unit = {},
     onPlayNext: (LibrarySong) -> Unit = {},
+    onMenu: () -> Unit = {},
+    onDashboard: () -> Unit = {},
     playbackState: PlaybackEngineState? = null,
     miniPlayerSong: LibrarySong? = null,
     onMiniPlayerOpen: () -> Unit = {},
@@ -82,9 +91,17 @@ fun LibraryScreen(
     initialScrollOffset: Int = 0,
     onScrollPositionChanged: (Int, Int) -> Unit = { _, _ -> },
 ) {
-    Surface(color = Ink, modifier = Modifier.fillMaxSize()) {
+    Surface(color = Ink, modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            LibraryHeader(state.heading, state.isFiltered, state.totalTracks, onSources, onSongs, onCollection, onSearch)
+            LibraryNavigationBar(
+                onMenu = onMenu,
+                onSearch = onSearch,
+                onDashboard = onDashboard,
+                onSongs = onSongs,
+                onCollection = onCollection,
+                onSources = onSources,
+            )
+            LibraryHeader(state.heading, state.isFiltered, state.totalTracks, onSongs, onCollection)
             when {
                 state.errorMessage != null -> ErrorState(state.errorMessage, onRetry)
                 !state.loaded || (state.loading && state.songs.isEmpty()) -> LoadingState()
@@ -113,50 +130,19 @@ private fun LibraryHeader(
     heading: String,
     isFiltered: Boolean,
     totalTracks: Int,
-    onSources: () -> Unit,
     onSongs: () -> Unit,
     onCollection: (LibraryCollectionType) -> Unit,
-    onSearch: () -> Unit,
 ) {
-    Column(modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 24.dp)) {
+    Column(modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    text = "S M O O T H",
-                    color = Color.White,
-                    fontSize = 18.sp,
-                    fontWeight = FontWeight.Bold,
-                    letterSpacing = 5.sp,
-                )
-                Text(
-                    text = "M E D I A",
-                    color = Muted,
-                    fontSize = 10.sp,
-                    letterSpacing = 4.sp,
-                )
-            }
-            OutlinedButton(onClick = onSources, contentPadding = PaddingValues(horizontal = 12.dp)) {
-                Text("SOURCES", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp)
+                Text(if (isFiltered) "Filtrelenmiş şarkılar" else "Şarkılar", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("$totalTracks şarkı", color = Muted, fontSize = 14.sp)
             }
         }
-        OutlinedButton(onClick = onSearch, contentPadding = PaddingValues(horizontal = 12.dp)) {
-            Text("SEARCH", color = Cyan, fontSize = 11.sp, letterSpacing = 1.sp)
+        if (heading.isNotBlank() && heading != "Your library") {
+            Text(heading, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
-        Spacer(modifier = Modifier.height(24.dp))
-        Row(verticalAlignment = Alignment.Bottom) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(if (isFiltered) "FILTERED SONGS" else "SONGS", color = Cyan, fontSize = 13.sp, letterSpacing = 2.sp)
-                Text(
-                    text = heading,
-                    color = Color.White,
-                    fontSize = 30.sp,
-                    fontWeight = FontWeight.Bold,
-                )
-            }
-            Text("$totalTracks TRACKS", color = Muted, fontSize = 11.sp, letterSpacing = 1.sp)
-        }
-        Spacer(modifier = Modifier.height(14.dp))
-        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Cyan))
         LibrarySectionTabs(selected = null, onSongs = onSongs, onCollection = onCollection)
     }
 }
@@ -193,7 +179,9 @@ fun LibrarySectionTabs(
 private fun RowScope.SectionTab(label: String, selected: Boolean, onClick: () -> Unit) {
     OutlinedButton(
         onClick = onClick,
-        modifier = Modifier.weight(1f),
+        modifier = Modifier
+            .weight(1f)
+            .semantics { contentDescription = "Library section: $label" },
         contentPadding = PaddingValues(horizontal = 4.dp, vertical = 4.dp),
     ) {
         Text(label, color = if (selected) Cyan else Muted, fontSize = 9.sp, letterSpacing = .4.sp)
@@ -221,17 +209,20 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
                 }
             }
     }
-    LazyColumn(
-        state = listState,
-        modifier = Modifier.fillMaxSize(),
-        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
-        verticalArrangement = Arrangement.spacedBy(8.dp),
-    ) {
-        items(state.songs, key = { it.trackId }) { song -> SongRow(song, artworkResolver, onSong, onAddToQueue, onPlayNext) }
-        item {
-            if (state.loading) {
-                Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                    CircularProgressIndicator(color = Cyan, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
+        val artworkSize = allSongsArtworkSizeDp(maxWidth.value).dp
+        LazyColumn(
+            state = listState,
+            modifier = Modifier.fillMaxSize(),
+            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
+            items(state.songs, key = { it.trackId }) { song -> SongRow(song, artworkResolver, artworkSize, onSong, onAddToQueue, onPlayNext) }
+            item {
+                if (state.loading) {
+                    Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator(color = Cyan, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                    }
                 }
             }
         }
@@ -239,49 +230,55 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
 }
 
 @Composable
-private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?, onSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit) {
+private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?, artworkSize: androidx.compose.ui.unit.Dp, onSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit) {
+    var actionsExpanded by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
             .fillMaxWidth()
             .alpha(if (song.isAccessible) 1f else .58f)
             .semantics { contentDescription = song.accessibilityDescription }
             .clickable(enabled = song.isAccessible) { onSong(song) }
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, Line, RoundedCornerShape(12.dp))
-            .background(Brush.horizontalGradient(listOf(Panel, Ink)))
-            .padding(10.dp),
+            .padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (artworkResolver == null) {
-            AlbumPlaceholder()
+            AlbumPlaceholder(artworkSize)
         } else {
             LibraryArtwork(
                 request = ArtworkRequest.Track(song.trackId),
                 resolver = artworkResolver,
-                modifier = Modifier.size(58.dp),
+                modifier = Modifier.size(artworkSize).clip(RoundedCornerShape(7.dp)).border(1.dp, Line, RoundedCornerShape(7.dp)),
                 contentDescription = "Album artwork",
                 targetPx = 128,
             )
         }
-        Column(modifier = Modifier.weight(1f).padding(horizontal = 12.dp)) {
-            Text(song.title, color = Color.White, fontSize = 16.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(song.artist, color = Muted, fontSize = 13.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(song.album, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, false))
+        Column(modifier = Modifier.weight(1f).padding(horizontal = 10.dp)) {
+            Text(song.title, color = Color.White, fontSize = 15.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Text(song.artist, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f, false))
+                Text(" · ", color = Line, fontSize = 12.sp)
+                Text(song.album, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis, modifier = Modifier.weight(1f))
+            }
+            Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 MetadataBadge(song.metadataState)
                 LocationBadge(song.locationState)
             }
         }
-        Text(formatDuration(song.durationMs), color = Color.White, fontSize = 13.sp)
-        IconButton(onClick = { onPlayNext(song) }, enabled = song.isAccessible) { Text("+1", color = Cyan) }
-        IconButton(onClick = { onAddToQueue(song) }, enabled = song.isAccessible) { Text("+", color = Cyan) }
+        Text(formatDuration(song.durationMs), color = Muted, fontSize = 12.sp, modifier = Modifier.width(42.dp))
+        Box {
+            Text("⋮", color = Color.White, fontSize = 22.sp, modifier = Modifier.clickable(enabled = song.isAccessible) { actionsExpanded = true }.padding(horizontal = 3.dp))
+            DropdownMenu(expanded = actionsExpanded, onDismissRequest = { actionsExpanded = false }, modifier = Modifier.width(180.dp)) {
+                DropdownMenuItem(text = { Text("Sonraki çal") }, onClick = { actionsExpanded = false; onPlayNext(song) })
+                DropdownMenuItem(text = { Text("Kuyruğa ekle") }, onClick = { actionsExpanded = false; onAddToQueue(song) })
+            }
+        }
     }
 }
 
 @Composable
-private fun AlbumPlaceholder() {
+private fun AlbumPlaceholder(size: androidx.compose.ui.unit.Dp) {
     Box(
-        modifier = Modifier.size(58.dp).clip(RoundedCornerShape(8.dp)).background(
+        modifier = Modifier.size(size).clip(RoundedCornerShape(7.dp)).background(
             Brush.linearGradient(listOf(Color(0xFF172A31), Color(0xFF071014))),
         ).border(1.dp, Cyan.copy(alpha = .55f), RoundedCornerShape(8.dp)),
         contentAlignment = Alignment.Center,

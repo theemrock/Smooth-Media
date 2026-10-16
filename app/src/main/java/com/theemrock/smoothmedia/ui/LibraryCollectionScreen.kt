@@ -3,17 +3,22 @@ package com.theemrock.smoothmedia.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
@@ -23,6 +28,7 @@ import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
@@ -63,11 +69,22 @@ fun LibraryCollectionScreen(
     onCollection: (LibraryCollectionType) -> Unit,
     onCollectionSelected: (LibraryCollectionRow) -> Unit = {},
     onSources: () -> Unit,
+    onSearch: () -> Unit = {},
+    onMenu: () -> Unit = {},
+    onDashboard: () -> Unit = {},
     artworkResolver: AndroidArtworkResolver? = null,
 ) {
-    Surface(color = CollectionInk, modifier = Modifier.fillMaxSize()) {
+    Surface(color = CollectionInk, modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            CollectionHeader(state.type, state.totalCollections, onSources)
+            LibraryNavigationBar(
+                onMenu = onMenu,
+                onSearch = onSearch,
+                onDashboard = onDashboard,
+                onSongs = onSongs,
+                onCollection = onCollection,
+                onSources = onSources,
+            )
+            CollectionHeader(state.type, state.totalCollections)
             LibrarySectionTabs(
                 selected = state.type,
                 onSongs = onSongs,
@@ -87,21 +104,13 @@ fun LibraryCollectionScreen(
 private fun CollectionHeader(
     type: LibraryCollectionType,
     total: Int,
-    onSources: () -> Unit,
 ) {
-    Row(
-        modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 24.dp),
-        verticalAlignment = Alignment.Top,
-    ) {
-        Column(modifier = Modifier.weight(1f)) {
-            Text("S M O O T H", color = Color.White, fontSize = 18.sp, letterSpacing = 5.sp)
-            Text("M E D I A", color = CollectionMuted, fontSize = 10.sp, letterSpacing = 4.sp)
-            Spacer(modifier = Modifier.height(20.dp))
-            Text(collectionLabel(type), color = CollectionCyan, fontSize = 13.sp, letterSpacing = 2.sp)
-            Text("$total collections", color = Color.White, fontSize = 28.sp)
-        }
-        OutlinedButton(onClick = onSources, contentPadding = PaddingValues(horizontal = 12.dp)) {
-            Text("SOURCES", color = CollectionMuted, fontSize = 11.sp, letterSpacing = 1.sp)
+    Column(modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 10.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(collectionLabel(type).lowercase().replaceFirstChar { it.uppercase() }, color = Color.White, fontSize = 26.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text("$total koleksiyon", color = CollectionMuted, fontSize = 14.sp)
+            }
         }
     }
 }
@@ -159,7 +168,7 @@ private fun CollectionGrid(
         }
         LazyVerticalGrid(
             state = gridState,
-            columns = GridCells.Fixed(2),
+            columns = GridCells.Adaptive(minSize = albumsGridMinCardWidthDp().dp),
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -190,16 +199,13 @@ private fun CollectionCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
-            .clip(RoundedCornerShape(12.dp))
-            .border(1.dp, CollectionLine, RoundedCornerShape(12.dp))
-            .background(Brush.linearGradient(listOf(CollectionPanel, CollectionInk)))
-            .padding(12.dp),
+            .padding(4.dp),
     ) {
         if (type != LibraryCollectionType.ARTISTS) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .height(if (type == LibraryCollectionType.ALBUMS) 116.dp else 72.dp)
+                    .then(if (type == LibraryCollectionType.ALBUMS) Modifier.aspectRatio(1f) else Modifier.height(72.dp))
                     .clip(RoundedCornerShape(8.dp))
                     .background(Brush.linearGradient(listOf(Color(0xFF172A31), Color(0xFF071014))))
                     .border(1.dp, CollectionCyan.copy(alpha = .55f), RoundedCornerShape(8.dp)),
@@ -222,8 +228,8 @@ private fun CollectionCard(
         Text(
             collection.title,
             color = Color.White,
-            fontSize = 15.sp,
-            maxLines = 2,
+            fontSize = 13.sp,
+            maxLines = 1,
             overflow = TextOverflow.Ellipsis,
         )
         if (type == LibraryCollectionType.ARTISTS) {
@@ -241,7 +247,7 @@ private fun CollectionCard(
             collection.subtitle?.takeIf { it.isNotBlank() }?.let {
                 Text(it, color = CollectionMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
-            Text("${collection.trackCount} TRACKS", color = CollectionCyan, fontSize = 10.sp, letterSpacing = .7.sp)
+            Text("${collection.trackCount} şarkı", color = CollectionCyan, fontSize = 10.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }

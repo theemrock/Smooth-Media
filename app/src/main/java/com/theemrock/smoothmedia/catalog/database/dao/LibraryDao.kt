@@ -162,51 +162,68 @@ interface LibraryDao {
 
     @Query(
         """
+        WITH RECURSIVE
+        track_scope AS (
+            SELECT t.track_id AS trackId,
+                   COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
+                   COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
+            FROM tracks AS t
+            LEFT JOIN track_locations AS l ON l.track_id = t.track_id
+            LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
+            GROUP BY t.track_id
+        ),
+        scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
+            SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
+            UNION ALL
+            SELECT trackId, sourceId, locator, position + 1,
+                   CASE WHEN substr(locator, position, 1) = '/' OR substr(locator, position, 3) = '%2F'
+                        THEN position ELSE lastSlash END
+            FROM scope_chars
+            WHERE position <= length(locator)
+        ),
+        scopes AS (
+            SELECT trackId, sourceId,
+                   CASE WHEN MAX(lastSlash) > 0 THEN substr(locator, 1, MAX(lastSlash)) ELSE locator END AS folderPrefix
+            FROM scope_chars
+            GROUP BY trackId, sourceId, locator
+        ),
+        album_rows AS (
+            SELECT t.track_id AS trackId,
+                   COALESCE(album_override.value, m.normalizedAlbum) AS album,
+                   COALESCE(album_artist_override.value, m.normalizedAlbumArtist, '') AS albumArtist,
+                   COALESCE(scopes.sourceId, 'NO_SOURCE') AS sourceId,
+                   COALESCE(scopes.folderPrefix, 'NO_FOLDER') AS folderPrefix
+            FROM tracks AS t
+            LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
+            LEFT JOIN track_metadata_overrides AS album_override
+                ON album_override.trackId = t.track_id AND album_override.fieldName = 'ALBUM'
+            LEFT JOIN track_metadata_overrides AS album_artist_override
+                ON album_artist_override.trackId = t.track_id AND album_artist_override.fieldName = 'ALBUM_ARTIST'
+            LEFT JOIN scopes ON scopes.trackId = t.track_id
+            WHERE t.catalog_lifecycle = 'ACTIVE'
+              AND (
+                  NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id = t.track_id)
+                  OR EXISTS (
+                      SELECT 1 FROM track_locations visible_l
+                      LEFT JOIN locator_bindings visible_b ON visible_b.location_id = visible_l.location_id
+                      LEFT JOIN catalog_exclusions visible_e
+                          ON visible_e.source_id = visible_l.source_id AND visible_e.locator = visible_b.locator
+                      WHERE visible_l.track_id = t.track_id AND visible_e.exclusion_id IS NULL
+                  )
+              )
+        )
         SELECT
-            album || char(31) || albumArtist AS `key`,
+            album || char(31) || albumArtist || char(30) || sourceId || char(30) || folderPrefix AS `key`,
             album AS title,
             NULLIF(albumArtist, '') AS subtitle,
             COUNT(DISTINCT trackId) AS trackCount,
             0 AS albumCount,
             0 AS mp3Count,
             0 AS flacCount
-        FROM (
-            SELECT
-                t.track_id AS trackId,
-                COALESCE(album_override.value, m.normalizedAlbum) AS album,
-                COALESCE(
-                    album_artist_override.value,
-                    m.normalizedAlbumArtist,
-                    artist_override.value,
-                    m.normalizedArtist,
-                    ''
-                ) AS albumArtist
-            FROM tracks AS t
-            LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
-            LEFT JOIN track_metadata_overrides AS artist_override
-                ON artist_override.trackId = t.track_id AND artist_override.fieldName = 'ARTIST'
-            LEFT JOIN track_metadata_overrides AS album_override
-                ON album_override.trackId = t.track_id AND album_override.fieldName = 'ALBUM'
-            LEFT JOIN track_metadata_overrides AS album_artist_override
-                ON album_artist_override.trackId = t.track_id AND album_artist_override.fieldName = 'ALBUM_ARTIST'
-            WHERE t.catalog_lifecycle = 'ACTIVE'
-              AND (
-                  NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id = t.track_id)
-                  OR EXISTS (
-                      SELECT 1
-                      FROM track_locations visible_l
-                      LEFT JOIN locator_bindings visible_b ON visible_b.location_id = visible_l.location_id
-                      LEFT JOIN catalog_exclusions visible_e
-                          ON visible_e.source_id = visible_l.source_id
-                         AND visible_e.locator = visible_b.locator
-                      WHERE visible_l.track_id = t.track_id
-                        AND visible_e.exclusion_id IS NULL
-                  )
-              )
-        )
+        FROM album_rows
         WHERE album IS NOT NULL AND trim(album) <> ''
-        GROUP BY album, albumArtist
-        ORDER BY album COLLATE NOCASE, albumArtist COLLATE NOCASE, `key`
+        GROUP BY album, albumArtist, sourceId, folderPrefix
+        ORDER BY album COLLATE NOCASE, albumArtist COLLATE NOCASE, sourceId, folderPrefix, `key`
         LIMIT :limit OFFSET :offset
         """,
     )
@@ -234,8 +251,6 @@ interface LibraryDao {
           AND COALESCE(
               album_artist_override.value,
               m.normalizedAlbumArtist,
-              artist_override.value,
-              m.normalizedArtist,
               ''
           ) = :albumArtist
         ORDER BY t.track_id, l.location_id
@@ -264,12 +279,37 @@ interface LibraryDao {
 
     @Query(
         """
+        WITH RECURSIVE
+        track_scope AS (
+            SELECT t.track_id AS trackId,
+                   COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
+                   COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
+            FROM tracks AS t
+            LEFT JOIN track_locations AS l ON l.track_id = t.track_id
+            LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
+            GROUP BY t.track_id
+        ),
+        scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
+            SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
+            UNION ALL
+            SELECT trackId, sourceId, locator, position + 1,
+                   CASE WHEN substr(locator, position, 1) = '/' OR substr(locator, position, 3) = '%2F'
+                        THEN position ELSE lastSlash END
+            FROM scope_chars
+            WHERE position <= length(locator)
+        ),
+        scopes AS (
+            SELECT trackId, sourceId,
+                   CASE WHEN MAX(lastSlash) > 0 THEN substr(locator, 1, MAX(lastSlash)) ELSE locator END AS folderPrefix
+            FROM scope_chars
+            GROUP BY trackId, sourceId, locator
+        )
         SELECT
             artist AS `key`,
             artist AS title,
             NULL AS subtitle,
             COUNT(DISTINCT trackId) AS trackCount,
-            COUNT(DISTINCT CASE WHEN album IS NOT NULL AND trim(album) <> '' THEN album END) AS albumCount,
+            COUNT(DISTINCT CASE WHEN album IS NOT NULL AND trim(album) <> '' THEN album || char(31) || albumArtist || char(30) || sourceId || char(30) || folderPrefix END) AS albumCount,
             COUNT(DISTINCT CASE WHEN hasMp3 = 1 THEN trackId END) AS mp3Count,
             COUNT(DISTINCT CASE WHEN hasFlac = 1 THEN trackId END) AS flacCount
         FROM (
@@ -277,6 +317,9 @@ interface LibraryDao {
                 t.track_id AS trackId,
                 COALESCE(artist_override.value, m.normalizedArtist) AS artist,
                 COALESCE(album_override.value, m.normalizedAlbum) AS album,
+                COALESCE(album_artist_override.value, m.normalizedAlbumArtist, '') AS albumArtist,
+                COALESCE(scopes.sourceId, 'NO_SOURCE') AS sourceId,
+                COALESCE(scopes.folderPrefix, 'NO_FOLDER') AS folderPrefix,
                 MAX(CASE WHEN l.format = 'MP3' AND e.exclusion_id IS NULL THEN 1 ELSE 0 END) AS hasMp3,
                 MAX(CASE WHEN l.format = 'FLAC' AND e.exclusion_id IS NULL THEN 1 ELSE 0 END) AS hasFlac
             FROM tracks AS t
@@ -285,8 +328,11 @@ interface LibraryDao {
                 ON artist_override.trackId = t.track_id AND artist_override.fieldName = 'ARTIST'
             LEFT JOIN track_metadata_overrides AS album_override
                 ON album_override.trackId = t.track_id AND album_override.fieldName = 'ALBUM'
+            LEFT JOIN track_metadata_overrides AS album_artist_override
+                ON album_artist_override.trackId = t.track_id AND album_artist_override.fieldName = 'ALBUM_ARTIST'
             LEFT JOIN track_locations AS l ON l.track_id = t.track_id
             LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
+            LEFT JOIN scopes ON scopes.trackId = t.track_id
             LEFT JOIN catalog_exclusions AS e
                 ON e.source_id = l.source_id AND e.locator = b.locator
             WHERE t.catalog_lifecycle = 'ACTIVE'
@@ -303,7 +349,7 @@ interface LibraryDao {
                         AND visible_e.exclusion_id IS NULL
                   )
               )
-            GROUP BY t.track_id, artist, album
+            GROUP BY t.track_id, artist, album, albumArtist, sourceId, folderPrefix
         )
         WHERE artist IS NOT NULL AND trim(artist) <> ''
         GROUP BY artist
@@ -387,21 +433,53 @@ interface LibraryDao {
 
     @Query(
         """
+        WITH RECURSIVE
+        track_scope AS (
+            SELECT t.track_id AS trackId,
+                   COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
+                   COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
+            FROM tracks AS t
+            LEFT JOIN track_locations AS l ON l.track_id = t.track_id
+            LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
+            GROUP BY t.track_id
+        ),
+        scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
+            SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
+            UNION ALL
+            SELECT trackId, sourceId, locator, position + 1,
+                   CASE WHEN substr(locator, position, 1) = '/' OR substr(locator, position, 3) = '%2F'
+                        THEN position ELSE lastSlash END
+            FROM scope_chars
+            WHERE position <= length(locator)
+        ),
+        scopes AS (
+            SELECT trackId, sourceId,
+                   CASE WHEN MAX(lastSlash) > 0 THEN substr(locator, 1, MAX(lastSlash)) ELSE locator END AS folderPrefix
+            FROM scope_chars
+            GROUP BY trackId, sourceId, locator
+        )
         SELECT COUNT(*) FROM (
-            SELECT album, albumArtist
-            FROM (
-                SELECT
-                    COALESCE(album_override.value, m.normalizedAlbum) AS album,
-                    COALESCE(album_artist_override.value, m.normalizedAlbumArtist, artist_override.value, m.normalizedArtist, '') AS albumArtist
-                FROM tracks AS t
-                LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
-                LEFT JOIN track_metadata_overrides AS artist_override ON artist_override.trackId = t.track_id AND artist_override.fieldName = 'ARTIST'
-                LEFT JOIN track_metadata_overrides AS album_override ON album_override.trackId = t.track_id AND album_override.fieldName = 'ALBUM'
-                LEFT JOIN track_metadata_overrides AS album_artist_override ON album_artist_override.trackId = t.track_id AND album_artist_override.fieldName = 'ALBUM_ARTIST'
-                WHERE t.catalog_lifecycle = 'ACTIVE'
-                  AND (NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id = t.track_id) OR EXISTS (SELECT 1 FROM track_locations visible_l LEFT JOIN locator_bindings visible_b ON visible_b.location_id = visible_l.location_id LEFT JOIN catalog_exclusions visible_e ON visible_e.source_id = visible_l.source_id AND visible_e.locator = visible_b.locator WHERE visible_l.track_id = t.track_id AND visible_e.exclusion_id IS NULL))
-            ) WHERE album IS NOT NULL AND trim(album) <> ''
-            GROUP BY album, albumArtist
+            SELECT COALESCE(album_override.value, m.normalizedAlbum) AS album,
+                   COALESCE(album_artist_override.value, m.normalizedAlbumArtist, '') AS albumArtist,
+                   COALESCE(scopes.sourceId, 'NO_SOURCE') AS sourceId,
+                   COALESCE(scopes.folderPrefix, 'NO_FOLDER') AS folderPrefix
+            FROM tracks AS t
+            LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
+            LEFT JOIN track_metadata_overrides AS album_override
+                ON album_override.trackId = t.track_id AND album_override.fieldName = 'ALBUM'
+            LEFT JOIN track_metadata_overrides AS album_artist_override
+                ON album_artist_override.trackId = t.track_id AND album_artist_override.fieldName = 'ALBUM_ARTIST'
+            LEFT JOIN scopes ON scopes.trackId = t.track_id
+            WHERE t.catalog_lifecycle = 'ACTIVE'
+              AND (NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id = t.track_id)
+                   OR EXISTS (SELECT 1 FROM track_locations visible_l
+                              LEFT JOIN locator_bindings visible_b ON visible_b.location_id = visible_l.location_id
+                              LEFT JOIN catalog_exclusions visible_e
+                                ON visible_e.source_id = visible_l.source_id AND visible_e.locator = visible_b.locator
+                              WHERE visible_l.track_id = t.track_id AND visible_e.exclusion_id IS NULL))
+              AND COALESCE(album_override.value, m.normalizedAlbum) IS NOT NULL
+              AND trim(COALESCE(album_override.value, m.normalizedAlbum)) <> ''
+            GROUP BY album, albumArtist, sourceId, folderPrefix
         )
         """,
     )

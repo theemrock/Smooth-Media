@@ -77,11 +77,11 @@ class LibraryScreenTest {
             }
         }
 
-        composeRule.onNodeWithText("ALBUMS").performClick()
+        composeRule.onNodeWithContentDescription("Library section: ALBUMS").performClick()
 
         org.junit.Assert.assertEquals(LibraryCollectionType.ALBUMS, selected)
 
-        composeRule.onAllNodesWithText("SONGS")[0].performClick()
+        composeRule.onNodeWithContentDescription("Library section: SONGS").performClick()
         org.junit.Assert.assertEquals(true, songsSelected)
     }
 

@@ -30,11 +30,13 @@ import com.theemrock.smoothmedia.library.LibraryCollectionType
 import com.theemrock.smoothmedia.library.LibraryCollectionViewModel
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryTrackFilter
+import com.theemrock.smoothmedia.library.AlbumGroupingKey
 import com.theemrock.smoothmedia.library.RoomLibraryRepository
 import com.theemrock.smoothmedia.library.LibrarySearchViewModel
 import com.theemrock.smoothmedia.library.LibrarySong
 import com.theemrock.smoothmedia.library.LibraryMetadataState
 import com.theemrock.smoothmedia.library.LibraryLocationState
+import com.theemrock.smoothmedia.library.LibraryDashboardData
 import com.theemrock.smoothmedia.playback.CatalogPlaybackLocationResolver
 import com.theemrock.smoothmedia.playback.PlaybackEngineState
 import com.theemrock.smoothmedia.playback.PlaybackSessionClient
@@ -45,7 +47,12 @@ import com.theemrock.smoothmedia.playback.PlaybackQueueStore
 import com.theemrock.smoothmedia.playback.QueueMode
 import com.theemrock.smoothmedia.artwork.AndroidArtworkResolver
 import com.theemrock.smoothmedia.ui.LibraryScreen
+import com.theemrock.smoothmedia.ui.LibraryDashboardScreen
 import com.theemrock.smoothmedia.ui.LibraryCollectionScreen
+import com.theemrock.smoothmedia.ui.LibraryAlbumDetailData
+import com.theemrock.smoothmedia.ui.LibraryAlbumDetailScreen
+import com.theemrock.smoothmedia.ui.LibraryDetailScreen
+import com.theemrock.smoothmedia.ui.LyricsScreen
 import com.theemrock.smoothmedia.metadata.AndroidAudioMetadataReader
 import com.theemrock.smoothmedia.metadata.MetadataBatchProgress
 import com.theemrock.smoothmedia.metadata.MetadataBatchCoordinator
@@ -74,19 +81,20 @@ import com.theemrock.smoothmedia.eq.EqualizerProfileStore
 import com.theemrock.smoothmedia.ui.sourceRefreshMessage
 import com.theemrock.smoothmedia.ui.sourceRegistrationMessage
 import com.theemrock.smoothmedia.ui.sourceRemovalMessage
+import com.theemrock.smoothmedia.ui.SmoothMediaColors
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.math.abs
 
 private val DarkColorScheme = darkColorScheme(
-    primary = Color(0xFF19C3E6),
-    background = Color(0xFF090B0D),
-    surface = Color(0xFF111418),
-    onPrimary = Color(0xFF090B0D),
-    onBackground = Color(0xFFF4F6F8),
-    onSurface = Color(0xFFF4F6F8),
-    outline = Color(0xFFD8DEE3),
+    primary = SmoothMediaColors.Accent,
+    background = SmoothMediaColors.Background,
+    surface = SmoothMediaColors.Surface,
+    onPrimary = SmoothMediaColors.Background,
+    onBackground = SmoothMediaColors.TextPrimary,
+    onSurface = SmoothMediaColors.TextPrimary,
+    outline = SmoothMediaColors.Divider,
 )
 
 private val LightColorScheme = lightColorScheme(
@@ -98,6 +106,8 @@ private val LightColorScheme = lightColorScheme(
     onSurface = Color(0xFF111418),
     outline = Color(0xFFD8DEE3),
 )
+
+private enum class LibraryBackTarget { DASHBOARD, LIBRARY, COLLECTIONS, DETAIL }
 
 class MainActivity : ComponentActivity() {
     private lateinit var runtime: SourceRegistryRuntime
@@ -115,10 +125,15 @@ class MainActivity : ComponentActivity() {
     private var metadataSessionRunning by mutableStateOf(false)
     private var metadataSessionStatus by mutableStateOf<MetadataSessionStatus?>(null)
     private var metadataSessionProgress by mutableStateOf<MetadataSessionProgress?>(null)
+    private var dashboardData by mutableStateOf<LibraryDashboardData?>(null)
+    private var showDashboard by mutableStateOf(true)
     private var showLibrary by mutableStateOf(false)
     private var showCollections by mutableStateOf(false)
+    private var showAlbumDetail by mutableStateOf(false)
+    private var showLibraryDetail by mutableStateOf(false)
     private var showSearch by mutableStateOf(false)
     private var showNowPlaying by mutableStateOf(false)
+    private var showLyrics by mutableStateOf(false)
     private var showEqualizer by mutableStateOf(false)
     private var showQueue by mutableStateOf(false)
     private var nowPlayingSong by mutableStateOf<LibrarySong?>(null)
@@ -138,6 +153,11 @@ class MainActivity : ComponentActivity() {
     private val queueController = PlaybackQueueController()
     private lateinit var queueStore: PlaybackQueueStore
     private var filteredCollectionType by mutableStateOf<LibraryCollectionType?>(null)
+    private var albumDetailData by mutableStateOf<LibraryAlbumDetailData?>(null)
+    private var libraryDetailType by mutableStateOf<LibraryCollectionType?>(null)
+    private var libraryDetailRow by mutableStateOf<LibraryCollectionRow?>(null)
+    private var libraryDetailSongs by mutableStateOf<List<LibrarySong>>(emptyList())
+    private var libraryBackTarget by mutableStateOf(LibraryBackTarget.DASHBOARD)
     private lateinit var libraryBackCallback: OnBackPressedCallback
     private val metadataCancelRequested = AtomicBoolean(false)
     private val metadataSessionCancelRequested = AtomicBoolean(false)
@@ -200,9 +220,30 @@ class MainActivity : ComponentActivity() {
         )
         libraryBackCallback = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (showAlbumDetail) {
+                    navigateBackFromAlbumDetail()
+                    return
+                }
+                if (showLibraryDetail) {
+                    navigateBackFromLibraryDetail()
+                    return
+                }
+                if (showLyrics) {
+                    showLyrics = false
+                    showNowPlaying = true
+                    return
+                }
                 val type = filteredCollectionType
                 if (showLibrary && type != null) {
                     returnToCollections(type)
+                    return
+                }
+                if (showLibrary) {
+                    navigateBackFromLibrary()
+                    return
+                }
+                if (showCollections) {
+                    navigateBackFromCollections()
                     return
                 }
                 val next = com.theemrock.smoothmedia.ui.MainNavigationBack.handle(
@@ -325,6 +366,8 @@ class MainActivity : ComponentActivity() {
                             },
                             onBack = { showEqualizer = false },
                         )
+                    } else if (showLyrics && nowPlayingSong != null) {
+                        LyricsScreen(song = nowPlayingSong!!, onBack = { showLyrics = false; showNowPlaying = true })
                     } else if (showNowPlaying && nowPlayingSong != null) {
                         NowPlayingScreen(
                             song = nowPlayingSong!!,
@@ -335,6 +378,7 @@ class MainActivity : ComponentActivity() {
                             onSeek = playbackClient::seekTo,
                             onEqualizer = { showEqualizer = true },
                             onQueue = { showQueue = true },
+                            onLyrics = { showLyrics = true; showNowPlaying = false },
                             onNext = ::playNext,
                             onPrevious = ::playPrevious,
                             onShuffle = {
@@ -366,6 +410,48 @@ class MainActivity : ComponentActivity() {
                             },
                             onBack = { showSearch = false },
                         )
+                    } else if (showAlbumDetail && albumDetailData != null) {
+                        LibraryAlbumDetailScreen(
+                            data = albumDetailData!!,
+                            onMenu = {},
+                            onSearch = { showSearch = true },
+                            onDashboard = ::openDashboard,
+                            onPlayAlbum = {
+                                albumDetailData?.songs?.firstOrNull()?.let { first ->
+                                    playSong(first, albumDetailData!!.songs)
+                                }
+                            },
+                            onSong = { song -> playSong(song, albumDetailData!!.songs) },
+                            onAddToQueue = ::addToQueue,
+                            onPlayNext = ::playNextSong,
+                            playbackState = playbackState.takeIf { nowPlayingSong != null },
+                            miniPlayerSong = nowPlayingSong,
+                            onMiniPlayerOpen = { showNowPlaying = true },
+                            onMiniPlayerPause = playbackClient::pause,
+                            onMiniPlayerResume = playbackClient::resume,
+                            onMiniPlayerNext = ::playNext,
+                            artworkResolver = artworkResolver,
+                        )
+                    } else if (showLibraryDetail && libraryDetailType != null && libraryDetailRow != null) {
+                        LibraryDetailScreen(
+                            type = libraryDetailType!!,
+                            row = libraryDetailRow!!,
+                            songs = libraryDetailSongs,
+                            onMenu = {},
+                            onSearch = { showSearch = true },
+                            onDashboard = ::openDashboard,
+                            onAlbumSelected = ::openAlbumDetail,
+                            onSong = { song -> playSong(song, libraryDetailSongs) },
+                            onAddToQueue = ::addToQueue,
+                            onPlayNext = ::playNextSong,
+                            playbackState = playbackState.takeIf { nowPlayingSong != null },
+                            miniPlayerSong = nowPlayingSong,
+                            onMiniPlayerOpen = { showNowPlaying = true },
+                            onMiniPlayerPause = playbackClient::pause,
+                            onMiniPlayerResume = playbackClient::resume,
+                            onMiniPlayerNext = ::playNext,
+                            artworkResolver = artworkResolver,
+                        )
                     } else if (showCollections) {
                         LibraryCollectionScreen(
                             state = collectionViewModel.state.value,
@@ -375,23 +461,56 @@ class MainActivity : ComponentActivity() {
                                 showAllSongs()
                             },
                             onCollection = ::openCollection,
-                            onCollectionSelected = { row -> openCollectionSongs(collectionViewModel.state.value.type, row) },
-                            onSources = {
-                                showCollections = false
-                                showLibrary = false
-                                updateLibraryBackCallback()
+                            onCollectionSelected = { row ->
+                                if (collectionViewModel.state.value.type == LibraryCollectionType.ALBUMS) openAlbumDetail(row)
+                                else openLibraryDetail(collectionViewModel.state.value.type, row)
                             },
+                            onSources = {
+                                openSources()
+                            },
+                            onSearch = { showSearch = true },
+                            onMenu = {},
+                            onDashboard = ::openDashboard,
                             artworkResolver = artworkResolver,
                         )
+                    } else if (showDashboard) {
+                        val data = dashboardData
+                        if (data == null) {
+                            androidx.compose.foundation.layout.Box(
+                                modifier = Modifier.fillMaxSize(),
+                                contentAlignment = androidx.compose.ui.Alignment.Center,
+                            ) {
+                                androidx.compose.material3.CircularProgressIndicator(color = Color(0xFF19C3E6))
+                            }
+                        } else {
+                            LibraryDashboardScreen(
+                                data = data,
+                                onSongs = ::showAllSongs,
+                                onCollection = ::openCollection,
+                                onCollectionSelected = { type, row ->
+                                    if (type == LibraryCollectionType.ALBUMS) openAlbumDetail(row) else openLibraryDetail(type, row)
+                                },
+                                onSearch = { showSearch = true },
+                                onSources = ::openSources,
+                                onSong = { song -> playSong(song) },
+                                onAddToQueue = ::addToQueue,
+                                onPlayNext = ::playNextSong,
+                                playbackState = playbackState.takeIf { nowPlayingSong != null },
+                                miniPlayerSong = nowPlayingSong,
+                                onMiniPlayerOpen = { showNowPlaying = true },
+                                onMiniPlayerPause = playbackClient::pause,
+                                onMiniPlayerResume = playbackClient::resume,
+                                onMiniPlayerNext = ::playNext,
+                                artworkResolver = artworkResolver,
+                            )
+                        }
                     } else if (showLibrary) {
                         LibraryScreen(
                             state = libraryViewModel.state.value,
                             onNearEnd = { executor.execute { libraryViewModel.loadNextPage() } },
                             onRetry = { executor.execute { libraryViewModel.retry() } },
                             onSources = {
-                                showLibrary = false
-                                showCollections = false
-                                updateLibraryBackCallback()
+                                openSources()
                             },
                             onSongs = ::showAllSongs,
                             onCollection = ::openCollection,
@@ -405,6 +524,8 @@ class MainActivity : ComponentActivity() {
                             onMiniPlayerNext = ::playNext,
                             onAddToQueue = ::addToQueue,
                             onPlayNext = ::playNextSong,
+                            onMenu = {},
+                            onDashboard = ::openDashboard,
                             artworkResolver = artworkResolver,
                             initialScrollIndex = libraryViewModel.scrollIndex,
                             initialScrollOffset = libraryViewModel.scrollOffset,
@@ -440,6 +561,7 @@ class MainActivity : ComponentActivity() {
         }
         loadAndRefreshSources()
         loadMetadataMissingCount()
+        loadDashboard()
         executor.execute { libraryViewModel.loadInitial() }
         executor.execute { syncQueueToSession(playWhenReady = false) }
     }
@@ -693,7 +815,78 @@ class MainActivity : ComponentActivity() {
         metadataSessionCancelRequested.set(true)
     }
 
+    private fun navigateBackFromLibrary() {
+        val type = filteredCollectionType
+        if (type != null) {
+            returnToCollections(type)
+            return
+        }
+        when (libraryBackTarget) {
+            LibraryBackTarget.COLLECTIONS -> {
+                showLibrary = false
+                showCollections = true
+                showDashboard = false
+                updateLibraryBackCallback()
+            }
+            LibraryBackTarget.DASHBOARD,
+            LibraryBackTarget.LIBRARY,
+            LibraryBackTarget.DETAIL
+            -> openDashboard()
+        }
+    }
+
+    private fun navigateBackFromAlbumDetail() {
+        showAlbumDetail = false
+        albumDetailData = null
+        if (libraryBackTarget == LibraryBackTarget.DETAIL) {
+            showDashboard = false
+            showLibrary = false
+            showCollections = false
+            showLibraryDetail = true
+        } else if (libraryBackTarget == LibraryBackTarget.COLLECTIONS) {
+            showDashboard = false
+            showLibrary = false
+            showCollections = true
+        } else {
+            openDashboard()
+            return
+        }
+        updateLibraryBackCallback()
+    }
+
+    private fun navigateBackFromLibraryDetail() {
+        showLibraryDetail = false
+        libraryDetailType = null
+        libraryDetailRow = null
+        libraryDetailSongs = emptyList()
+        if (libraryBackTarget == LibraryBackTarget.COLLECTIONS) {
+            showDashboard = false
+            showLibrary = false
+            showCollections = true
+        } else {
+            openDashboard()
+            return
+        }
+        updateLibraryBackCallback()
+    }
+
+    private fun navigateBackFromCollections() {
+        when (libraryBackTarget) {
+            LibraryBackTarget.LIBRARY -> showAllSongs()
+            LibraryBackTarget.DASHBOARD,
+            LibraryBackTarget.COLLECTIONS,
+            LibraryBackTarget.DETAIL
+            -> openDashboard()
+        }
+    }
+
     private fun openCollection(type: LibraryCollectionType) {
+        libraryBackTarget = when {
+            showLibrary -> LibraryBackTarget.LIBRARY
+            showCollections -> LibraryBackTarget.COLLECTIONS
+            else -> LibraryBackTarget.DASHBOARD
+        }
+        showDashboard = false
         showCollections = true
         showLibrary = false
         filteredCollectionType = null
@@ -701,15 +894,76 @@ class MainActivity : ComponentActivity() {
         executor.execute { collectionViewModel.loadInitial(type) }
     }
 
+    private fun openAlbumDetail(row: LibraryCollectionRow) {
+        libraryBackTarget = when {
+            showLibraryDetail -> LibraryBackTarget.DETAIL
+            showCollections -> LibraryBackTarget.COLLECTIONS
+            else -> LibraryBackTarget.DASHBOARD
+        }
+        showDashboard = false
+        showLibrary = false
+        showCollections = false
+        showAlbumDetail = true
+        showLibraryDetail = false
+        filteredCollectionType = null
+        albumDetailData = null
+        updateLibraryBackCallback()
+        executor.execute {
+            val filter = AlbumGroupingKey.decode(row.key, row.title, row.subtitle.orEmpty()).toFilter()
+            val songs = mutableListOf<LibrarySong>()
+            var offset = 0
+            do {
+                val page = libraryRepository.loadFilteredPage(filter, offset, 200)
+                songs += page.songs
+                offset += page.songs.size
+            } while (page.hasMore && page.songs.isNotEmpty())
+            val detail = LibraryAlbumDetailData(row, songs)
+            runOnUiThread { if (!isDestroyed) albumDetailData = detail }
+        }
+    }
+
+    private fun openLibraryDetail(type: LibraryCollectionType, row: LibraryCollectionRow) {
+        libraryBackTarget = if (showCollections) LibraryBackTarget.COLLECTIONS else LibraryBackTarget.DASHBOARD
+        showDashboard = false
+        showLibrary = false
+        showCollections = false
+        showAlbumDetail = false
+        showLibraryDetail = true
+        libraryDetailType = type
+        libraryDetailRow = row
+        libraryDetailSongs = emptyList()
+        updateLibraryBackCallback()
+        executor.execute {
+            val filter = when (type) {
+                LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
+                LibraryCollectionType.GENRES -> LibraryTrackFilter.Genre(row.title)
+                LibraryCollectionType.FOLDERS -> LibraryTrackFilter.Folder(row.key)
+                LibraryCollectionType.ALBUMS -> return@execute
+            }
+            val songs = mutableListOf<LibrarySong>()
+            var offset = 0
+            do {
+                val page = libraryRepository.loadFilteredPage(filter, offset, 200)
+                songs += page.songs
+                offset += page.songs.size
+            } while (page.hasMore && page.songs.isNotEmpty())
+            runOnUiThread { if (!isDestroyed) libraryDetailSongs = songs }
+        }
+    }
+
     private fun openCollectionSongs(type: LibraryCollectionType, row: LibraryCollectionRow) {
+        libraryBackTarget = LibraryBackTarget.COLLECTIONS
+        showDashboard = false
+        showAlbumDetail = false
         val filter = when (type) {
-            LibraryCollectionType.ALBUMS -> LibraryTrackFilter.Album(row.title, row.subtitle.orEmpty())
+            LibraryCollectionType.ALBUMS -> AlbumGroupingKey.decode(row.key, row.title, row.subtitle.orEmpty()).toFilter()
             LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
             LibraryCollectionType.GENRES -> LibraryTrackFilter.Genre(row.title)
             LibraryCollectionType.FOLDERS -> LibraryTrackFilter.Folder(row.key)
         }
         showCollections = false
         showLibrary = true
+        showLibraryDetail = false
         filteredCollectionType = type
         updateLibraryBackCallback()
         executor.execute { libraryViewModel.loadInitial(filter, row.title) }
@@ -720,7 +974,11 @@ class MainActivity : ComponentActivity() {
             updateLibraryBackCallback()
             return
         }
+        libraryBackTarget = if (showCollections) LibraryBackTarget.COLLECTIONS else LibraryBackTarget.DASHBOARD
         showCollections = false
+        showAlbumDetail = false
+        showLibraryDetail = false
+        showDashboard = false
         showLibrary = true
         filteredCollectionType = null
         updateLibraryBackCallback()
@@ -728,12 +986,51 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun returnToCollections(type: LibraryCollectionType) {
+        showDashboard = false
         showCollections = true
+        showAlbumDetail = false
+        showLibraryDetail = false
         showLibrary = false
         filteredCollectionType = null
         updateLibraryBackCallback()
         if (collectionViewModel.state.value.type != type || !collectionViewModel.state.value.loaded) {
             executor.execute { collectionViewModel.loadInitial(type) }
+        }
+    }
+
+    private fun openSources() {
+        showDashboard = false
+        showLibrary = false
+        showCollections = false
+        showAlbumDetail = false
+        showLibraryDetail = false
+        showSearch = false
+        updateLibraryBackCallback()
+    }
+
+    private fun openDashboard() {
+        libraryBackTarget = LibraryBackTarget.DASHBOARD
+        showDashboard = true
+        showLibrary = false
+        showCollections = false
+        showAlbumDetail = false
+        showLibraryDetail = false
+        albumDetailData = null
+        showSearch = false
+        showNowPlaying = false
+        showLyrics = false
+        showEqualizer = false
+        showQueue = false
+        updateLibraryBackCallback()
+        loadDashboard()
+    }
+
+    private fun loadDashboard() {
+        if (!::libraryRepository.isInitialized || !::executor.isInitialized) return
+        executor.execute {
+            runCatching { libraryRepository.loadDashboard() }
+                .onSuccess { data -> runOnUiThread { if (!isDestroyed) dashboardData = data } }
+                .onFailure { runOnUiThread { if (!isDestroyed) dashboardData = null } }
         }
     }
 
@@ -817,7 +1114,7 @@ class MainActivity : ComponentActivity() {
 @Composable
 private fun SmoothMediaTheme(content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = if (isSystemInDarkTheme()) DarkColorScheme else LightColorScheme,
+        colorScheme = DarkColorScheme,
         content = content,
     )
 }
