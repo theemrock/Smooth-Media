@@ -229,15 +229,21 @@ Stable enum/dedicated relation kullanılır. Görünen ad Türkçe veya İngiliz
 
 ## 38. Queue playlist değildir
 
-Queue tek aktif playback session state'idir. Playlist'ten bağımsızdır; entries, current Track, position ms, repeat, shuffle sırası ve düzenlemeler saklanır. İkinci paralel queue/queue history yoktur.
+Queue tek aktif playback session state'idir. Playlist'ten bağımsızdır; entries, current Track, position ms, repeat, shuffle sırası ve düzenlemeler saklanır. İkinci paralel kalıcı queue/queue history veya ikinci player yoktur.
+
+Kullanıcı Songs, albüm, sanatçı, playlist veya başka bir listeden bir Track açtığında, o listenin o andaki filtre ve sıralamasından oluşan TrackID snapshot'ı doğal **Ghost Playback Context**'tir. Next/Previous bu snapshot içinde çalışır. Ghost context içindeki parçalar manuel User Queue girdisi sayılmaz.
+
+İlk Play Next veya Add to Queue eylemiyle manuel **User Queue** playback kontrolünü devralır. O anda çalan parça kesilmez ve Ghost context'e otomatik dönüş yapılmaz. Başka bir kaynak listesinden doğrudan parça açılması yeni bir Ghost context başlatır. Ghost context ve User Queue aynı playback session içinde çalışır; ikinci paralel kalıcı queue oluşturulmaz.
 
 ## 39. Queue kullanıcı tarafından düzenlenebilir
 
-Play Next, Add to Queue, Remove, Reorder, Clear, Save as Playlist. Aynı TrackID queue'da iki kez tutulmaz. Play Next mevcut girdiyi sıradaki pozisyona **taşır**; Add Queue mevcut girdiyi **atlar**. Played girdiler queue'da kalır, previous gezinmesi yapılabilir; Repeat All kurala göre döngü sağlar.
+Play Next, Add to Queue, Remove, Reorder, Clear, Save as Playlist işlemleri vardır. İlk Play Next veya Add to Queue işlemi manuel User Queue kontrolünü devreye alır; mevcut parça kesilmez ve Ghost context'e otomatik dönüş yapılmaz. Aynı TrackID User Queue'da iki kez tutulmaz. Play Next mevcut girdiyi çalan parçanın hemen arkasına **taşır**; Add to Queue bekleyen manuel girdilerin sonuna ve otomatik önerilerin önüne ekler. Queue'da zaten bulunan TrackID yeniden Add to Queue edilirse **atlar**. Played girdiler queue'da kalır, previous gezinmesi yapılabilir; Repeat All kurala göre döngü sağlar.
+
+Queue sırası current item, bekleyen manuel User Queue girdileri ve varsa otomatik öneriler olarak yorumlanır. Manuel seçimler sonraki otomatik önerilerin profilini etkiler; daha önce oluşturulmuş öneriler manuel seçim nedeniyle silinmez. Move ve skip kuralları ile TrackID benzersizliği korunur.
 
 ## 40. Queue persistence
 
-Queue sırası, shuffle permutation, Repeat, current Track, ms position ve düzenlemeler process death/reboot sonrası geri gelir. Uygulama tekrar açılınca **otomatik playback başlamaz**. Ulaşılamayan Track girdileri sessizce silinmez; skip/fallback anlık yürütülür.
+Ghost/User Queue modu, Ghost kaynak bağlamı ve TrackID snapshot'ı, aktif sıra, manuel/otomatik entry ayrımı, shuffle permutation, Repeat, current Track, ms position ve düzenlemeler process death/reboot sonrası geri gelir. Uygulama tekrar açılınca **otomatik playback başlamaz**. Queue ekranı Ghost context'in tamamını manuel queue gibi göstermez; Ghost context ve User Queue ayrımı kullanıcıya doğru state ile yansıtılır. Ulaşılamayan Track girdileri sessizce silinmez; skip/fallback anlık yürütülür.
 
 ---
 
@@ -265,7 +271,9 @@ Varsayılan **ON**, kullanıcı kapatabilir. Tekli/shuffle oynatmada Track Gain;
 
 ## 46. EQ architecture
 
-İki mod: **Adaptive EQ (ana mod)** ve kullanıcı seçimiyle **Manual EQ**. Adaptive parametreler çalışırken kaydırıcıların canlı hareketi UI'de görünür. Ayrıntılı frekans/band/öğrenme tercihleri önceki EQ tasarım kararlarına bağlıdır, bu belgenin eksik varsayımlarıyla yeniden icat edilmez. Ortak işlem hattı modülerdir, servis katmanından ayrılır.
+İki mod: **Adaptive EQ (ana mod)** ve kullanıcı seçimiyle **Manual EQ**. Adaptive modda canlı slider'lar yalnızca gerçek DSP'nin o andaki durumunu gösterir; sahte hareket veya sahte analiz sunulmaz.
+
+Manual EQ'nin hedefi 24 gerçek banttır. Presetler Flat, Rock, Metal, Bass Boost, Vocal, Jazz, Classical ve Custom'dır. Bir preset üzerinde manuel değişiklik yapıldığında mod Custom'a geçer. Android'in mevcut 5 bantlı Equalizer API'si 24 bantmış gibi sunulamaz; gerçek 24 bant DSP ayrıca uygulanmalı ve doğrulanmalıdır. DSP pipeline'ı playback service'ten modüler ayrılır, gerçek backend durumunu yansıtır ve test edilebilir olur.
 
 ## 47. Device-specific audio profiles
 
@@ -669,17 +677,21 @@ Yalnız **hash ile aynı fiziksel kimlik doğrulanabildiğinde** ve farklı meta
 
 - **Autoplay varsayılan ON**, Settings'ten OFF yapılabilir. Queue sona geldiğinde Repeat OFF ise, uygun kütüphane Track'leriyle çalma devam edebilir. Hiç aday yoksa durur.
 - Mevcut queue korunur; TrackID tekrarı eklenmez. Autoplay ekleri kullanıcı ekleriyle **aynı queue'da**, özel separator olmadan görünür.
-- Sona **2 oynatılmamış şarkı** kaldığında **5'lik parti** yeni Track önerilir; seri skip durumunda eşik pratik biçimde kontrol edilir, sonsuz tekrar yapılmaz.
+- İkinci oynatılmamış manuel User Queue parçası eklendiğinde Smart Continuation etkinleşir. Yalnızca Autoplay ON ve Repeat OFF iken, oynatılmamış manuel parça sayısı **2'ye indiğinde** ilk **5 benzer öneri** eklenir. Sonraki partiler, oynatılmamış öneri sayısı 2'ye indiğinde beşer Track olarak eklenir.
+- Smart Continuation tetikleyicileri idempotent olmalı; aynı eşik için çifte ekleme yapılmamalıdır. Uygun aday kalmazsa playback durur.
 - Benzerlik **ilk kullanıcı queue'sunun genel karakterini** esas alır ve son dinlenenlere ağırlık verir; yalnız son kendi önerilerini takip ederek zevki kendi kendine uçlara sürüklemez. Artist diversity dengelenir.
-- Autoplay sırasında kullanıcı manuel Track eklerse önceki öneriler silinmez; sonraki öneri profili manuel eklemelere göre güncellenir.
+- Autoplay sırasında kullanıcı manuel Track eklerse bekleyen manuel girdilerin sonuna ve otomatik önerilerin önüne eklenir; önceki öneriler silinmez. Sonraki öneri profili manuel eklemelere göre güncellenir.
+- Ghost context'ten User Queue devralındıktan sonra Ghost context'e otomatik dönüş yapılmaz.
 - PreferenceModel bu seçimi kişiselleştirir (§112). Bu özellik P01/P02'nin otomatik kapsamı sayılmaz.
 
 ## 114. Playback queue ve kaynak fallback davranışı
 
-- Tek aktif queue; başka album/playlist/History Track seçimi queue'yu **değiştirir**. Play Next/Add Queue bunu değiştirmeyen kontrollü düzenleme eylemleridir.
+- Tek aktif playback session vardır. Manuel User Queue devralınmamışsa aktif doğal çalma bağlamı, açılan kaynak listenin filtre/sıralama TrackID snapshot'ı olan Ghost Playback Context'tir; Next/Previous bu snapshot'ı kullanır. İlk Play Next veya Add to Queue ile User Queue devreye girer, çalan parça kesilmez ve Ghost context'e otomatik dönüş olmaz. Başka bir kaynak listesinden doğrudan parça açılması yeni Ghost context başlatır; ikinci playback session veya paralel kalıcı queue oluşturulmaz.
+- User Queue aktifken sıra current item, bekleyen manuel girdiler ve otomatik önerilerden oluşur. Play Next current item'ın hemen arkasına; Add to Queue bekleyen manuel girdilerin sonuna ve önerilerin önüne yerleşir. Mevcut öneriler silinmez ve aynı TrackID User Queue'da yinelenmez.
 - Oynatma için erişilebilir TrackLocation seçilir; uygun durumda yüksek kaliteli FLAC öncelikli. Bir kaynak şarkı ortasında kaybolursa **aynı TrackID'nin alternatif erişilebilir Location'ına yakın pozisyondan** devam denenir. Mümkün değilse sonraki oynatılabilir queue girdisi, o da yoksa stop.
 - Kaynak değiştirme sessizdir (toast/snackbar/modal yok); Now Playing teknik format bilgisi gerçeği gösterir.
 - Dinleme sayacı yalnız §64'teki gerçek dinlenme şartını karşılayan Track için artar. Kaynak çökmesi tek başına anlamlı dinleme değildir.
+- Ghost/User Queue modu, kaynak bağlamı, aktif sıra ve playback konumu restore edilebilir; uygulama yeniden açıldığında otomatik playback başlatılmaz. Queue UI Ghost snapshot'ın tamamını manuel queue gibi sunmaz. User Queue takeover sonrasında yeni bir Ghost context açıldığında önceki User Queue persistence state'inin kullanıcıya nasıl sunulacağı ayrıca netleştirilmelidir; bu anayasa otomatik birleştirme veya otomatik dönüş kararı vermez.
 
 ## 115. Audio focus, kulaklık ve çıkış kesintileri
 
