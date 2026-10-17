@@ -161,10 +161,12 @@ class ScanToCatalogPipelineTest {
             LeaseRecoveryResult.Started(session.sessionId, false)
         override fun updateCheckpoint(sessionId: String, sourceId: String, continuationToken: String?, discoveredCount: Int, processedCount: Int, coverage: ScanCheckpointCoverage, updatedAtEpochMs: Long) = true
         override fun findCheckpoint(sessionId: String, sourceId: String): SourceScanCheckpointEntity? = null
+
+        override fun heartbeat(sessionId: String, updatedAtEpochMs: Long) = true
         override fun recordCandidate(candidate: ScanCandidateEntity) = Unit
         override fun findCandidate(sessionId: String, sourceId: String, candidateKey: String): ScanCandidateEntity? = null
         override fun updateCandidateState(sessionId: String, sourceId: String, candidateKey: String, state: com.theemrock.smoothmedia.catalog.database.entity.ScanCandidateState, locationId: String?, updatedAtEpochMs: Long) = true
-        override fun recoverInterruptedSession(sessionId: String, updatedAtEpochMs: Long) = ScanRecoveryResult.Recovered(sessionId, 0)
+        override fun recoverInterruptedSession(sessionId: String, updatedAtEpochMs: Long, staleAfterMs: Long) = ScanRecoveryResult.Recovered(sessionId, 0)
         override fun completeSession(sessionId: String, completedAtEpochMs: Long) = Unit
         override fun pauseSession(sessionId: String, updatedAtEpochMs: Long) = ScanLifecycleResult.Applied(sessionId, ScanSessionStatus.PAUSED)
         override fun resumeSession(sessionId: String, updatedAtEpochMs: Long) = ScanLifecycleResult.Applied(sessionId, ScanSessionStatus.RUNNING)

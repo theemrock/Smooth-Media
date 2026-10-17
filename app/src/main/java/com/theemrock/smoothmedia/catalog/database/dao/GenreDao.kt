@@ -25,6 +25,16 @@ interface GenreDao {
     @Query("SELECT * FROM genre_edges WHERE parentGenreId = :parent ORDER BY childGenreId")
     fun childrenOf(parent: String): List<GenreEdgeEntity>
 
+    @Query(
+        """
+        SELECT n.* FROM genre_nodes n
+        INNER JOIN genre_edges e ON e.childGenreId = n.genreId
+        WHERE e.parentGenreId = :parent
+        ORDER BY n.normalizedName, n.genreId
+        """,
+    )
+    fun childNodesOf(parent: String): List<GenreNodeEntity>
+
     @Query("SELECT * FROM genre_edges WHERE childGenreId = :child ORDER BY parentGenreId")
     fun parentsOf(child: String): List<GenreEdgeEntity>
 

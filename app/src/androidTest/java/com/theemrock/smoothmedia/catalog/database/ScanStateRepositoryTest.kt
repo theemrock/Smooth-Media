@@ -98,6 +98,42 @@ class ScanStateRepositoryTest {
     }
 
     @Test
+    fun staleRunningLease_isRecoveredOnlyForExplicitResume() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        repository.recordCandidate(candidate("scan-1", state = ScanCandidateState.PROCESSING))
+
+        val result = repository.recoverInterruptedSession("scan-1", 301_001)
+
+        assertEquals(ScanRecoveryResult.Recovered("scan-1", 1), result)
+        assertEquals(ScanSessionStatus.PAUSED, repository.findSession("scan-1")!!.status)
+        assertNull(database.scanDao().findActiveLease())
+        assertEquals(ScanCandidateState.DISCOVERED, repository.findCandidate("scan-1", "source-1", "candidate-1")!!.state)
+    }
+
+    @Test
+    fun staleRunningLease_doesNotStartANewSessionAutomatically() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        database.scanDao().updateCheckpoint(
+            sessionId = "scan-1",
+            sourceId = "source-1",
+            continuationToken = "cursor-1",
+            discoveredCount = 7_052,
+            processedCount = 2_090,
+            coverage = ScanCheckpointCoverage.PARTIAL,
+            updatedAtEpochMs = 1_000,
+        )
+
+        val result = repository.recoverStaleLeaseAndStart(
+            session = session("scan-2"),
+            checkpoints = listOf(checkpoint("scan-2")),
+        )
+
+        assertEquals(LeaseRecoveryResult.ResumeRequired("scan-1"), result)
+        assertNull(repository.findSession("scan-2"))
+        assertEquals("scan-1", database.scanDao().findActiveLease()!!.sessionId)
+    }
+
+    @Test
     fun orphanedRunningSession_resetsProcessingAndBecomesPaused() {
         repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
         repository.recordCandidate(candidate("scan-1", state = ScanCandidateState.PROCESSING))
@@ -253,6 +289,46 @@ class ScanStateRepositoryTest {
         assertEquals(ScanSessionStatus.RUNNING, repository.findSession("scan-1")!!.status)
         assertEquals("scan-1", database.scanDao().findActiveLease()!!.sessionId)
         assertEquals("cursor-7", repository.findCheckpoint("scan-1", "source-1")!!.continuationToken)
+    }
+
+    @Test
+    fun completionAttemptAfterPause_preservesPausedSessionAndCheckpoint() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+        repository.updateCheckpoint(
+            sessionId = "scan-1",
+            sourceId = "source-1",
+            continuationToken = "last-candidate",
+            discoveredCount = 10,
+            processedCount = 10,
+            coverage = ScanCheckpointCoverage.PARTIAL,
+            updatedAtEpochMs = 2_000,
+        )
+        assertTrue(repository.pauseSession("scan-1", 3_000) is ScanLifecycleResult.Applied)
+
+        repository.completeSession("scan-1", completedAtEpochMs = 4_000)
+
+        assertEquals(ScanSessionStatus.PAUSED, repository.findSession("scan-1")!!.status)
+        assertNull(database.scanDao().findActiveLease())
+        assertEquals(
+            "last-candidate",
+            repository.findCheckpoint("scan-1", "source-1")!!.continuationToken,
+        )
+        assertEquals(
+            ScanCheckpointCoverage.PARTIAL,
+            repository.findCheckpoint("scan-1", "source-1")!!.coverage,
+        )
+    }
+
+    @Test
+    fun heartbeatRefreshesOnlyTheRunningSessionWithItsLease() {
+        repository.startSession(session("scan-1"), listOf(checkpoint("scan-1")))
+
+        assertTrue(repository.heartbeat("scan-1", 2_000))
+        assertEquals(2_000, repository.findSession("scan-1")!!.updatedAtEpochMs)
+
+        assertTrue(repository.pauseSession("scan-1", 3_000) is ScanLifecycleResult.Applied)
+        assertFalse(repository.heartbeat("scan-1", 4_000))
+        assertEquals(3_000, repository.findSession("scan-1")!!.updatedAtEpochMs)
     }
 
     @Test

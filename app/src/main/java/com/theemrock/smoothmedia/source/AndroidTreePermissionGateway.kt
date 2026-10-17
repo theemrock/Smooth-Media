@@ -28,6 +28,8 @@ interface AndroidTreePermissionOperations {
     fun persistedPermissions(): List<PersistedTreePermission>
     fun release(uri: Uri, flags: Int)
     fun probe(treeUri: Uri): TreeProbeResult
+
+    fun queryDisplayName(documentUri: Uri): String? = null
 }
 
 class AndroidTreePermissionGateway(
@@ -61,6 +63,17 @@ class AndroidTreePermissionGateway(
             TreeProbeResult.INVALID -> TreePermissionTakeResult.InvalidUri
             TreeProbeResult.FAILED -> TreePermissionTakeResult.Failed
         }
+    }
+
+    override fun displayName(rootUri: String): String? {
+        val treeUri = Uri.parse(rootUri)
+        val documentUri = runCatching {
+            DocumentsContract.buildDocumentUriUsingTree(treeUri, DocumentsContract.getTreeDocumentId(treeUri))
+        }.getOrNull() ?: return null
+        return runCatching { operations.queryDisplayName(documentUri) }
+            .getOrNull()
+            ?.trim()
+            ?.takeIf { it.isNotEmpty() }
     }
 
     override fun inspect(rootUri: String): TreePermissionInspection {
@@ -168,5 +181,15 @@ private class ContentResolverTreePermissionOperations(
         } catch (_: Exception) {
             TreeProbeResult.UNAVAILABLE
         }
+    }
+
+    override fun queryDisplayName(documentUri: Uri): String? = contentResolver.query(
+        documentUri,
+        arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+        null,
+        null,
+        null,
+    )?.use { cursor ->
+        if (cursor.moveToFirst()) cursor.getString(0) else null
     }
 }

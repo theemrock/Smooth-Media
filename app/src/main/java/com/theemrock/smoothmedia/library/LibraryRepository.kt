@@ -236,6 +236,7 @@ sealed interface LibraryTrackFilter {
     data class Artist(val artist: String) : LibraryTrackFilter
     data class Genre(val genre: String) : LibraryTrackFilter
     data class Folder(val path: String) : LibraryTrackFilter
+    data class SafFolder(val sourceId: String, val documentId: String) : LibraryTrackFilter
 }
 
 data class AlbumGroupingInput(
@@ -535,9 +536,12 @@ class RoomLibraryRepository(
         safDocumentDao?.children(sourceId, documentId).orEmpty()
 
     fun loadSafFolderSongs(sourceId: String, documentId: String, offset: Int, limit: Int): LibraryPage {
-        val document = loadSafFolder(sourceId, documentId) ?: return LibraryPage(emptyList(), false)
-        return loadFilteredPage(LibraryTrackFilter.Folder(document.uri), offset, limit)
+        loadSafFolder(sourceId, documentId) ?: return LibraryPage(emptyList(), false)
+        return loadFilteredPage(LibraryTrackFilter.SafFolder(sourceId, documentId), offset, limit)
     }
+
+    fun countSafFolderDirectTracks(sourceId: String, documentId: String): Int =
+        safDocumentDao?.countDirectCatalogTracks(sourceId, documentId) ?: 0
 
     fun loadArtistAlbumPreviews(artist: String, limit: Int = 3): List<LibraryArtistAlbumPreview> =
         dao.loadArtistAlbumPreviews(artist, limit).map { LibraryArtistAlbumPreview(it.album, it.albumArtist) }
@@ -586,7 +590,8 @@ class RoomLibraryRepository(
         )
         is LibraryTrackFilter.Artist -> arrayOf(filter.artist)
         is LibraryTrackFilter.Genre -> arrayOf(filter.genre)
-        is LibraryTrackFilter.Folder -> arrayOf(filter.path)
+        is LibraryTrackFilter.Folder -> arrayOf(filter.path, filter.path)
+        is LibraryTrackFilter.SafFolder -> arrayOf(filter.sourceId, filter.documentId)
     }
 
     private companion object {
@@ -657,17 +662,33 @@ class RoomLibraryRepository(
     }
 
     private fun filteredTracksSql(filter: LibraryTrackFilter, limit: Int, offset: Int): String =
-        filteredSelectSql(filter) + " LIMIT $limit OFFSET $offset"
+        folderScopeCte(filter) + filteredSelectSql(filter) + " LIMIT $limit OFFSET $offset"
 
     private fun filteredCountSql(filter: LibraryTrackFilter): String =
-        "SELECT COUNT(*) FROM tracks AS t LEFT JOIN track_metadata AS m ON m.trackId=t.track_id WHERE " + visibleTrackWhere(filter)
+        folderScopeCte(filter) + "SELECT COUNT(*) FROM tracks AS t LEFT JOIN track_metadata AS m ON m.trackId=t.track_id WHERE " + visibleTrackWhere(filter)
+
+    private fun folderScopeCte(filter: LibraryTrackFilter): String = if (filter is LibraryTrackFilter.SafFolder) {
+        """
+        WITH RECURSIVE folder_scope(sourceId, documentId) AS (
+            SELECT ? AS sourceId, ? AS documentId
+            UNION
+            SELECT child.sourceId, child.documentId
+            FROM saf_documents child
+            JOIN folder_scope parent
+              ON parent.sourceId = child.sourceId
+             AND parent.documentId = child.parentDocumentId
+            WHERE child.isDirectory = 1 AND child.available = 1
+        )
+        """.trimIndent() + "\n"
+    } else ""
 
     private fun visibleTrackWhere(filter: LibraryTrackFilter): String {
         val criterion = when (filter) {
         is LibraryTrackFilter.Album -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ALBUM'), m.normalizedAlbum)=? AND (?='' OR COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ALBUM_ARTIST'), m.normalizedAlbumArtist, '')=?) AND ( (?='${AlbumGroupingKey.UNKNOWN_SOURCE}' AND ?='${AlbumGroupingKey.UNKNOWN_FOLDER}' AND NOT EXISTS (SELECT 1 FROM track_locations scope_l WHERE scope_l.track_id=t.track_id)) OR EXISTS (SELECT 1 FROM track_locations scope_l LEFT JOIN locator_bindings scope_b ON scope_b.location_id=scope_l.location_id WHERE scope_l.track_id=t.track_id AND COALESCE(scope_l.source_id,'${AlbumGroupingKey.UNKNOWN_SOURCE}')=? AND COALESCE(NULLIF(scope_l.path,''),scope_b.locator,'${AlbumGroupingKey.UNKNOWN_FOLDER}') LIKE ? || '%') )"
             is LibraryTrackFilter.Artist -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ARTIST'), m.normalizedArtist)=?"
             is LibraryTrackFilter.Genre -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='GENRE'), m.normalizedGenres)=?"
-        is LibraryTrackFilter.Folder -> "EXISTS (SELECT 1 FROM track_locations filter_l LEFT JOIN locator_bindings filter_b ON filter_b.location_id=filter_l.location_id LEFT JOIN library_sources filter_s ON filter_s.source_id=filter_l.source_id LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_l.track_id=t.track_id AND COALESCE(NULLIF(filter_l.path,''),filter_s.volume_name,filter_b.locator)=? AND filter_e.exclusion_id IS NULL)"
+        is LibraryTrackFilter.Folder -> "EXISTS (SELECT 1 FROM track_locations filter_l LEFT JOIN locator_bindings filter_b ON filter_b.location_id=filter_l.location_id LEFT JOIN library_sources filter_s ON filter_s.source_id=filter_l.source_id LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_l.track_id=t.track_id AND (filter_b.locator=? OR COALESCE(NULLIF(filter_l.path,''),filter_s.volume_name,filter_b.locator)=?) AND filter_e.exclusion_id IS NULL)"
+        is LibraryTrackFilter.SafFolder -> "EXISTS (SELECT 1 FROM saf_documents filter_f JOIN folder_scope filter_scope ON filter_scope.sourceId=filter_f.sourceId AND filter_scope.documentId=filter_f.parentDocumentId JOIN track_locations filter_l ON filter_l.source_id=filter_f.sourceId JOIN locator_bindings filter_b ON filter_b.source_id=filter_l.source_id AND filter_b.location_id=filter_l.location_id AND filter_b.locator=filter_f.uri LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_f.isDirectory=0 AND filter_f.available=1 AND filter_l.track_id=t.track_id AND filter_e.exclusion_id IS NULL)"
         }
         return "t.catalog_lifecycle='ACTIVE' AND ($criterion) AND (NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id=t.track_id) OR EXISTS (SELECT 1 FROM track_locations visible_l LEFT JOIN locator_bindings visible_b ON visible_b.location_id=visible_l.location_id LEFT JOIN catalog_exclusions visible_e ON visible_e.source_id=visible_l.source_id AND visible_e.locator=visible_b.locator WHERE visible_l.track_id=t.track_id AND visible_e.exclusion_id IS NULL))"
     }

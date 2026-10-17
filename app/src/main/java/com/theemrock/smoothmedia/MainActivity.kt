@@ -27,6 +27,7 @@ import com.theemrock.smoothmedia.catalog.scan.ManualScanController
 import com.theemrock.smoothmedia.catalog.scan.ManualScanProgress
 import com.theemrock.smoothmedia.catalog.scan.ManualScanResult
 import com.theemrock.smoothmedia.catalog.scan.ScanSessionOrchestrator
+import com.theemrock.smoothmedia.catalog.scan.ScanPhase
 import com.theemrock.smoothmedia.library.LibraryViewModel
 import com.theemrock.smoothmedia.library.LibraryCollectionType
 import com.theemrock.smoothmedia.library.LibraryCollectionViewModel
@@ -41,6 +42,7 @@ import com.theemrock.smoothmedia.library.LibraryLocationState
 import com.theemrock.smoothmedia.library.LibraryDashboardData
 import com.theemrock.smoothmedia.library.LibraryArtistAlbumPreview
 import com.theemrock.smoothmedia.library.LibraryGenreArtworkPreview
+import com.theemrock.smoothmedia.genre.RoomGenreRepository
 import com.theemrock.smoothmedia.playback.CatalogPlaybackLocationResolver
 import com.theemrock.smoothmedia.playback.PlaybackEngineState
 import com.theemrock.smoothmedia.playback.PlaybackSessionClient
@@ -119,6 +121,7 @@ private enum class LibraryBackTarget { DASHBOARD, LIBRARY, COLLECTIONS, DETAIL }
 class MainActivity : ComponentActivity() {
     private lateinit var runtime: SourceRegistryRuntime
     private lateinit var executor: ExecutorService
+    private lateinit var scanControlExecutor: ExecutorService
     private lateinit var scanController: ManualScanController
     private lateinit var metadataCoordinator: MetadataMissingTrackPageCoordinator
     private lateinit var metadataSessionCoordinator: MetadataContinuousSessionCoordinator
@@ -126,6 +129,10 @@ class MainActivity : ComponentActivity() {
     private var statusMessage by mutableStateOf<String?>(null)
     private var scanMessage by mutableStateOf<String?>(null)
     private var scanningSourceId by mutableStateOf<String?>(null)
+    private var scanSessionId by mutableStateOf<String?>(null)
+    private var scanPhase by mutableStateOf(ScanPhase.IDLE)
+    private var scanProgress by mutableStateOf<ManualScanProgress?>(null)
+    private var scanExecutionAttached by mutableStateOf(false)
     private var metadataMissingCount by mutableStateOf(0)
     private var metadataRunning by mutableStateOf(false)
     private var metadataProgress by mutableStateOf<MetadataBatchProgress?>(null)
@@ -168,6 +175,7 @@ class MainActivity : ComponentActivity() {
     private var libraryDetailSongs by mutableStateOf<List<LibrarySong>>(emptyList())
     private var libraryDetailAlbums by mutableStateOf<List<LibraryCollectionRow>>(emptyList())
     private var libraryDetailFolderChildren by mutableStateOf<List<LibraryCollectionRow>>(emptyList())
+    private var libraryDetailGenreChildren by mutableStateOf<List<LibraryCollectionRow>>(emptyList())
     private var artistAlbumPreviews by mutableStateOf<Map<String, List<LibraryArtistAlbumPreview>>>(emptyMap())
     private var genreArtworkPreviews by mutableStateOf<Map<String, List<LibraryGenreArtworkPreview>>>(emptyMap())
     private var libraryBackTarget by mutableStateOf(LibraryBackTarget.DASHBOARD)
@@ -199,6 +207,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         runtime = SourceRegistryFactory.create(this)
         executor = Executors.newSingleThreadExecutor()
+        scanControlExecutor = Executors.newSingleThreadExecutor()
         equalizerProfileStore = EqualizerProfileStore(this)
         manualEqualizerLevels = equalizerProfileStore.readLevels()
         manualEqualizerEnabled = equalizerProfileStore.isManualEnabled()
@@ -479,11 +488,13 @@ class MainActivity : ComponentActivity() {
                             songs = libraryDetailSongs,
                             artistAlbums = libraryDetailAlbums,
                             folderChildren = libraryDetailFolderChildren,
+                            genreChildren = libraryDetailGenreChildren,
                             onMenu = {},
                             onSearch = { showSearch = true },
                             onDashboard = ::openDashboard,
                             onAlbumSelected = ::openAlbumDetail,
                             onArtistSelected = { artist -> openLibraryDetail(LibraryCollectionType.ARTISTS, artist) },
+                            onGenreSelected = { genre -> openLibraryDetail(LibraryCollectionType.GENRES, genre) },
                             onFolderSelected = { folder -> openLibraryDetail(LibraryCollectionType.FOLDERS, folder) },
                             onSong = { song -> playSong(song, libraryDetailSongs) },
                             onAddToQueue = ::addToQueue,
@@ -591,10 +602,16 @@ class MainActivity : ComponentActivity() {
                             sources = sources,
                             statusMessage = listOfNotNull(statusMessage, scanMessage).joinToString("\n").ifBlank { null },
                             scanningSourceId = scanningSourceId,
+                            scanPhase = scanPhase,
+                            scanProgress = scanProgress,
+                            scanExecutionAttached = scanExecutionAttached,
                             onAdd = { treePicker.launch(TreePickerIntentFactory.create()) },
                             onRefresh = { refreshSources() },
                             onRemove = { sourceId -> removeSource(sourceId) },
                             onScan = { sourceId -> startScan(sourceId) },
+                            onPauseScan = ::pauseScan,
+                            onResumeScan = ::resumeScan,
+                            onStopScan = ::stopScan,
                             onLibrary = {
                                 showAllSongs()
                             },
@@ -632,6 +649,7 @@ class MainActivity : ComponentActivity() {
             executor.execute { runtime.close() }
             executor.shutdown()
         }
+        if (::scanControlExecutor.isInitialized) scanControlExecutor.shutdown()
         super.onDestroy()
     }
 
@@ -794,16 +812,93 @@ class MainActivity : ComponentActivity() {
     private fun startScan(sourceId: String) {
         if (scanningSourceId != null) return
         scanningSourceId = sourceId
+        scanSessionId = null
+        scanProgress = null
+        scanExecutionAttached = true
+        scanPhase = ScanPhase.STARTING
         scanMessage = getString(R.string.scan_starting)
         executor.execute {
             val source = runCatching { runtime.repository.find(sourceId) }.getOrNull()
             val result = if (source == null) {
                 ManualScanResult.Rejected("", ScanSessionOrchestrator.RejectionReason.SOURCE_NOT_SELECTED)
             } else {
-                scanController.start(source, ::postScanProgress)
+                scanController.start(source, ::postScanProgress) { sessionId ->
+                    runOnUiThread {
+                        if (!isDestroyed) scanSessionId = sessionId
+                    }
+                }
             }
             runOnUiThread {
-                scanningSourceId = null
+                if (result !is ManualScanResult.Paused) scanningSourceId = null
+                scanExecutionAttached = false
+                scanSessionId = when (result) {
+                    is ManualScanResult.Paused -> scanSessionId
+                    else -> null
+                }
+                scanPhase = when (result) {
+                    is ManualScanResult.Completed -> ScanPhase.COMPLETED
+                    is ManualScanResult.Paused -> ScanPhase.PAUSED
+                    is ManualScanResult.Cancelled -> ScanPhase.CANCELLED
+                    else -> ScanPhase.FAILED
+                }
+                scanMessage = scanResultMessage(result)
+            }
+        }
+    }
+
+    private fun pauseScan() {
+        val sessionId = scanSessionId ?: return
+        scanPhase = ScanPhase.PAUSING
+        scanControlExecutor.execute {
+            val applied = scanController.pause(sessionId)
+            runOnUiThread {
+                if (!isDestroyed && !applied) {
+                    scanPhase = ScanPhase.PROCESSING
+                    scanMessage = "Tarama duraklatılamadı; oturum durumu değişti."
+                }
+            }
+        }
+    }
+
+    private fun stopScan() {
+        val sessionId = scanSessionId ?: return
+        scanPhase = ScanPhase.STOPPING
+        scanControlExecutor.execute {
+            val applied = scanController.cancel(sessionId)
+            runOnUiThread {
+                if (!isDestroyed && !applied) {
+                    scanPhase = ScanPhase.PROCESSING
+                    scanMessage = "Tarama durdurulamadı; oturum durumu değişti."
+                }
+            }
+        }
+    }
+
+    private fun resumeScan() {
+        val sessionId = scanSessionId ?: return
+        val sourceId = scanningSourceId ?: return
+        scanPhase = ScanPhase.RESUMING
+        scanExecutionAttached = true
+        executor.execute {
+            val source = runCatching { runtime.repository.find(sourceId) }.getOrNull()
+            val result = if (source == null) {
+                ManualScanResult.Rejected(sessionId, ScanSessionOrchestrator.RejectionReason.SOURCE_NOT_SELECTED)
+            } else {
+                scanController.resume(sessionId, source, ::postScanProgress)
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (result !is ManualScanResult.Paused) {
+                    scanningSourceId = null
+                    scanSessionId = null
+                }
+                scanExecutionAttached = result is ManualScanResult.Paused
+                scanPhase = when (result) {
+                    is ManualScanResult.Completed -> ScanPhase.COMPLETED
+                    is ManualScanResult.Paused -> ScanPhase.PAUSED
+                    is ManualScanResult.Cancelled -> ScanPhase.CANCELLED
+                    else -> ScanPhase.FAILED
+                }
                 scanMessage = scanResultMessage(result)
             }
         }
@@ -1016,6 +1111,7 @@ class MainActivity : ComponentActivity() {
         libraryDetailSongs = emptyList()
         libraryDetailAlbums = emptyList()
         libraryDetailFolderChildren = emptyList()
+        libraryDetailGenreChildren = emptyList()
         updateLibraryBackCallback()
         executor.execute {
             val folderParts = row.key.split('\u001E')
@@ -1023,7 +1119,7 @@ class MainActivity : ComponentActivity() {
                 LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
                 LibraryCollectionType.GENRES -> LibraryTrackFilter.Genre(row.title)
                 LibraryCollectionType.FOLDERS -> if (folderParts.size == 2) {
-                    LibraryTrackFilter.Folder(libraryRepository.loadSafFolder(folderParts[0], folderParts[1])?.uri ?: row.key)
+                    LibraryTrackFilter.SafFolder(folderParts[0], folderParts[1])
                 } else LibraryTrackFilter.Folder(row.key)
                 LibraryCollectionType.ALBUMS -> return@execute
             }
@@ -1041,13 +1137,26 @@ class MainActivity : ComponentActivity() {
             }
             val folderChildren = if (type == LibraryCollectionType.FOLDERS && folderParts.size == 2) {
                 libraryRepository.loadSafFolderChildren(folderParts[0], folderParts[1])
-                    .map { child -> LibraryCollectionRow(folderParts[0] + '\u001E' + child.documentId, child.displayName, child.parentDocumentId, 0) }
+                    .map { child ->
+                        LibraryCollectionRow(
+                            folderParts[0] + '\u001E' + child.documentId,
+                            child.displayName,
+                            child.parentDocumentId,
+                            libraryRepository.countSafFolderDirectTracks(folderParts[0], child.documentId),
+                        )
+                    }
+            } else emptyList()
+            val genreChildren = if (type == LibraryCollectionType.GENRES) {
+                RoomGenreRepository(runtime.database.genreDao()).childGenresOf(row.key).map { child ->
+                    LibraryCollectionRow(child.id, child.displayName, null, child.directTrackCount)
+                }
             } else emptyList()
             runOnUiThread {
                 if (!isDestroyed) {
                     libraryDetailSongs = songs
                     libraryDetailAlbums = albums
                     libraryDetailFolderChildren = folderChildren
+                    libraryDetailGenreChildren = genreChildren
                 }
             }
         }
@@ -1061,7 +1170,9 @@ class MainActivity : ComponentActivity() {
             LibraryCollectionType.ALBUMS -> AlbumGroupingKey.decode(row.key, row.title, row.subtitle.orEmpty()).toFilter()
             LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
             LibraryCollectionType.GENRES -> LibraryTrackFilter.Genre(row.title)
-            LibraryCollectionType.FOLDERS -> LibraryTrackFilter.Folder(row.key)
+            LibraryCollectionType.FOLDERS -> row.key.split('\u001E').takeIf { it.size == 2 }
+                ?.let { LibraryTrackFilter.SafFolder(it[0], it[1]) }
+                ?: LibraryTrackFilter.Folder(row.key)
         }
         showCollections = false
         showLibrary = true
@@ -1176,6 +1287,8 @@ class MainActivity : ComponentActivity() {
                 progress.enrichedCount,
                 progress.metadataFailedCount,
             )
+            scanPhase = progress.phase
+            scanProgress = progress
         }
     }
 
@@ -1209,6 +1322,31 @@ class MainActivity : ComponentActivity() {
             if (isDestroyed) return@runOnUiThread
             sources = updatedSources
             statusMessage = messageRes?.let(::getString)
+        }
+        loadPersistedScanState()
+    }
+
+    private fun loadPersistedScanState() {
+        if (!::executor.isInitialized || !::runtime.isInitialized) return
+        executor.execute {
+            val session = runtime.database.scanDao().findLatestResumableSession()
+            val checkpoint = session?.let { runtime.database.scanDao().findLatestCheckpoint(it.sessionId) }
+            if (session == null || checkpoint == null) return@execute
+            runOnUiThread {
+                if (isDestroyed || scanningSourceId != null) return@runOnUiThread
+                scanningSourceId = checkpoint.sourceId
+                scanSessionId = session.sessionId
+                scanExecutionAttached = false
+                scanPhase = if (session.status == com.theemrock.smoothmedia.catalog.database.entity.ScanSessionStatus.PAUSED) ScanPhase.PAUSED else ScanPhase.PROCESSING
+                scanProgress = ManualScanProgress(
+                    sessionId = session.sessionId,
+                    status = session.status,
+                    phase = scanPhase,
+                    processedCount = checkpoint.processedCount,
+                    discoveredCount = checkpoint.discoveredCount,
+                    errorCount = 0,
+                )
+            }
         }
     }
 }

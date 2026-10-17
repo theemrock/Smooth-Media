@@ -61,7 +61,11 @@ class ManualScanController(
         resolver = TrackIdentityResolver(LogicalMatchPolicy { _, _ -> LogicalMatchAssessment.NoMatch }),
     )
 
-    fun start(source: LibrarySourceEntity, onProgress: (ManualScanProgress) -> Unit = {}): ManualScanResult {
+    fun start(
+        source: LibrarySourceEntity,
+        onProgress: (ManualScanProgress) -> Unit = {},
+        onSessionStarted: (String) -> Unit = {},
+    ): ManualScanResult {
         val session = ScanSessionEntity(
             sessionId = newSessionId(),
             status = ScanSessionStatus.RUNNING,
@@ -69,6 +73,7 @@ class ManualScanController(
             updatedAtEpochMs = nowEpochMs(),
             completedAtEpochMs = null,
         )
+        onSessionStarted(session.sessionId)
         return execute(
             session = session,
             source = source,
@@ -77,9 +82,15 @@ class ManualScanController(
         )
     }
 
-    fun resume(sessionId: String, source: LibrarySourceEntity, onProgress: (ManualScanProgress) -> Unit = {}): ManualScanResult {
+    fun resume(
+        sessionId: String,
+        source: LibrarySourceEntity,
+        onProgress: (ManualScanProgress) -> Unit = {},
+        onSessionStarted: (String) -> Unit = {},
+    ): ManualScanResult {
         val session = state.findSession(sessionId)
             ?: return ManualScanResult.Rejected(sessionId, ScanSessionOrchestrator.RejectionReason.RECOVERY_REJECTED)
+        onSessionStarted(session.sessionId)
         return execute(session, source, resume = true, onProgress = onProgress)
     }
 
@@ -97,6 +108,24 @@ class ManualScanController(
     ): ManualScanResult {
         var enrichedCount = 0
         var metadataFailedCount = 0
+        var phase = if (resume) ScanPhase.RESUMING else ScanPhase.STARTING
+        var timing = ScanTiming()
+        fun emitProgress() {
+            val checkpoint = state.findCheckpoint(session.sessionId, source.sourceId)
+            onProgress(
+                ManualScanProgress(
+                    sessionId = session.sessionId,
+                    status = state.findSession(session.sessionId)?.status ?: ScanSessionStatus.RUNNING,
+                    phase = phase,
+                    processedCount = checkpoint?.processedCount ?: 0,
+                    discoveredCount = checkpoint?.discoveredCount ?: 0,
+                    errorCount = 0,
+                    enrichedCount = enrichedCount,
+                    metadataFailedCount = metadataFailedCount,
+                    timing = timing,
+                ),
+            )
+        }
         val orchestrator = ScanSessionOrchestrator(
             state = state,
             discover = discovery::discover,
@@ -106,11 +135,13 @@ class ManualScanController(
                     ManualScanProgress(
                         sessionId = sessionId,
                         status = state.findSession(sessionId)?.status ?: ScanSessionStatus.RUNNING,
+                        phase = phase,
                         processedCount = checkpoint?.processedCount ?: 0,
                         discoveredCount = checkpoint?.discoveredCount ?: 0,
                         errorCount = 0,
                         enrichedCount = enrichedCount,
                         metadataFailedCount = metadataFailedCount,
+                        timing = timing,
                     ),
                 )
             },
@@ -141,16 +172,26 @@ class ManualScanController(
                     ManualScanProgress(
                         sessionId = sessionId,
                         status = state.findSession(sessionId)?.status ?: ScanSessionStatus.RUNNING,
+                        phase = phase,
                         processedCount = (checkpoint?.processedCount ?: 0) + 1,
                         discoveredCount = checkpoint?.discoveredCount ?: 0,
                         errorCount = 0,
                         enrichedCount = enrichedCount,
                         metadataFailedCount = metadataFailedCount,
+                        timing = timing,
                     ),
                 )
             },
+            onPhaseChanged = { next ->
+                phase = next
+                emitProgress()
+            },
+            onTiming = { next ->
+                timing = next
+            },
             nowEpochMs = nowEpochMs,
         )
+        emitProgress()
         val result = if (resume) {
             orchestrator.resume(session.sessionId, source, nowEpochMs())
         } else {
@@ -162,6 +203,7 @@ class ManualScanController(
             ManualScanProgress(
                 sessionId = session.sessionId,
                 status = storedSession?.status ?: statusFor(result),
+                phase = phase,
                 processedCount = checkpoint?.processedCount ?: 0,
                 discoveredCount = checkpoint?.discoveredCount ?: 0,
                 errorCount = when (result) {
@@ -171,6 +213,7 @@ class ManualScanController(
                 },
                 enrichedCount = enrichedCount,
                 metadataFailedCount = metadataFailedCount,
+                timing = timing,
             ),
         )
         return result.toManualResult(
@@ -225,11 +268,13 @@ class ManualScanController(
 data class ManualScanProgress(
     val sessionId: String,
     val status: ScanSessionStatus,
+    val phase: ScanPhase = ScanPhase.PROCESSING,
     val processedCount: Int,
     val discoveredCount: Int,
     val errorCount: Int,
     val enrichedCount: Int = 0,
     val metadataFailedCount: Int = 0,
+    val timing: ScanTiming = ScanTiming(),
 )
 
 sealed interface ManualScanResult {

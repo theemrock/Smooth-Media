@@ -8,6 +8,7 @@ import com.theemrock.smoothmedia.catalog.database.entity.ScanCheckpointCoverage
 import com.theemrock.smoothmedia.catalog.database.entity.ScanSessionEntity
 import com.theemrock.smoothmedia.catalog.database.entity.ScanSessionStatus
 import com.theemrock.smoothmedia.catalog.database.entity.SourceScanCheckpointEntity
+import com.theemrock.smoothmedia.catalog.scan.ScanLeaseRecoveryPolicy
 
 class RoomScanStateRepository(
     private val database: CatalogDatabase,
@@ -59,20 +60,30 @@ class RoomScanStateRepository(
         processedCount: Int,
         coverage: ScanCheckpointCoverage,
         updatedAtEpochMs: Long,
-    ): Boolean = dao.updateCheckpoint(
-        sessionId,
-        sourceId,
-        continuationToken,
-        discoveredCount,
-        processedCount,
-        coverage,
-        updatedAtEpochMs,
-    ) == 1
+    ): Boolean {
+        var updated = false
+        database.runInTransaction {
+            updated = dao.updateCheckpoint(
+                sessionId,
+                sourceId,
+                continuationToken,
+                discoveredCount,
+                processedCount,
+                coverage,
+                updatedAtEpochMs,
+            ) == 1
+            if (updated) check(dao.touchSession(sessionId, updatedAtEpochMs) == 1)
+        }
+        return updated
+    }
 
     override fun findCheckpoint(
         sessionId: String,
         sourceId: String,
     ): SourceScanCheckpointEntity? = dao.findCheckpoint(sessionId, sourceId)
+
+    override fun heartbeat(sessionId: String, updatedAtEpochMs: Long): Boolean =
+        dao.heartbeat(sessionId, updatedAtEpochMs) == 1
 
     override fun recordCandidate(candidate: ScanCandidateEntity) = dao.insertCandidate(candidate)
 
@@ -101,6 +112,7 @@ class RoomScanStateRepository(
     override fun recoverInterruptedSession(
         sessionId: String,
         updatedAtEpochMs: Long,
+        staleAfterMs: Long,
     ): ScanRecoveryResult {
         lateinit var result: ScanRecoveryResult
         database.runInTransaction {
@@ -112,9 +124,15 @@ class RoomScanStateRepository(
                     result = ScanRecoveryResult.Rejected(ScanRecoveryResult.RejectionReason.CANCELLED_SESSION)
                 session.status == ScanSessionStatus.COMPLETED || session.status == ScanSessionStatus.FAILED ->
                     result = ScanRecoveryResult.Rejected(ScanRecoveryResult.RejectionReason.TERMINAL_SESSION)
-                lease != null ->
+                lease != null && lease.sessionId != sessionId ->
                     result = ScanRecoveryResult.Rejected(ScanRecoveryResult.RejectionReason.LIVE_SESSION)
+                lease != null && !ScanLeaseRecoveryPolicy.isStale(
+                    nowEpochMs = updatedAtEpochMs,
+                    lastProgressAtEpochMs = dao.latestCheckpointUpdatedAt(sessionId) ?: session.updatedAtEpochMs,
+                    staleAfterMs = staleAfterMs,
+                ) -> result = ScanRecoveryResult.Rejected(ScanRecoveryResult.RejectionReason.LIVE_SESSION)
                 else -> {
+                    if (lease != null) check(dao.releaseLease(sessionId) == 1)
                     if (session.status == ScanSessionStatus.RUNNING) {
                         check(
                             dao.updateSessionStatus(
@@ -140,15 +158,9 @@ class RoomScanStateRepository(
 
     override fun completeSession(sessionId: String, completedAtEpochMs: Long) {
         database.runInTransaction {
-            check(
-                dao.updateSessionStatus(
-                    sessionId,
-                    ScanSessionStatus.COMPLETED,
-                    completedAtEpochMs,
-                    completedAtEpochMs,
-                ) == 1,
-            )
-            dao.releaseLease(sessionId)
+            if (dao.completeRunningSessionWithLease(sessionId, completedAtEpochMs) == 1) {
+                dao.releaseLease(sessionId)
+            }
         }
     }
 

@@ -20,6 +20,9 @@ interface ScanDao {
     @Query("SELECT * FROM scan_sessions WHERE session_id = :sessionId")
     fun findSession(sessionId: String): ScanSessionEntity?
 
+    @Query("SELECT * FROM scan_sessions WHERE status IN ('RUNNING', 'PAUSED') ORDER BY updated_at_epoch_ms DESC LIMIT 1")
+    fun findLatestResumableSession(): ScanSessionEntity?
+
     @Query("INSERT INTO active_scan_leases(slot_id, session_id) VALUES(1, :sessionId)")
     fun acquireGlobalLease(sessionId: String)
 
@@ -63,6 +66,12 @@ interface ScanDao {
         """,
     )
     fun findCheckpoint(sessionId: String, sourceId: String): SourceScanCheckpointEntity?
+
+    @Query("SELECT * FROM source_scan_checkpoints WHERE session_id = :sessionId ORDER BY updated_at_epoch_ms DESC LIMIT 1")
+    fun findLatestCheckpoint(sessionId: String): SourceScanCheckpointEntity?
+
+    @Query("SELECT MAX(updated_at_epoch_ms) FROM source_scan_checkpoints WHERE session_id = :sessionId")
+    fun latestCheckpointUpdatedAt(sessionId: String): Long?
 
     @Insert(onConflict = OnConflictStrategy.ABORT)
     fun insertCandidate(candidate: ScanCandidateEntity)
@@ -141,6 +150,39 @@ interface ScanDao {
         updatedAtEpochMs: Long,
         completedAtEpochMs: Long?,
     ): Int
+
+    @Query(
+        """
+        UPDATE scan_sessions
+        SET status = 'COMPLETED',
+            updated_at_epoch_ms = :completedAtEpochMs,
+            completed_at_epoch_ms = :completedAtEpochMs
+        WHERE session_id = :sessionId
+          AND status = 'RUNNING'
+          AND EXISTS(
+              SELECT 1 FROM active_scan_leases
+              WHERE slot_id = 1 AND session_id = :sessionId
+          )
+        """,
+    )
+    fun completeRunningSessionWithLease(sessionId: String, completedAtEpochMs: Long): Int
+
+    @Query("UPDATE scan_sessions SET updated_at_epoch_ms = :updatedAtEpochMs WHERE session_id = :sessionId")
+    fun touchSession(sessionId: String, updatedAtEpochMs: Long): Int
+
+    @Query(
+        """
+        UPDATE scan_sessions
+        SET updated_at_epoch_ms = :updatedAtEpochMs
+        WHERE session_id = :sessionId
+          AND status = 'RUNNING'
+          AND EXISTS(
+              SELECT 1 FROM active_scan_leases
+              WHERE slot_id = 1 AND session_id = :sessionId
+          )
+        """,
+    )
+    fun heartbeat(sessionId: String, updatedAtEpochMs: Long): Int
 
     @Query(
         """

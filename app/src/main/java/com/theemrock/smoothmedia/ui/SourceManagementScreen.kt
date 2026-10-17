@@ -16,7 +16,11 @@ import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -25,12 +29,18 @@ import com.theemrock.smoothmedia.R
 import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceAvailability
 import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
+import com.theemrock.smoothmedia.catalog.scan.ManualScanProgress
+import com.theemrock.smoothmedia.catalog.scan.ScanPhase
 import com.theemrock.smoothmedia.metadata.MetadataBatchProgress
 import com.theemrock.smoothmedia.metadata.MetadataSessionProgress
 import com.theemrock.smoothmedia.metadata.MetadataSessionStatus
 import com.theemrock.smoothmedia.source.SourceRefreshResult
 import com.theemrock.smoothmedia.source.SourceRegistrationResult
 import com.theemrock.smoothmedia.source.SourceRemovalResult
+
+internal fun sourceDisplayName(source: LibrarySourceEntity): String =
+    source.volumeName?.trim()?.takeIf { it.isNotEmpty() }
+        ?: "SAF kaynağı · ${source.sourceId.takeLast(6)}"
 
 @Composable
 fun SourceManagementScreen(
@@ -41,6 +51,12 @@ fun SourceManagementScreen(
     onRemove: (String) -> Unit,
     scanningSourceId: String? = null,
     onScan: (String) -> Unit = {},
+    scanPhase: ScanPhase = ScanPhase.IDLE,
+    scanProgress: ManualScanProgress? = null,
+    scanExecutionAttached: Boolean = false,
+    onPauseScan: () -> Unit = {},
+    onResumeScan: () -> Unit = {},
+    onStopScan: () -> Unit = {},
     onLibrary: () -> Unit = {},
     metadataMissingCount: Int = 0,
     metadataRunning: Boolean = false,
@@ -107,7 +123,18 @@ fun SourceManagementScreen(
         } else {
             LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(sources, key = { it.sourceId }) { source ->
-                    SourceCard(source, scanningSourceId, onRemove, onScan)
+                    SourceCard(
+                        source = source,
+                        scanningSourceId = scanningSourceId,
+                        scanPhase = scanPhase,
+                        scanProgress = scanProgress,
+                        scanExecutionAttached = scanExecutionAttached,
+                        onRemove = onRemove,
+                        onScan = onScan,
+                        onPauseScan = onPauseScan,
+                        onResumeScan = onResumeScan,
+                        onStopScan = onStopScan,
+                    )
                 }
             }
         }
@@ -191,17 +218,33 @@ private fun MetadataSection(
 private fun SourceCard(
     source: LibrarySourceEntity,
     scanningSourceId: String?,
+    scanPhase: ScanPhase,
+    scanProgress: ManualScanProgress?,
+    scanExecutionAttached: Boolean,
     onRemove: (String) -> Unit,
     onScan: (String) -> Unit,
+    onPauseScan: () -> Unit,
+    onResumeScan: () -> Unit,
+    onStopScan: () -> Unit,
 ) {
+    var confirmStop by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val isCurrentScan = scanningSourceId == source.sourceId
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(
-                text = source.rootUri,
+                text = sourceDisplayName(source),
                 maxLines = 2,
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleSmall,
             )
+            if (source.volumeName.isNullOrBlank()) {
+                Text(
+                    text = "Kaynak kimliği: ${source.sourceId.takeLast(6)}",
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
             Text(
                 text = stringResource(selectionLabel(source.selectionState)),
                 color = MaterialTheme.colorScheme.primary,
@@ -211,27 +254,56 @@ private fun SourceCard(
                 text = stringResource(availabilityLabel(source.availability)),
                 style = MaterialTheme.typography.bodySmall,
             )
-            if (source.selectionState == SourceSelectionState.ACTIVE) {
+            if (isCurrentScan) {
+                Text("Aşama: ${scanPhaseLabel(scanPhase)}", style = MaterialTheme.typography.bodySmall)
+                scanProgress?.let {
+                    Text(
+                        "İşlenen ${it.processedCount}/${it.discoveredCount} · eklenen ${it.enrichedCount} · hata ${it.errorCount + it.metadataFailedCount}",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                    Text(
+                        "Discovery ${it.timing.discoveryMs} ms · processing ${it.timing.processingMs} ms · checkpoint ${it.timing.lastCheckpointMs} ms",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
                 Spacer(modifier = Modifier.height(8.dp))
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(
-                        onClick = { onScan(source.sourceId) },
-                        enabled = scanningSourceId == null,
-                    ) {
-                        Text(
-                            if (scanningSourceId == source.sourceId) {
-                                stringResource(R.string.scan_running)
-                            } else {
-                                stringResource(R.string.scan_source)
-                            },
-                        )
+                    when (scanPhase) {
+                        ScanPhase.PAUSED -> Button(onClick = onResumeScan) { Text("Devam Et") }
+                        ScanPhase.PAUSING -> OutlinedButton(onClick = {}, enabled = false) { Text("Duraklatılıyor…") }
+                        ScanPhase.STOPPING -> OutlinedButton(onClick = {}, enabled = false) { Text("Durduruluyor…") }
+                        ScanPhase.COMPLETED, ScanPhase.CANCELLED, ScanPhase.FAILED, ScanPhase.IDLE -> Unit
+                        ScanPhase.PROCESSING -> if (scanExecutionAttached) {
+                            Button(onClick = onPauseScan) { Text("Duraklat") }
+                        } else {
+                            Button(onClick = onResumeScan) { Text("Devam Et") }
+                        }
+                        else -> Button(onClick = onPauseScan) { Text("Duraklat") }
                     }
                     OutlinedButton(
-                        onClick = { onRemove(source.sourceId) },
-                        enabled = scanningSourceId == null,
+                        onClick = { confirmStop = true },
+                        enabled = scanPhase !in setOf(ScanPhase.PAUSING, ScanPhase.STOPPING),
                     ) {
-                        Text(stringResource(R.string.remove_source))
+                        Text("Durdur")
                     }
+                }
+                if (confirmStop) {
+                    AlertDialog(
+                        onDismissRequest = { confirmStop = false },
+                        title = { Text("Taramayı durdur?") },
+                        text = { Text("İşlenmiş katalog kayıtları korunur; devam etmek için daha sonra aynı oturumu sürdürebilirsin.") },
+                        confirmButton = {
+                            TextButton(onClick = { confirmStop = false; onStopScan() }) { Text("Durdur") }
+                        },
+                        dismissButton = {
+                            TextButton(onClick = { confirmStop = false }) { Text("Vazgeç") }
+                        },
+                    )
+                }
+            } else if (source.selectionState == SourceSelectionState.ACTIVE) {
+                Spacer(modifier = Modifier.height(8.dp))
+                Button(onClick = { onScan(source.sourceId) }, enabled = scanningSourceId == null) {
+                    Text(stringResource(R.string.scan_source))
                 }
             } else if (source.persistedPermissionFlags != 0 ||
                 source.permissionState == com.theemrock.smoothmedia.catalog.database.entity.SourcePermissionState.GRANTED
@@ -243,6 +315,20 @@ private fun SourceCard(
             }
         }
     }
+}
+
+private fun scanPhaseLabel(phase: ScanPhase): String = when (phase) {
+    ScanPhase.IDLE -> "Hazır"
+    ScanPhase.STARTING -> "Başlatılıyor"
+    ScanPhase.DISCOVERING -> "Keşfediliyor"
+    ScanPhase.PROCESSING -> "İşleniyor"
+    ScanPhase.PAUSING -> "Duraklatılıyor"
+    ScanPhase.PAUSED -> "Duraklatıldı"
+    ScanPhase.RESUMING -> "Devam ediyor"
+    ScanPhase.STOPPING -> "Durduruluyor"
+    ScanPhase.COMPLETED -> "Tamamlandı"
+    ScanPhase.CANCELLED -> "Durduruldu"
+    ScanPhase.FAILED -> "Hata"
 }
 
 @StringRes

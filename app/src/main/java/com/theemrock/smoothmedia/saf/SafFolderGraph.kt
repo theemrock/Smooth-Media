@@ -9,11 +9,17 @@ data class SafDocument(
 
 /** Provider-safe graph: opaque document IDs are keys only, never filesystem paths. */
 class SafFolderGraph(documents: List<SafDocument>) {
+    private val documents = documents.toList()
     private val byId = documents.associateBy { it.documentId }
     private val children = documents.groupBy { it.parentDocumentId }
 
     fun childrenOf(parentDocumentId: String?): List<SafDocument> =
         children[parentDocumentId].orEmpty().sortedWith(compareByDescending<SafDocument> { it.isDirectory }.thenBy { it.displayName })
+
+    /** Only documents whose parent is absent from this verified graph are roots. */
+    fun rootDocuments(): List<SafDocument> =
+        documents.filter { it.parentDocumentId == null || it.parentDocumentId !in byId }
+            .sortedWith(compareByDescending<SafDocument> { it.isDirectory }.thenBy { it.displayName })
 
     fun parentOf(documentId: String): SafDocument? = byId[documentId]?.parentDocumentId?.let(byId::get)
 

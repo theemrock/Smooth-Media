@@ -10,6 +10,9 @@ data class SelectedTree(
 interface TreePermissionGateway {
     fun takeAndVerify(selection: SelectedTree): TreePermissionTakeResult
 
+    /** Provider display name is presentation-only and never replaces source identity. */
+    fun displayName(rootUri: String): String? = null
+
     fun inspect(rootUri: String): TreePermissionInspection
 
     fun release(rootUri: String, persistedPermissionFlags: Int): TreePermissionReleaseResult

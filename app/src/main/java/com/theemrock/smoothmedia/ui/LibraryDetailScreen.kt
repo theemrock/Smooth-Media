@@ -50,11 +50,13 @@ fun LibraryDetailScreen(
     songs: List<LibrarySong>,
     artistAlbums: List<LibraryCollectionRow> = emptyList(),
     folderChildren: List<LibraryCollectionRow> = emptyList(),
+    genreChildren: List<LibraryCollectionRow> = emptyList(),
     onMenu: () -> Unit,
     onSearch: () -> Unit,
     onDashboard: () -> Unit,
     onAlbumSelected: (LibraryCollectionRow) -> Unit,
     onArtistSelected: (LibraryCollectionRow) -> Unit = {},
+    onGenreSelected: (LibraryCollectionRow) -> Unit = {},
     onFolderSelected: (LibraryCollectionRow) -> Unit = {},
     onSong: (LibrarySong) -> Unit,
     onAddToQueue: (LibrarySong) -> Unit,
@@ -87,7 +89,11 @@ fun LibraryDetailScreen(
         LibraryNavigationBar(onMenu = onMenu, onSearch = onSearch, onDashboard = onDashboard)
         Column(modifier = Modifier.padding(top = 14.dp, bottom = 10.dp)) {
             Text(detailTitle, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("${songs.size} şarkı", color = Color(0xFFAAB9C2), fontSize = 14.sp)
+            if (type == LibraryCollectionType.FOLDERS) {
+                Text("${row.trackCount} doğrudan · ${songs.size} toplam şarkı", color = Color(0xFFAAB9C2), fontSize = 14.sp)
+            } else {
+                Text("${songs.size} şarkı", color = Color(0xFFAAB9C2), fontSize = 14.sp)
+            }
             if (type == LibraryCollectionType.ARTISTS) Text("${albums.size} albüm", color = Color(0xFFAAB9C2), fontSize = 14.sp)
             if (type == LibraryCollectionType.GENRES) Text("${albums.size} albüm · ${artists.size} sanatçı", color = Color(0xFFAAB9C2), fontSize = 14.sp)
             if (type == LibraryCollectionType.FOLDERS && detailPath != null && !detailPath.contains(row.title)) Text(detailPath, color = Color(0xFFAAB9C2), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -135,6 +141,25 @@ fun LibraryDetailScreen(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.clickable { onArtistSelected(artist) }.padding(vertical = 4.dp),
                     )
+                }
+            }
+            Spacer(modifier = Modifier.height(4.dp))
+        }
+        if (type == LibraryCollectionType.GENRES) {
+            DetailSectionTitle("Alt türler")
+            if (genreChildren.isEmpty()) {
+                Text("Tanımlı alt tür bulunmuyor", color = Color(0xFFAAB9C2), fontSize = 13.sp)
+            } else {
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    items(genreChildren, key = { it.key }) { child ->
+                        Text(
+                            "${child.title}${child.trackCount.takeIf { it > 0 }?.let { " · $it" }.orEmpty()}",
+                            color = Color(0xFF19C3E6),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable { onGenreSelected(child) }.padding(vertical = 4.dp),
+                        )
+                    }
                 }
             }
             Spacer(modifier = Modifier.height(4.dp))

@@ -25,8 +25,13 @@ class ScanSessionOrchestrator(
     private val processor: ScanCandidateProcessor? = null,
     private val afterCandidate: (sessionId: String, file: DiscoveredAudioFile, result: CandidateProcessingResult.Completed) -> Unit = { _, _, _ -> },
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
+    private val onPhaseChanged: (ScanPhase) -> Unit = {},
+    private val onTiming: (ScanTiming) -> Unit = {},
 ) {
+    private var timing = ScanTiming()
+
     fun start(session: ScanSessionEntity, source: LibrarySourceEntity): Result {
+        onPhaseChanged(ScanPhase.STARTING)
         val sourceRejection = validateSource(source)
         if (sourceRejection != null) return Result.Rejected(sourceRejection)
 
@@ -38,6 +43,7 @@ class ScanSessionOrchestrator(
     }
 
     fun resume(sessionId: String, source: LibrarySourceEntity, updatedAtEpochMs: Long): Result {
+        onPhaseChanged(ScanPhase.RESUMING)
         val sourceRejection = validateSource(source)
         if (sourceRejection != null) return Result.Rejected(sourceRejection)
         val checkpoint = state.findCheckpoint(sessionId, source.sourceId)
@@ -53,37 +59,70 @@ class ScanSessionOrchestrator(
         return execute(sessionId, source, checkpoint)
     }
 
-    fun pause(sessionId: String, updatedAtEpochMs: Long): Result = lifecycleResult(
-        state.pauseSession(sessionId, updatedAtEpochMs),
-    )
+    fun pause(sessionId: String, updatedAtEpochMs: Long): Result {
+        onPhaseChanged(ScanPhase.PAUSING)
+        return lifecycleResult(state.pauseSession(sessionId, updatedAtEpochMs))
+    }
 
-    fun cancel(sessionId: String, updatedAtEpochMs: Long): Result = lifecycleResult(
-        state.cancelSession(sessionId, updatedAtEpochMs),
-    )
+    fun cancel(sessionId: String, updatedAtEpochMs: Long): Result {
+        onPhaseChanged(ScanPhase.STOPPING)
+        return lifecycleResult(state.cancelSession(sessionId, updatedAtEpochMs))
+    }
+
+    private fun lifecycleResult(result: ScanLifecycleResult): Result = when (result) {
+        is ScanLifecycleResult.Applied -> when (result.status) {
+            ScanSessionStatus.PAUSED -> {
+                onPhaseChanged(ScanPhase.PAUSED)
+                Result.Paused(result.sessionId, 0)
+            }
+            ScanSessionStatus.CANCELLED -> {
+                onPhaseChanged(ScanPhase.CANCELLED)
+                Result.Cancelled(result.sessionId, 0)
+            }
+            else -> Result.Rejected(RejectionReason.LIFECYCLE_REJECTED)
+        }
+        is ScanLifecycleResult.Rejected -> Result.Rejected(RejectionReason.LIFECYCLE_REJECTED)
+    }
 
     private fun execute(
         sessionId: String,
         source: LibrarySourceEntity,
         checkpoint: SourceScanCheckpointEntity? = null,
     ): Result {
+        val discoveryStartedAt = System.nanoTime()
+        state.heartbeat(sessionId, nowEpochMs())
+        onPhaseChanged(ScanPhase.DISCOVERING)
         val discovery = discover(source)
+        val discoveryMs = (System.nanoTime() - discoveryStartedAt) / 1_000_000L
+        timing = timing.copy(discoveryMs = discoveryMs)
+        onTiming(timing)
         if (discovery !is AudioDiscoveryResult.Completed) {
+            onPhaseChanged(ScanPhase.FAILED)
             state.failSession(sessionId, nowEpochMs())
             return Result.DiscoveryFailed(discovery)
         }
+        onPhaseChanged(ScanPhase.PROCESSING)
 
         var processedCount = checkpoint?.processedCount ?: 0
         var newlyRecorded = 0
         var alreadyRecorded = 0
         discovery.files.forEach { file ->
+            state.heartbeat(sessionId, nowEpochMs())
             beforeCandidate(sessionId, file)
             when (state.findSession(sessionId)?.status) {
-                ScanSessionStatus.PAUSED -> return Result.Paused(sessionId, processedCount)
-                ScanSessionStatus.CANCELLED -> return Result.Cancelled(sessionId, processedCount)
+                ScanSessionStatus.PAUSED -> {
+                    onPhaseChanged(ScanPhase.PAUSED)
+                    return Result.Paused(sessionId, processedCount)
+                }
+                ScanSessionStatus.CANCELLED -> {
+                    onPhaseChanged(ScanPhase.CANCELLED)
+                    return Result.Cancelled(sessionId, processedCount)
+                }
                 ScanSessionStatus.RUNNING -> Unit
                 else -> return Result.Rejected(RejectionReason.SESSION_NOT_RUNNING)
             }
 
+            val candidateStartedAt = System.nanoTime()
             processedCount++
             val existing = state.findCandidate(sessionId, source.sourceId, file.documentId)
             if (existing == null) {
@@ -105,110 +144,70 @@ class ScanSessionOrchestrator(
             if (processor != null && (existing?.state != ScanCandidateState.COMPLETED || processor.reprocessCompletedCandidates())) {
                 val reprocessingCompleted = existing?.state == ScanCandidateState.COMPLETED
                 if (!reprocessingCompleted) {
-                    state.updateCandidateState(
-                        sessionId,
-                        source.sourceId,
-                        file.documentId,
-                        ScanCandidateState.PROCESSING,
-                        null,
-                        nowEpochMs(),
-                    )
+                    state.updateCandidateState(sessionId, source.sourceId, file.documentId, ScanCandidateState.PROCESSING, null, nowEpochMs())
                 }
-                when (val processed = if (reprocessingCompleted) {
-                    processor.processCompletedCandidate(sessionId, file, existing!!)
-                } else {
-                    processor.process(sessionId, file)
-                }) {
+                when (val processed = if (reprocessingCompleted) processor.processCompletedCandidate(sessionId, file, existing!!) else processor.process(sessionId, file)) {
                     is CandidateProcessingResult.Completed -> {
-                        if (!reprocessingCompleted) {
-                            state.updateCandidateState(
-                                sessionId,
-                                source.sourceId,
-                                file.documentId,
-                                ScanCandidateState.COMPLETED,
-                                processed.locationId,
-                                nowEpochMs(),
-                            )
-                        }
+                        if (!reprocessingCompleted) state.updateCandidateState(sessionId, source.sourceId, file.documentId, ScanCandidateState.COMPLETED, processed.locationId, nowEpochMs())
                         completedResult = processed
                     }
                     is CandidateProcessingResult.Failed -> {
-                        if (!reprocessingCompleted) {
-                            state.updateCandidateState(
-                                sessionId,
-                                source.sourceId,
-                                file.documentId,
-                                ScanCandidateState.DISCOVERED,
-                                null,
-                                nowEpochMs(),
-                            )
-                        }
+                        if (!reprocessingCompleted) state.updateCandidateState(sessionId, source.sourceId, file.documentId, ScanCandidateState.DISCOVERED, null, nowEpochMs())
+                        onPhaseChanged(ScanPhase.FAILED)
                         state.failSession(sessionId, nowEpochMs())
                         return Result.CandidateFailed(sessionId, file.documentId, processed.reason)
                     }
                     CandidateProcessingResult.Paused -> {
-                        if (!reprocessingCompleted) {
-                            state.updateCandidateState(
-                                sessionId,
-                                source.sourceId,
-                                file.documentId,
-                                ScanCandidateState.DISCOVERED,
-                                null,
-                                nowEpochMs(),
-                            )
-                        }
+                        if (!reprocessingCompleted) state.updateCandidateState(sessionId, source.sourceId, file.documentId, ScanCandidateState.DISCOVERED, null, nowEpochMs())
+                        onPhaseChanged(ScanPhase.PAUSED)
                         return Result.Paused(sessionId, processedCount)
                     }
                     CandidateProcessingResult.Cancelled -> {
-                        if (!reprocessingCompleted) {
-                            state.updateCandidateState(
-                                sessionId,
-                                source.sourceId,
-                                file.documentId,
-                                ScanCandidateState.DISCOVERED,
-                                null,
-                                nowEpochMs(),
-                            )
-                        }
+                        if (!reprocessingCompleted) state.updateCandidateState(sessionId, source.sourceId, file.documentId, ScanCandidateState.DISCOVERED, null, nowEpochMs())
+                        onPhaseChanged(ScanPhase.CANCELLED)
                         return Result.Cancelled(sessionId, processedCount)
                     }
                 }
             }
-            state.updateCheckpoint(
-                sessionId = sessionId,
-                sourceId = source.sourceId,
-                continuationToken = file.documentId,
-                discoveredCount = discovery.files.size,
-                processedCount = processedCount,
-                coverage = ScanCheckpointCoverage.PARTIAL,
-                updatedAtEpochMs = nowEpochMs(),
+            val checkpointStartedAt = System.nanoTime()
+            state.updateCheckpoint(sessionId, source.sourceId, file.documentId, discovery.files.size, processedCount, ScanCheckpointCoverage.PARTIAL, nowEpochMs())
+            val checkpointMs = (System.nanoTime() - checkpointStartedAt) / 1_000_000L
+            timing = timing.copy(
+                processingMs = timing.processingMs + (System.nanoTime() - candidateStartedAt) / 1_000_000L,
+                lastCheckpointMs = checkpointMs,
             )
+            onTiming(timing)
             completedResult?.let { afterCandidate(sessionId, file, it) }
         }
-        state.updateCheckpoint(
-            sessionId = sessionId,
-            sourceId = source.sourceId,
-            continuationToken = null,
-            discoveredCount = discovery.files.size,
-            processedCount = processedCount,
-            coverage = if (discovery.skippedUnreadableCount == 0) {
-                ScanCheckpointCoverage.COMPLETE
-            } else {
-                ScanCheckpointCoverage.PARTIAL
-            },
-            updatedAtEpochMs = nowEpochMs(),
-        )
-        state.completeSession(sessionId, nowEpochMs())
-        return Result.Completed(sessionId, newlyRecorded, alreadyRecorded, discovery.skippedUnreadableCount)
-    }
-
-    private fun lifecycleResult(result: ScanLifecycleResult): Result = when (result) {
-        is ScanLifecycleResult.Applied -> when (result.status) {
-            ScanSessionStatus.PAUSED -> Result.Paused(result.sessionId, 0)
-            ScanSessionStatus.CANCELLED -> Result.Cancelled(result.sessionId, 0)
-            else -> Result.Rejected(RejectionReason.LIFECYCLE_REJECTED)
+        when (state.findSession(sessionId)?.status) {
+            ScanSessionStatus.PAUSED -> {
+                onPhaseChanged(ScanPhase.PAUSED)
+                return Result.Paused(sessionId, processedCount)
+            }
+            ScanSessionStatus.CANCELLED -> {
+                onPhaseChanged(ScanPhase.CANCELLED)
+                return Result.Cancelled(sessionId, processedCount)
+            }
+            ScanSessionStatus.RUNNING -> Unit
+            else -> return Result.Rejected(RejectionReason.SESSION_NOT_RUNNING)
         }
-        is ScanLifecycleResult.Rejected -> Result.Rejected(RejectionReason.LIFECYCLE_REJECTED)
+        state.updateCheckpoint(sessionId, source.sourceId, null, discovery.files.size, processedCount, if (discovery.skippedUnreadableCount == 0) ScanCheckpointCoverage.COMPLETE else ScanCheckpointCoverage.PARTIAL, nowEpochMs())
+        state.completeSession(sessionId, nowEpochMs())
+        return when (state.findSession(sessionId)?.status) {
+            ScanSessionStatus.COMPLETED -> {
+                onPhaseChanged(ScanPhase.COMPLETED)
+                Result.Completed(sessionId, newlyRecorded, alreadyRecorded, discovery.skippedUnreadableCount)
+            }
+            ScanSessionStatus.PAUSED -> {
+                onPhaseChanged(ScanPhase.PAUSED)
+                Result.Paused(sessionId, processedCount)
+            }
+            ScanSessionStatus.CANCELLED -> {
+                onPhaseChanged(ScanPhase.CANCELLED)
+                Result.Cancelled(sessionId, processedCount)
+            }
+            else -> Result.Rejected(RejectionReason.SESSION_NOT_RUNNING)
+        }
     }
 
     private fun validateSource(source: LibrarySourceEntity): RejectionReason? = when {
@@ -265,3 +264,23 @@ class ScanSessionOrchestrator(
         RECOVERY_REJECTED,
     }
 }
+
+enum class ScanPhase {
+    IDLE,
+    STARTING,
+    DISCOVERING,
+    PROCESSING,
+    PAUSING,
+    PAUSED,
+    RESUMING,
+    STOPPING,
+    COMPLETED,
+    CANCELLED,
+    FAILED,
+}
+
+data class ScanTiming(
+    val discoveryMs: Long = 0,
+    val processingMs: Long = 0,
+    val lastCheckpointMs: Long = 0,
+)

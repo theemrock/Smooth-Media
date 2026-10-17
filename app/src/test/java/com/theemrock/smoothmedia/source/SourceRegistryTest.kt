@@ -29,6 +29,16 @@ class SourceRegistryTest {
     }
 
     @Test
+    fun providerDisplayName_isStoredForPresentationOnly() {
+        val repository = FakeRepository()
+        val gateway = FakePermissionGateway(displayNameValue = "Music")
+
+        assertTrue(SourceRegistry(repository, gateway).register(selection(), 1_000) is SourceRegistrationResult.Added)
+        assertEquals("Music", repository.listAll().single().volumeName)
+        assertEquals(selection().rootUri, repository.listAll().single().rootUri)
+    }
+
+    @Test
     fun removedTreeSelection_reactivatesSameSourceAndPreservesCreationTime() {
         val repository = FakeRepository()
         val registry = SourceRegistry(repository, FakePermissionGateway())
@@ -204,6 +214,7 @@ class SourceRegistryTest {
 private class FakePermissionGateway(
     private val takeResult: TreePermissionTakeResult = TreePermissionTakeResult.Granted(1),
     var releaseResult: TreePermissionReleaseResult = TreePermissionReleaseResult.Released,
+    private val displayNameValue: String? = null,
 ) : TreePermissionGateway {
     var takeCount = 0
     var inspectResult: TreePermissionInspection = TreePermissionInspection.Available(1)
@@ -214,6 +225,8 @@ private class FakePermissionGateway(
         takeCount += 1
         return takeResult
     }
+
+    override fun displayName(rootUri: String): String? = displayNameValue
 
     override fun inspect(rootUri: String): TreePermissionInspection = inspectResult
 

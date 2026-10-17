@@ -4,6 +4,7 @@ import com.theemrock.smoothmedia.catalog.database.entity.ScanCandidateEntity
 import com.theemrock.smoothmedia.catalog.database.entity.ScanCheckpointCoverage
 import com.theemrock.smoothmedia.catalog.database.entity.ScanSessionEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceScanCheckpointEntity
+import com.theemrock.smoothmedia.catalog.scan.ScanLeaseRecoveryPolicy
 
 interface ScanStateRepository {
     fun startSession(
@@ -30,6 +31,9 @@ interface ScanStateRepository {
 
     fun findCheckpoint(sessionId: String, sourceId: String): SourceScanCheckpointEntity?
 
+    /** Refreshes a live session lease without changing checkpoint or catalog data. */
+    fun heartbeat(sessionId: String, updatedAtEpochMs: Long): Boolean = true
+
     fun recordCandidate(candidate: ScanCandidateEntity)
 
     fun findCandidate(
@@ -47,7 +51,11 @@ interface ScanStateRepository {
         updatedAtEpochMs: Long,
     ): Boolean
 
-    fun recoverInterruptedSession(sessionId: String, updatedAtEpochMs: Long): ScanRecoveryResult
+    fun recoverInterruptedSession(
+        sessionId: String,
+        updatedAtEpochMs: Long,
+        staleAfterMs: Long = ScanLeaseRecoveryPolicy.DEFAULT_STALE_AFTER_MS,
+    ): ScanRecoveryResult
 
     fun completeSession(sessionId: String, completedAtEpochMs: Long)
 

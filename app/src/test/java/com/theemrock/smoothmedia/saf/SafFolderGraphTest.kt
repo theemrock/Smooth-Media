@@ -21,4 +21,17 @@ class SafFolderGraphTest {
         assertNotEquals(graph.stableKeyOf("folder-a"), graph.stableKeyOf("folder-b"))
         assertEquals("Music/Live/track.mp3", graph.pathOf("song-a"))
     }
+
+    @Test
+    fun `roots exclude nested documents but keep documents whose provider parent is not persisted`() {
+        val graph = SafFolderGraph(
+            listOf(
+                SafDocument("root", null, "Music", true),
+                SafDocument("nested", "root", "Albums", true),
+                SafDocument("provider-root-child", "opaque-provider-root", "Singles", true),
+            ),
+        )
+
+        assertEquals(listOf("root", "provider-root-child"), graph.rootDocuments().map { it.documentId })
+    }
 }

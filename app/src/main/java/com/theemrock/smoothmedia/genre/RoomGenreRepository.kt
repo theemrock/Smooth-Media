@@ -6,6 +6,12 @@ import com.theemrock.smoothmedia.catalog.database.entity.GenreNodeEntity
 
 /** Persists only validated, user/metadata-backed genre relationships. */
 class RoomGenreRepository(private val dao: GenreDao) {
+    data class ChildGenre(
+        val id: String,
+        val displayName: String,
+        val directTrackCount: Int,
+    )
+
     fun saveHierarchy(nodes: List<GenreNode>): GenreBuildResult {
         val result = GenreHierarchy.build(nodes)
         if (result !is GenreBuildResult.Valid) return result
@@ -20,6 +26,9 @@ class RoomGenreRepository(private val dao: GenreDao) {
     }
 
     fun childrenOf(parentId: String): List<String> = dao.childrenOf(parentId).map { it.childGenreId }
+    fun childGenresOf(parentId: String): List<ChildGenre> = dao.childNodesOf(parentId).map { node ->
+        ChildGenre(node.genreId, node.displayName, dao.trackIdsForGenre(node.genreId).size)
+    }
     fun parentsOf(childId: String): List<String> = dao.parentsOf(childId).map { it.parentGenreId }
     fun trackIdsForGenre(genreId: String): List<String> = dao.trackIdsForGenre(genreId)
 }

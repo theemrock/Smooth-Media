@@ -172,6 +172,26 @@ class CatalogMigrationTest {
         }
     }
 
+    @Test
+    fun versionSixToSeven_addsEmptyGenreDagWithoutChangingCatalog() {
+        migrationHelper.createDatabase(databaseName, 6).apply {
+            insertVersionTwoFixture(this)
+            execSQL("INSERT INTO saf_documents VALUES ('source-1','root','content://provider/tree/music',NULL,'Music',1,1,2000)")
+            close()
+        }
+
+        val migrated = migrationHelper.runMigrationsAndValidate(databaseName, 7, true, *CatalogMigrations.ALL)
+        try {
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM tracks"))
+            assertEquals(0, migrated.singleInt("SELECT COUNT(*) FROM genre_nodes"))
+            assertEquals(0, migrated.singleInt("SELECT COUNT(*) FROM genre_edges"))
+            assertEquals(0, migrated.singleInt("SELECT COUNT(*) FROM track_genre_assignments"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM saf_documents"))
+        } finally {
+            migrated.close()
+        }
+    }
+
     private fun insertVersionOneFixture(database: SupportSQLiteDatabase) {
         database.execSQL("INSERT INTO tracks VALUES ('track-1', 'ACTIVE', 1000, 1000)")
         database.execSQL(

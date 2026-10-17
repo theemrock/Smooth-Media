@@ -17,6 +17,7 @@ import com.theemrock.smoothmedia.catalog.database.entity.TrackEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackLocationEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackMetadataEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackMetadataOverrideEntity
+import com.theemrock.smoothmedia.catalog.database.entity.SafDocumentEntity
 import com.theemrock.smoothmedia.catalog.identity.AudioFormat
 import com.theemrock.smoothmedia.catalog.model.LocationAvailability
 import org.junit.After
@@ -127,6 +128,33 @@ class RoomLibraryRepositoryTest {
     }
 
     @Test
+    fun safFolderFilter_usesGraphDescendants_andIgnoresUnboundFiles() {
+        seedSource()
+        database.safDocumentDao().upsert(safDocument("root", null, "Music", true))
+        database.safDocumentDao().upsert(safDocument("live", "root", "Live", true))
+        database.safDocumentDao().upsert(safDocument("track-file-1", "live", "01.mp3", false))
+        database.safDocumentDao().upsert(safDocument("track-file-2", "live", "02.flac", false))
+        database.safDocumentDao().upsert(safDocument("notes", "live", "notes.txt", false))
+
+        seedTrack("track-1")
+        seedTrack("track-2")
+        seedLocation("location-1", "track-1", LocationAvailability.AVAILABLE, "content://provider/document/track-file-1")
+        seedLocation("location-2", "track-2", LocationAvailability.AVAILABLE, "content://provider/document/track-file-2")
+        database.locatorBindingDao().insert(LocatorBindingEntity("content://provider/document/track-file-1", "location-1", "source-1", 1))
+        database.locatorBindingDao().insert(LocatorBindingEntity("content://provider/document/track-file-2", "location-2", "source-1", 1))
+        database.trackMetadataDao().upsert(metadata("track-1"))
+        database.trackMetadataDao().upsert(metadata("track-2"))
+
+        val repository = RoomLibraryRepository(database.libraryDao(), database.safDocumentDao())
+        val page = repository.loadFilteredPage(LibraryTrackFilter.SafFolder("source-1", "root"), 0, 10)
+
+        assertEquals(listOf("track-1", "track-2"), page.songs.map { it.trackId })
+        assertEquals(2, database.safDocumentDao().countRecursiveCatalogTracks("source-1", "root"))
+        assertEquals(0, database.safDocumentDao().countDirectCatalogTracks("source-1", "root"))
+        assertEquals(2, database.safDocumentDao().countDirectCatalogTracks("source-1", "live"))
+    }
+
+    @Test
     fun repository_artistStats_deduplicateTrackLocations_andCountFormatsPerTrack() {
         seedSource()
         seedTrack("track-1")
@@ -205,6 +233,17 @@ class RoomLibraryRepositoryTest {
         normalizedYearStatus = "MISSING",
         normalizedDurationMs = 1000L,
         normalizedDurationMsStatus = "AVAILABLE",
+        updatedAtEpochMs = 1,
+    )
+
+    private fun safDocument(id: String, parent: String?, name: String, directory: Boolean) = SafDocumentEntity(
+        sourceId = "source-1",
+        documentId = id,
+        uri = "content://provider/document/$id",
+        parentDocumentId = parent,
+        displayName = name,
+        isDirectory = directory,
+        available = true,
         updatedAtEpochMs = 1,
     )
 

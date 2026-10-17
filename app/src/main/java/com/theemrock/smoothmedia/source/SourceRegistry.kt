@@ -46,7 +46,7 @@ class SourceRegistry(
             sourceId = identity.sourceId,
             sourceType = LibrarySourceType.SAF_TREE,
             rootUri = selection.rootUri,
-            volumeName = null,
+            volumeName = permissionGateway.displayName(selection.rootUri),
             persistedPermissionFlags = persistedFlags,
             permissionState = SourcePermissionState.GRANTED,
             availability = availability,
