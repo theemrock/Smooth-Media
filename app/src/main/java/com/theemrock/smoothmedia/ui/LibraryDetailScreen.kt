@@ -54,6 +54,7 @@ fun LibraryDetailScreen(
     onMenu: () -> Unit,
     onSearch: () -> Unit,
     onDashboard: () -> Unit,
+    onSettings: () -> Unit = {},
     onAlbumSelected: (LibraryCollectionRow) -> Unit,
     onArtistSelected: (LibraryCollectionRow) -> Unit = {},
     onGenreSelected: (LibraryCollectionRow) -> Unit = {},
@@ -86,7 +87,7 @@ fun LibraryDetailScreen(
     val albumListState = rememberLazyListState()
     val songListState = rememberLazyListState()
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
-        LibraryNavigationBar(onMenu = onMenu, onSearch = onSearch, onDashboard = onDashboard)
+        LibraryNavigationBar(onMenu = onMenu, onSearch = onSearch, onDashboard = onDashboard, onSettings = onSettings)
         Column(modifier = Modifier.padding(top = 14.dp, bottom = 10.dp)) {
             Text(detailTitle, color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)
             if (type == LibraryCollectionType.FOLDERS) {

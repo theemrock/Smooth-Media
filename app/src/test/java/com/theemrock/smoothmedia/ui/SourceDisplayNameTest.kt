@@ -20,7 +20,7 @@ class SourceDisplayNameTest {
     @Test
     fun `missing provider name uses readable identity fallback`() {
         val source = source(volumeName = null)
-        assertEquals("SAF kaynağı · ce-123", sourceDisplayName(source))
+        assertEquals("Müzik kaynağı", sourceDisplayName(source))
         assertFalse(sourceDisplayName(source).contains("content://"))
     }
 

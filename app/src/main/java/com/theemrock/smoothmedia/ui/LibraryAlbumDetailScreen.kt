@@ -59,6 +59,7 @@ fun LibraryAlbumDetailScreen(
     onMenu: () -> Unit,
     onSearch: () -> Unit,
     onDashboard: () -> Unit,
+    onSettings: () -> Unit = {},
     onPlayAlbum: () -> Unit = {},
     onSong: (LibrarySong) -> Unit,
     onAddToQueue: (LibrarySong) -> Unit,
@@ -78,7 +79,7 @@ fun LibraryAlbumDetailScreen(
             .fillMaxSize()
             .background(SmoothMediaColors.Background),
     ) {
-        LibraryNavigationBar(onMenu = onMenu, onSearch = onSearch, onDashboard = onDashboard)
+        LibraryNavigationBar(onMenu = onMenu, onSearch = onSearch, onDashboard = onDashboard, onSettings = onSettings)
         LazyColumn(
             modifier = Modifier.weight(1f),
             contentPadding = PaddingValues(start = 16.dp, end = 16.dp, bottom = 12.dp),

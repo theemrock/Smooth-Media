@@ -80,6 +80,8 @@ import com.theemrock.smoothmedia.source.TreePickerIntentFactory
 import com.theemrock.smoothmedia.source.selectRefreshSummary
 import com.theemrock.smoothmedia.ui.DeviceOrientationPolicy
 import com.theemrock.smoothmedia.ui.SourceManagementScreen
+import com.theemrock.smoothmedia.ui.SettingsScreen
+import com.theemrock.smoothmedia.ui.LibraryManagementScreen
 import com.theemrock.smoothmedia.ui.LibrarySearchScreen
 import com.theemrock.smoothmedia.ui.NowPlayingScreen
 import com.theemrock.smoothmedia.ui.EqualizerScreen
@@ -126,6 +128,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var metadataCoordinator: MetadataMissingTrackPageCoordinator
     private lateinit var metadataSessionCoordinator: MetadataContinuousSessionCoordinator
     private var sources by mutableStateOf<List<LibrarySourceEntity>>(emptyList())
+    private var sourceTrackCounts by mutableStateOf<Map<String, Int>>(emptyMap())
     private var statusMessage by mutableStateOf<String?>(null)
     private var scanMessage by mutableStateOf<String?>(null)
     private var scanningSourceId by mutableStateOf<String?>(null)
@@ -143,6 +146,9 @@ class MainActivity : ComponentActivity() {
     private var showDashboard by mutableStateOf(true)
     private var showLibrary by mutableStateOf(false)
     private var showCollections by mutableStateOf(false)
+    private var showSettings by mutableStateOf(false)
+    private var showLibraryManagement by mutableStateOf(false)
+    private var showSourceManagement by mutableStateOf(false)
     private var showAlbumDetail by mutableStateOf(false)
     private var showLibraryDetail by mutableStateOf(false)
     private var showSearch by mutableStateOf(false)
@@ -242,6 +248,18 @@ class MainActivity : ComponentActivity() {
         )
         libraryBackCallback = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (showSourceManagement) {
+                    openLibraryManagement()
+                    return
+                }
+                if (showLibraryManagement) {
+                    openSettings()
+                    return
+                }
+                if (showSettings) {
+                    openDashboard()
+                    return
+                }
                 if (showAlbumDetail) {
                     navigateBackFromAlbumDetail()
                     return
@@ -465,6 +483,7 @@ class MainActivity : ComponentActivity() {
                             onMenu = {},
                             onSearch = { showSearch = true },
                             onDashboard = ::openDashboard,
+                            onSettings = ::openSettings,
                             onPlayAlbum = {
                                 albumDetailData?.songs?.firstOrNull()?.let { first ->
                                     playSong(first, albumDetailData!!.songs)
@@ -492,6 +511,7 @@ class MainActivity : ComponentActivity() {
                             onMenu = {},
                             onSearch = { showSearch = true },
                             onDashboard = ::openDashboard,
+                            onSettings = ::openSettings,
                             onAlbumSelected = ::openAlbumDetail,
                             onArtistSelected = { artist -> openLibraryDetail(LibraryCollectionType.ARTISTS, artist) },
                             onGenreSelected = { genre -> openLibraryDetail(LibraryCollectionType.GENRES, genre) },
@@ -535,6 +555,7 @@ class MainActivity : ComponentActivity() {
                             onSearch = { showSearch = true },
                             onMenu = {},
                             onDashboard = ::openDashboard,
+                            onSettings = ::openSettings,
                             artistAlbumPreviews = artistAlbumPreviews,
                             genreArtworkPreviews = genreArtworkPreviews,
                             artworkResolver = artworkResolver,
@@ -558,6 +579,7 @@ class MainActivity : ComponentActivity() {
                                 },
                                 onSearch = { showSearch = true },
                                 onSources = ::openSources,
+                                onSettings = ::openSettings,
                                 onSong = { song -> playSong(song) },
                                 onAddToQueue = ::addToQueue,
                                 onPlayNext = ::playNextSong,
@@ -592,14 +614,16 @@ class MainActivity : ComponentActivity() {
                             onPlayNext = ::playNextSong,
                             onMenu = {},
                             onDashboard = ::openDashboard,
+                            onSettings = ::openSettings,
                             artworkResolver = artworkResolver,
                             initialScrollIndex = libraryViewModel.scrollIndex,
                             initialScrollOffset = libraryViewModel.scrollOffset,
                             onScrollPositionChanged = libraryViewModel::saveScrollPosition,
                         )
-                    } else {
+                    } else if (showSourceManagement) {
                         SourceManagementScreen(
                             sources = sources,
+                            catalogTrackCounts = sourceTrackCounts,
                             statusMessage = listOfNotNull(statusMessage, scanMessage).joinToString("\n").ifBlank { null },
                             scanningSourceId = scanningSourceId,
                             scanPhase = scanPhase,
@@ -615,6 +639,8 @@ class MainActivity : ComponentActivity() {
                             onLibrary = {
                                 showAllSongs()
                             },
+                            onMenu = ::openSettings,
+                            onHome = ::openDashboard,
                             metadataMissingCount = metadataMissingCount,
                             metadataRunning = metadataRunning,
                             metadataProgress = metadataProgress,
@@ -626,6 +652,18 @@ class MainActivity : ComponentActivity() {
                             onMetadataSessionStart = { startMetadataSession() },
                             onMetadataSessionStop = { stopMetadataSession() },
                             showStandaloneMetadataControls = false,
+                        )
+                    } else if (showLibraryManagement) {
+                        LibraryManagementScreen(
+                            onMenu = ::openSettings,
+                            onHome = ::openDashboard,
+                            onMusicSources = ::openSources,
+                        )
+                    } else if (showSettings) {
+                        SettingsScreen(
+                            onMenu = ::openSettings,
+                            onHome = ::openDashboard,
+                            onLibraryManagement = ::openLibraryManagement,
                         )
                     }
                     }
@@ -1218,6 +1256,35 @@ class MainActivity : ComponentActivity() {
         showAlbumDetail = false
         showLibraryDetail = false
         showSearch = false
+        showSettings = false
+        showLibraryManagement = false
+        showSourceManagement = true
+        updateLibraryBackCallback()
+    }
+
+    private fun openSettings() {
+        showDashboard = false
+        showLibrary = false
+        showCollections = false
+        showAlbumDetail = false
+        showLibraryDetail = false
+        showSearch = false
+        showSourceManagement = false
+        showLibraryManagement = false
+        showSettings = true
+        updateLibraryBackCallback()
+    }
+
+    private fun openLibraryManagement() {
+        showDashboard = false
+        showLibrary = false
+        showCollections = false
+        showAlbumDetail = false
+        showLibraryDetail = false
+        showSearch = false
+        showSourceManagement = false
+        showSettings = true
+        showLibraryManagement = true
         updateLibraryBackCallback()
     }
 
@@ -1230,6 +1297,9 @@ class MainActivity : ComponentActivity() {
         showLibraryDetail = false
         albumDetailData = null
         showSearch = false
+        showSettings = false
+        showLibraryManagement = false
+        showSourceManagement = false
         showNowPlaying = false
         showLyrics = false
         showEqualizer = false
@@ -1323,7 +1393,20 @@ class MainActivity : ComponentActivity() {
             sources = updatedSources
             statusMessage = messageRes?.let(::getString)
         }
+        loadSourceTrackCounts(updatedSources)
         loadPersistedScanState()
+    }
+
+    private fun loadSourceTrackCounts(sourceSnapshot: List<LibrarySourceEntity> = sources) {
+        if (!::executor.isInitialized || !::runtime.isInitialized) return
+        executor.execute {
+            val counts = sourceSnapshot.associate { source ->
+                source.sourceId to runtime.database.libraryDao().countActiveTracksForSource(source.sourceId)
+            }
+            runOnUiThread {
+                if (!isDestroyed) sourceTrackCounts = counts
+            }
+        }
     }
 
     private fun loadPersistedScanState() {

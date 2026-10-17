@@ -79,6 +79,7 @@ fun LibraryCollectionScreen(
     onSearch: () -> Unit = {},
     onMenu: () -> Unit = {},
     onDashboard: () -> Unit = {},
+    onSettings: () -> Unit = {},
     artistAlbumPreviews: Map<String, List<LibraryArtistAlbumPreview>> = emptyMap(),
     genreArtworkPreviews: Map<String, List<LibraryGenreArtworkPreview>> = emptyMap(),
     artworkResolver: AndroidArtworkResolver? = null,
@@ -92,6 +93,7 @@ fun LibraryCollectionScreen(
                 onSongs = onSongs,
                 onCollection = onCollection,
                 onSources = onSources,
+                onSettings = onSettings,
             )
             CollectionHeader(state.type, state.totalCollections)
             LibrarySectionTabs(

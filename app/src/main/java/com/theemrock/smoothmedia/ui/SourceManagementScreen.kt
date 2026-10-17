@@ -1,6 +1,7 @@
 package com.theemrock.smoothmedia.ui
 
 import androidx.annotation.StringRes
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -18,16 +19,19 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
+import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.theemrock.smoothmedia.R
 import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceAvailability
+import com.theemrock.smoothmedia.catalog.database.entity.SourcePermissionState
 import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
 import com.theemrock.smoothmedia.catalog.scan.ManualScanProgress
 import com.theemrock.smoothmedia.catalog.scan.ScanPhase
@@ -40,7 +44,7 @@ import com.theemrock.smoothmedia.source.SourceRemovalResult
 
 internal fun sourceDisplayName(source: LibrarySourceEntity): String =
     source.volumeName?.trim()?.takeIf { it.isNotEmpty() }
-        ?: "SAF kaynağı · ${source.sourceId.takeLast(6)}"
+        ?: "Müzik kaynağı"
 
 @Composable
 fun SourceManagementScreen(
@@ -69,72 +73,71 @@ fun SourceManagementScreen(
     onMetadataSessionStart: () -> Unit = {},
     onMetadataSessionStop: () -> Unit = {},
     showStandaloneMetadataControls: Boolean = true,
+    catalogTrackCounts: Map<String, Int> = emptyMap(),
+    onMenu: () -> Unit = {},
+    onHome: () -> Unit = {},
 ) {
-    Column(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(24.dp),
-    ) {
-        Text(text = stringResource(R.string.app_name), style = MaterialTheme.typography.headlineMedium)
-        Spacer(modifier = Modifier.height(4.dp))
-        Text(
-            text = stringResource(R.string.source_registry_title),
-            color = MaterialTheme.colorScheme.primary,
-            style = MaterialTheme.typography.titleLarge,
-        )
-        Text(
-            text = stringResource(R.string.source_registry_description),
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Spacer(modifier = Modifier.height(16.dp))
-        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            Button(onClick = onAdd, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.add_folder), maxLines = 1, softWrap = false)
-            }
-            OutlinedButton(onClick = onRefresh, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.refresh_sources), maxLines = 1, softWrap = false)
-            }
-            OutlinedButton(onClick = onLibrary, modifier = Modifier.weight(1f)) {
-                Text(stringResource(R.string.open_library), maxLines = 1, softWrap = false)
-            }
-        }
-        statusMessage?.let {
-            Spacer(modifier = Modifier.height(12.dp))
-            Text(text = it, style = MaterialTheme.typography.bodyMedium)
-        }
-        Spacer(modifier = Modifier.height(16.dp))
-        if (showStandaloneMetadataControls) {
-            MetadataSection(
-                missingCount = metadataMissingCount,
-                running = metadataRunning,
-                progress = metadataProgress,
-                onStart = onMetadataStart,
-                onStop = onMetadataStop,
-                sessionRunning = metadataSessionRunning,
-                sessionStatus = metadataSessionStatus,
-                sessionProgress = metadataSessionProgress,
-                onSessionStart = onMetadataSessionStart,
-                onSessionStop = onMetadataSessionStop,
-            )
-            Spacer(modifier = Modifier.height(16.dp))
-        }
-        if (sources.isEmpty()) {
-            Text(stringResource(R.string.no_sources))
-        } else {
-            LazyColumn(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                items(sources, key = { it.sourceId }) { source ->
-                    SourceCard(
-                        source = source,
-                        scanningSourceId = scanningSourceId,
-                        scanPhase = scanPhase,
-                        scanProgress = scanProgress,
-                        scanExecutionAttached = scanExecutionAttached,
-                        onRemove = onRemove,
-                        onScan = onScan,
-                        onPauseScan = onPauseScan,
-                        onResumeScan = onResumeScan,
-                        onStopScan = onStopScan,
-                    )
+    var removedExpanded by androidx.compose.runtime.remember { androidx.compose.runtime.mutableStateOf(false) }
+    val activeSources = sources.filter { it.selectionState == SourceSelectionState.ACTIVE }
+    val removedSources = sources.filter { it.selectionState == SourceSelectionState.REMOVED }
+    Surface(color = SmoothMediaColors.Background, modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            LibraryNavigationBar(onMenu = onMenu, onDashboard = onHome, onSettings = onMenu)
+            LazyColumn(
+                modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(10.dp),
+                contentPadding = androidx.compose.foundation.layout.PaddingValues(top = 8.dp, bottom = 24.dp),
+            ) {
+                item {
+                    Text("Müzik Kaynakları", color = SmoothMediaColors.TextPrimary, style = MaterialTheme.typography.headlineSmall)
+                    Text("Seçilen klasörler ve gerçek tarama durumu", color = SmoothMediaColors.TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(onClick = onAdd, modifier = Modifier.weight(1f)) { Text("Klasör ekle", maxLines = 1, softWrap = false) }
+                        OutlinedButton(onClick = onRefresh, modifier = Modifier.weight(1f)) { Text("Yenile", maxLines = 1, softWrap = false) }
+                    }
+                    statusMessage?.let {
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(it, color = SmoothMediaColors.TextMuted, style = MaterialTheme.typography.bodyMedium)
+                    }
+                }
+                if (showStandaloneMetadataControls) {
+                    item {
+                        MetadataSection(
+                            missingCount = metadataMissingCount,
+                            running = metadataRunning,
+                            progress = metadataProgress,
+                            onStart = onMetadataStart,
+                            onStop = onMetadataStop,
+                            sessionRunning = metadataSessionRunning,
+                            sessionStatus = metadataSessionStatus,
+                            sessionProgress = metadataSessionProgress,
+                            onSessionStart = onMetadataSessionStart,
+                            onSessionStop = onMetadataSessionStop,
+                        )
+                    }
+                }
+                item {
+                    Text("Etkin kaynaklar", color = SmoothMediaColors.TextPrimary, style = MaterialTheme.typography.titleMedium)
+                }
+                if (activeSources.isEmpty()) {
+                    item { Text("Etkin kaynak bulunmuyor.", color = SmoothMediaColors.TextMuted) }
+                } else {
+                    items(activeSources, key = { "active-${it.sourceId}" }) { source ->
+                        SourceCard(source, catalogTrackCounts[source.sourceId], scanningSourceId, scanPhase, scanProgress, scanExecutionAttached, onRemove, onScan, onPauseScan, onResumeScan, onStopScan)
+                    }
+                }
+                if (removedSources.isNotEmpty()) {
+                    item {
+                        OutlinedButton(onClick = { removedExpanded = !removedExpanded }, modifier = Modifier.fillMaxWidth()) {
+                            Text("Kaldırılmış kaynaklar (${removedSources.size})")
+                        }
+                    }
+                    if (removedExpanded) {
+                        items(removedSources, key = { "removed-${it.sourceId}" }) { source ->
+                            SourceCard(source, catalogTrackCounts[source.sourceId], scanningSourceId, scanPhase, scanProgress, scanExecutionAttached, onRemove, onScan, onPauseScan, onResumeScan, onStopScan)
+                        }
+                    }
                 }
             }
         }
@@ -217,6 +220,7 @@ private fun MetadataSection(
 @Composable
 private fun SourceCard(
     source: LibrarySourceEntity,
+    catalogTrackCount: Int?,
     scanningSourceId: String?,
     scanPhase: ScanPhase,
     scanProgress: ManualScanProgress?,
@@ -237,14 +241,7 @@ private fun SourceCard(
                 overflow = TextOverflow.Ellipsis,
                 style = MaterialTheme.typography.titleSmall,
             )
-            if (source.volumeName.isNullOrBlank()) {
-                Text(
-                    text = "Kaynak kimliği: ${source.sourceId.takeLast(6)}",
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                    style = MaterialTheme.typography.bodySmall,
-                )
-            }
+            Text("Katalog: ${catalogTrackCount?.let { "$it şarkı" } ?: "sayı bekleniyor"}", style = MaterialTheme.typography.bodySmall)
             Text(
                 text = stringResource(selectionLabel(source.selectionState)),
                 color = MaterialTheme.colorScheme.primary,
@@ -261,6 +258,9 @@ private fun SourceCard(
                         "İşlenen ${it.processedCount}/${it.discoveredCount} · eklenen ${it.enrichedCount} · hata ${it.errorCount + it.metadataFailedCount}",
                         style = MaterialTheme.typography.bodySmall,
                     )
+                    if (it.discoveredCount > 0 && it.processedCount > it.discoveredCount) {
+                        Text("İlerleme sayaçları tutarsız; durum doğrulanmalı.", color = Color(0xFFFFB4AB), style = MaterialTheme.typography.bodySmall)
+                    }
                     Text(
                         "Discovery ${it.timing.discoveryMs} ms · processing ${it.timing.processingMs} ms · checkpoint ${it.timing.lastCheckpointMs} ms",
                         style = MaterialTheme.typography.bodySmall,
@@ -291,7 +291,7 @@ private fun SourceCard(
                     AlertDialog(
                         onDismissRequest = { confirmStop = false },
                         title = { Text("Taramayı durdur?") },
-                        text = { Text("İşlenmiş katalog kayıtları korunur; devam etmek için daha sonra aynı oturumu sürdürebilirsin.") },
+                        text = { Text("İşlenmiş katalog kayıtları korunur; bu oturum kalıcı olarak durdurulur.") },
                         confirmButton = {
                             TextButton(onClick = { confirmStop = false; onStopScan() }) { Text("Durdur") }
                         },
@@ -302,7 +302,10 @@ private fun SourceCard(
                 }
             } else if (source.selectionState == SourceSelectionState.ACTIVE) {
                 Spacer(modifier = Modifier.height(8.dp))
-                Button(onClick = { onScan(source.sourceId) }, enabled = scanningSourceId == null) {
+                Button(
+                    onClick = { onScan(source.sourceId) },
+                    enabled = scanningSourceId == null && source.availability == SourceAvailability.AVAILABLE && source.permissionState == SourcePermissionState.GRANTED,
+                ) {
                     Text(stringResource(R.string.scan_source))
                 }
             } else if (source.persistedPermissionFlags != 0 ||

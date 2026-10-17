@@ -11,6 +11,17 @@ import com.theemrock.smoothmedia.library.LibraryTrackRow
 
 @Dao
 interface LibraryDao {
+    @Query(
+        """
+        SELECT COUNT(DISTINCT l.track_id)
+        FROM track_locations l
+        JOIN tracks t ON t.track_id = l.track_id
+        WHERE l.source_id = :sourceId
+          AND t.catalog_lifecycle = 'ACTIVE'
+        """,
+    )
+    fun countActiveTracksForSource(sourceId: String): Int
+
     @RawQuery
     fun searchTracksRaw(query: SupportSQLiteQuery): List<LibraryTrackRow>
 

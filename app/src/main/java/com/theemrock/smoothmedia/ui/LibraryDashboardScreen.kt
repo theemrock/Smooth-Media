@@ -2,6 +2,7 @@ package com.theemrock.smoothmedia.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
@@ -23,6 +24,7 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -36,6 +38,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -62,6 +66,7 @@ fun LibraryDashboardScreen(
     onCollectionSelected: (LibraryCollectionType, LibraryCollectionRow) -> Unit,
     onSearch: () -> Unit,
     onSources: () -> Unit,
+    onSettings: () -> Unit = {},
     onSong: (LibrarySong) -> Unit,
     onAddToQueue: (LibrarySong) -> Unit,
     onPlayNext: (LibrarySong) -> Unit,
@@ -87,6 +92,7 @@ fun LibraryDashboardScreen(
                     onSongs = onSongs,
                     onCollection = onCollection,
                     onSources = onSources,
+                    onSettings = onSettings,
                 )
                 LazyColumn(
                     modifier = Modifier.weight(1f),
@@ -169,6 +175,7 @@ private fun DashboardTopBar(
     onSongs: () -> Unit,
     onCollection: (LibraryCollectionType) -> Unit,
     onSources: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -188,6 +195,7 @@ private fun DashboardTopBar(
                     onCollection = onCollection,
                     onSearch = onSearch,
                     onSources = onSources,
+                    onSettings = onSettings,
                 )
             }
         }
@@ -220,26 +228,28 @@ private fun DashboardMenu(
     onCollection: (LibraryCollectionType) -> Unit,
     onSearch: () -> Unit,
     onSources: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     DropdownMenu(
         expanded = true,
         onDismissRequest = onDismiss,
         modifier = Modifier.width(220.dp).background(DashboardPanel),
     ) {
-        DashboardMenuItem("Kütüphane", selected = true, onClick = onDismiss)
-        DashboardMenuItem("Şarkılar", onClick = { onDismiss(); onSongs() })
-        DashboardMenuItem("Albümler", onClick = { onDismiss(); onCollection(LibraryCollectionType.ALBUMS) })
-        DashboardMenuItem("Sanatçılar", onClick = { onDismiss(); onCollection(LibraryCollectionType.ARTISTS) })
-        DashboardMenuItem("Türler", onClick = { onDismiss(); onCollection(LibraryCollectionType.GENRES) })
-        DashboardMenuItem("Klasörler", onClick = { onDismiss(); onCollection(LibraryCollectionType.FOLDERS) })
-        DashboardMenuItem("Arama", onClick = { onDismiss(); onSearch() })
-        DashboardMenuItem("Kaynaklar", onClick = { onDismiss(); onSources() })
+        DashboardMenuItem(CategoryIconKind.LIBRARY, "Kütüphane", selected = true, onClick = onDismiss)
+        DashboardMenuItem(CategoryIconKind.SONGS, "Tüm şarkılar", onClick = { onDismiss(); onSongs() })
+        DashboardMenuItem(CategoryIconKind.ALBUMS, "Albümler", onClick = { onDismiss(); onCollection(LibraryCollectionType.ALBUMS) })
+        DashboardMenuItem(CategoryIconKind.ARTISTS, "Sanatçılar", onClick = { onDismiss(); onCollection(LibraryCollectionType.ARTISTS) })
+        DashboardMenuItem(CategoryIconKind.GENRES, "Türler", onClick = { onDismiss(); onCollection(LibraryCollectionType.GENRES) })
+        DashboardMenuItem(CategoryIconKind.FOLDERS, "Klasörler", onClick = { onDismiss(); onCollection(LibraryCollectionType.FOLDERS) })
+        HorizontalDivider(color = DashboardLine)
+        DashboardMenuItem(CategoryIconKind.SETTINGS, "Ayarlar", onClick = { onDismiss(); onSettings() })
     }
 }
 
 @Composable
-private fun DashboardMenuItem(label: String, selected: Boolean = false, onClick: () -> Unit) {
+private fun DashboardMenuItem(icon: CategoryIconKind, label: String, selected: Boolean = false, onClick: () -> Unit) {
     DropdownMenuItem(
+        leadingIcon = { CategoryIcon(icon, color = if (selected) DashboardCyan else Color.White) },
         text = { Text(label, color = if (selected) DashboardCyan else Color.White, fontSize = 15.sp) },
         modifier = Modifier.padding(horizontal = 4.dp),
         onClick = onClick,
@@ -258,19 +268,20 @@ private fun CategoryStrip(
             modifier = Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            DashboardCategory("♫", "Şarkılar", data.totalTracks, onSongs, cardWidth)
-            DashboardCategory("●", "Albümler", data.albumCount, { onCollection(LibraryCollectionType.ALBUMS) }, cardWidth)
-            DashboardCategory("●", "Sanatçılar", data.artistCount, { onCollection(LibraryCollectionType.ARTISTS) }, cardWidth)
-            DashboardCategory("◇", "Türler", data.genreCount, { onCollection(LibraryCollectionType.GENRES) }, cardWidth)
-            DashboardCategory("■", "Klasörler", data.folderCount, { onCollection(LibraryCollectionType.FOLDERS) }, cardWidth)
-            DashboardCategory("≡", "Çalma listeleri", null, null, cardWidth)
+            DashboardCategory(CategoryIconKind.SONGS, "Şarkılar", data.totalTracks, onSongs, cardWidth)
+            DashboardCategory(CategoryIconKind.ALBUMS, "Albümler", data.albumCount, { onCollection(LibraryCollectionType.ALBUMS) }, cardWidth)
+            DashboardCategory(CategoryIconKind.ARTISTS, "Sanatçılar", data.artistCount, { onCollection(LibraryCollectionType.ARTISTS) }, cardWidth)
+            DashboardCategory(CategoryIconKind.GENRES, "Türler", data.genreCount, { onCollection(LibraryCollectionType.GENRES) }, cardWidth)
+            DashboardCategory(CategoryIconKind.FOLDERS, "Klasörler", data.folderCount, { onCollection(LibraryCollectionType.FOLDERS) }, cardWidth)
         }
     }
 }
 
+private enum class CategoryIconKind { LIBRARY, SONGS, ALBUMS, ARTISTS, GENRES, FOLDERS, SETTINGS }
+
 @Composable
 private fun DashboardCategory(
-    glyph: String,
+    iconKind: CategoryIconKind,
     label: String,
     count: Int?,
     onClick: (() -> Unit)?,
@@ -288,9 +299,73 @@ private fun DashboardCategory(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center,
     ) {
-        Text(glyph, color = if (onClick != null) DashboardCyan else DashboardMuted, fontSize = 22.sp)
+        CategoryIcon(iconKind, color = if (onClick != null) DashboardCyan else DashboardMuted)
         Text(label, color = Color.White, fontSize = 11.sp, maxLines = 1, softWrap = false, overflow = TextOverflow.Ellipsis)
         Text(count?.toString() ?: "—", color = DashboardMuted, fontSize = 10.sp)
+    }
+}
+
+@Composable
+private fun CategoryIcon(kind: CategoryIconKind, color: Color) {
+    Canvas(modifier = Modifier.size(26.dp)) {
+        val ink = DashboardInk
+        when (kind) {
+            CategoryIconKind.LIBRARY -> {
+                drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(3.dp.toPx(), 6.dp.toPx()), size = androidx.compose.ui.geometry.Size(6.dp.toPx(), 15.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()))
+                drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(10.dp.toPx(), 4.dp.toPx()), size = androidx.compose.ui.geometry.Size(6.dp.toPx(), 17.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()))
+                drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(17.dp.toPx(), 7.dp.toPx()), size = androidx.compose.ui.geometry.Size(6.dp.toPx(), 14.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(1.dp.toPx()))
+            }
+            CategoryIconKind.SONGS -> {
+                drawCircle(color, radius = 3.5.dp.toPx(), center = androidx.compose.ui.geometry.Offset(7.dp.toPx(), 19.dp.toPx()))
+                drawLine(color, androidx.compose.ui.geometry.Offset(10.dp.toPx(), 19.dp.toPx()), androidx.compose.ui.geometry.Offset(10.dp.toPx(), 5.dp.toPx()), strokeWidth = 2.dp.toPx())
+                drawLine(color, androidx.compose.ui.geometry.Offset(10.dp.toPx(), 5.dp.toPx()), androidx.compose.ui.geometry.Offset(20.dp.toPx(), 8.dp.toPx()), strokeWidth = 2.dp.toPx())
+                drawCircle(color, radius = 3.5.dp.toPx(), center = androidx.compose.ui.geometry.Offset(17.dp.toPx(), 21.dp.toPx()))
+                drawLine(color, androidx.compose.ui.geometry.Offset(20.dp.toPx(), 8.dp.toPx()), androidx.compose.ui.geometry.Offset(20.dp.toPx(), 21.dp.toPx()), strokeWidth = 2.dp.toPx())
+            }
+            CategoryIconKind.ALBUMS -> {
+                drawCircle(color, radius = 10.dp.toPx(), center = androidx.compose.ui.geometry.Offset(13.dp.toPx(), 13.dp.toPx()))
+                drawCircle(ink, radius = 3.dp.toPx(), center = androidx.compose.ui.geometry.Offset(13.dp.toPx(), 13.dp.toPx()))
+            }
+            CategoryIconKind.ARTISTS -> {
+                drawCircle(color, radius = 4.dp.toPx(), center = androidx.compose.ui.geometry.Offset(9.dp.toPx(), 8.dp.toPx()))
+                drawCircle(color, radius = 4.dp.toPx(), center = androidx.compose.ui.geometry.Offset(18.dp.toPx(), 8.dp.toPx()))
+                drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(3.dp.toPx(), 13.dp.toPx()), size = androidx.compose.ui.geometry.Size(12.dp.toPx(), 9.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx()))
+                drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(12.dp.toPx(), 13.dp.toPx()), size = androidx.compose.ui.geometry.Size(11.dp.toPx(), 9.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(4.dp.toPx()))
+            }
+            CategoryIconKind.GENRES -> {
+                drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(3.dp.toPx(), 7.dp.toPx()), size = androidx.compose.ui.geometry.Size(13.dp.toPx(), 10.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()), style = Stroke(width = 2.dp.toPx()))
+                drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(10.dp.toPx(), 10.dp.toPx()), size = androidx.compose.ui.geometry.Size(13.dp.toPx(), 10.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()), style = Stroke(width = 2.dp.toPx()))
+            }
+            CategoryIconKind.FOLDERS -> {
+                val path = Path().apply {
+                    moveTo(3.dp.toPx(), 7.dp.toPx())
+                    lineTo(10.dp.toPx(), 7.dp.toPx())
+                    lineTo(12.dp.toPx(), 10.dp.toPx())
+                    lineTo(23.dp.toPx(), 10.dp.toPx())
+                    lineTo(21.dp.toPx(), 20.dp.toPx())
+                    lineTo(4.dp.toPx(), 20.dp.toPx())
+                    close()
+                }
+                drawPath(path, color)
+            }
+            CategoryIconKind.SETTINGS -> {
+                val center = androidx.compose.ui.geometry.Offset(13.dp.toPx(), 13.dp.toPx())
+                drawCircle(color, radius = 8.dp.toPx(), center = center, style = Stroke(width = 3.dp.toPx()))
+                drawCircle(color, radius = 2.5.dp.toPx(), center = center)
+                repeat(8) { index ->
+                    val angle = Math.toRadians(index * 45.0)
+                    val start = androidx.compose.ui.geometry.Offset(
+                        (13f + kotlin.math.cos(angle).toFloat() * 9f).dp.toPx(),
+                        (13f + kotlin.math.sin(angle).toFloat() * 9f).dp.toPx(),
+                    )
+                    val end = androidx.compose.ui.geometry.Offset(
+                        (13f + kotlin.math.cos(angle).toFloat() * 12f).dp.toPx(),
+                        (13f + kotlin.math.sin(angle).toFloat() * 12f).dp.toPx(),
+                    )
+                    drawLine(color, start, end, strokeWidth = 2.dp.toPx())
+                }
+            }
+        }
     }
 }
 

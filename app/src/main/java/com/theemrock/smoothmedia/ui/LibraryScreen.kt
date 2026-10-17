@@ -84,6 +84,7 @@ fun LibraryScreen(
     onPlayNext: (LibrarySong) -> Unit = {},
     onMenu: () -> Unit = {},
     onDashboard: () -> Unit = {},
+    onSettings: () -> Unit = {},
     playbackState: PlaybackEngineState? = null,
     miniPlayerSong: LibrarySong? = null,
     onMiniPlayerOpen: () -> Unit = {},
@@ -104,6 +105,7 @@ fun LibraryScreen(
                 onSongs = onSongs,
                 onCollection = onCollection,
                 onSources = onSources,
+                onSettings = onSettings,
             )
             LibraryHeader(state.heading, state.isFiltered, state.totalTracks, onSongs, onCollection)
             when {
