@@ -50,6 +50,7 @@ data class DiscoveredAudioFile(
 
 data class TreeDocument(
     val documentId: String,
+    val parentDocumentId: String? = null,
     val uri: String,
     val displayName: String,
     val mimeType: String?,
@@ -109,6 +110,7 @@ sealed interface AudioDiscoveryResult {
 class SelectedAudioDiscovery(
     private val permissions: TreePermissionGateway,
     private val treeReader: SafDocumentTreeReader,
+    private val onDocument: (sourceId: String, document: TreeDocument) -> Unit = { _, _ -> },
 ) {
     fun discover(source: LibrarySourceEntity): AudioDiscoveryResult {
         val sourceId = source.sourceId
@@ -162,6 +164,7 @@ class SelectedAudioDiscovery(
                 is DirectoryReadResult.Readable -> {
                     skippedUnreadable += listing.unreadableEntryCount
                     listing.children.forEach { document ->
+                        onDocument(sourceId, document)
                         if (document.isDirectory) {
                             directories.addLast(document.uri to false)
                         } else {

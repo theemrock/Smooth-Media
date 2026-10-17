@@ -9,6 +9,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.darkColorScheme
@@ -37,6 +39,8 @@ import com.theemrock.smoothmedia.library.LibrarySong
 import com.theemrock.smoothmedia.library.LibraryMetadataState
 import com.theemrock.smoothmedia.library.LibraryLocationState
 import com.theemrock.smoothmedia.library.LibraryDashboardData
+import com.theemrock.smoothmedia.library.LibraryArtistAlbumPreview
+import com.theemrock.smoothmedia.library.LibraryGenreArtworkPreview
 import com.theemrock.smoothmedia.playback.CatalogPlaybackLocationResolver
 import com.theemrock.smoothmedia.playback.PlaybackEngineState
 import com.theemrock.smoothmedia.playback.PlaybackSessionClient
@@ -53,6 +57,9 @@ import com.theemrock.smoothmedia.ui.LibraryAlbumDetailData
 import com.theemrock.smoothmedia.ui.LibraryAlbumDetailScreen
 import com.theemrock.smoothmedia.ui.LibraryDetailScreen
 import com.theemrock.smoothmedia.ui.LyricsScreen
+import com.theemrock.smoothmedia.lyrics.CachedLyrics
+import com.theemrock.smoothmedia.lyrics.RoomLyricsCache
+import com.theemrock.smoothmedia.lyrics.LyricsNavigationPolicy
 import com.theemrock.smoothmedia.metadata.AndroidAudioMetadataReader
 import com.theemrock.smoothmedia.metadata.MetadataBatchProgress
 import com.theemrock.smoothmedia.metadata.MetadataBatchCoordinator
@@ -134,6 +141,7 @@ class MainActivity : ComponentActivity() {
     private var showSearch by mutableStateOf(false)
     private var showNowPlaying by mutableStateOf(false)
     private var showLyrics by mutableStateOf(false)
+    private var currentLyrics by mutableStateOf<CachedLyrics?>(null)
     private var showEqualizer by mutableStateOf(false)
     private var showQueue by mutableStateOf(false)
     private var nowPlayingSong by mutableStateOf<LibrarySong?>(null)
@@ -147,6 +155,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var libraryViewModel: LibraryViewModel
     private lateinit var collectionViewModel: LibraryCollectionViewModel
     private lateinit var libraryRepository: RoomLibraryRepository
+    private lateinit var lyricsCache: RoomLyricsCache
     private lateinit var artworkResolver: AndroidArtworkResolver
     private lateinit var searchViewModel: LibrarySearchViewModel
     private lateinit var playbackClient: PlaybackSessionClient
@@ -157,6 +166,10 @@ class MainActivity : ComponentActivity() {
     private var libraryDetailType by mutableStateOf<LibraryCollectionType?>(null)
     private var libraryDetailRow by mutableStateOf<LibraryCollectionRow?>(null)
     private var libraryDetailSongs by mutableStateOf<List<LibrarySong>>(emptyList())
+    private var libraryDetailAlbums by mutableStateOf<List<LibraryCollectionRow>>(emptyList())
+    private var libraryDetailFolderChildren by mutableStateOf<List<LibraryCollectionRow>>(emptyList())
+    private var artistAlbumPreviews by mutableStateOf<Map<String, List<LibraryArtistAlbumPreview>>>(emptyMap())
+    private var genreArtworkPreviews by mutableStateOf<Map<String, List<LibraryGenreArtworkPreview>>>(emptyMap())
     private var libraryBackTarget by mutableStateOf(LibraryBackTarget.DASHBOARD)
     private lateinit var libraryBackCallback: OnBackPressedCallback
     private val metadataCancelRequested = AtomicBoolean(false)
@@ -292,7 +305,9 @@ class MainActivity : ComponentActivity() {
         )
         libraryRepository = RoomLibraryRepository(
             runtime.database.libraryDao(),
+            runtime.database.safDocumentDao(),
         )
+        lyricsCache = RoomLyricsCache(runtime.database.lyricsCacheDao())
         artworkResolver = AndroidArtworkResolver(contentResolver, libraryRepository)
         searchViewModel = LibrarySearchViewModel(libraryRepository)
         libraryViewModel = LibraryViewModel(
@@ -307,7 +322,13 @@ class MainActivity : ComponentActivity() {
         )
         setContent {
             SmoothMediaTheme {
-                Surface(modifier = Modifier.fillMaxSize()) {
+                Surface(
+                    modifier = Modifier.fillMaxSize(),
+                    color = SmoothMediaColors.Background,
+                ) {
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding(),
+                    ) {
                     if (showQueue) {
                         QueueScreen(
                             state = queueController.state.value,
@@ -367,7 +388,13 @@ class MainActivity : ComponentActivity() {
                             onBack = { showEqualizer = false },
                         )
                     } else if (showLyrics && nowPlayingSong != null) {
-                        LyricsScreen(song = nowPlayingSong!!, onBack = { showLyrics = false; showNowPlaying = true })
+                        LyricsScreen(
+                            song = nowPlayingSong!!,
+                            cachedLyrics = currentLyrics,
+                            positionMs = playbackState.positionMs,
+                            onSeek = playbackClient::seekTo,
+                            onBack = { showLyrics = false; showNowPlaying = true },
+                        )
                     } else if (showNowPlaying && nowPlayingSong != null) {
                         NowPlayingScreen(
                             song = nowPlayingSong!!,
@@ -378,7 +405,20 @@ class MainActivity : ComponentActivity() {
                             onSeek = playbackClient::seekTo,
                             onEqualizer = { showEqualizer = true },
                             onQueue = { showQueue = true },
-                            onLyrics = { showLyrics = true; showNowPlaying = false },
+                            onLyrics = {
+                                nowPlayingSong?.trackId?.let { requestedTrackId ->
+                                    executor.execute {
+                                        val cached = lyricsCache.get(requestedTrackId)
+                                        runOnUiThread {
+                                            if (!isDestroyed && LyricsNavigationPolicy.canApply(requestedTrackId, nowPlayingSong?.trackId)) {
+                                                currentLyrics = cached
+                                                showLyrics = true
+                                                showNowPlaying = false
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                             onNext = ::playNext,
                             onPrevious = ::playPrevious,
                             onShuffle = {
@@ -437,10 +477,14 @@ class MainActivity : ComponentActivity() {
                             type = libraryDetailType!!,
                             row = libraryDetailRow!!,
                             songs = libraryDetailSongs,
+                            artistAlbums = libraryDetailAlbums,
+                            folderChildren = libraryDetailFolderChildren,
                             onMenu = {},
                             onSearch = { showSearch = true },
                             onDashboard = ::openDashboard,
                             onAlbumSelected = ::openAlbumDetail,
+                            onArtistSelected = { artist -> openLibraryDetail(LibraryCollectionType.ARTISTS, artist) },
+                            onFolderSelected = { folder -> openLibraryDetail(LibraryCollectionType.FOLDERS, folder) },
                             onSong = { song -> playSong(song, libraryDetailSongs) },
                             onAddToQueue = ::addToQueue,
                             onPlayNext = ::playNextSong,
@@ -455,7 +499,16 @@ class MainActivity : ComponentActivity() {
                     } else if (showCollections) {
                         LibraryCollectionScreen(
                             state = collectionViewModel.state.value,
-                            onNearEnd = { executor.execute { collectionViewModel.loadNextPage() } },
+                            onNearEnd = {
+                                executor.execute {
+                                    collectionViewModel.loadNextPage()
+                                    if (collectionViewModel.state.value.type == LibraryCollectionType.ARTISTS) {
+                                        refreshArtistAlbumPreviews()
+                                    } else if (collectionViewModel.state.value.type == LibraryCollectionType.GENRES) {
+                                        refreshGenreArtworkPreviews()
+                                    }
+                                }
+                            },
                             onRetry = { executor.execute { collectionViewModel.retry() } },
                             onSongs = {
                                 showAllSongs()
@@ -471,6 +524,8 @@ class MainActivity : ComponentActivity() {
                             onSearch = { showSearch = true },
                             onMenu = {},
                             onDashboard = ::openDashboard,
+                            artistAlbumPreviews = artistAlbumPreviews,
+                            genreArtworkPreviews = genreArtworkPreviews,
                             artworkResolver = artworkResolver,
                         )
                     } else if (showDashboard) {
@@ -555,6 +610,7 @@ class MainActivity : ComponentActivity() {
                             onMetadataSessionStop = { stopMetadataSession() },
                             showStandaloneMetadataControls = false,
                         )
+                    }
                     }
                 }
             }
@@ -890,8 +946,34 @@ class MainActivity : ComponentActivity() {
         showCollections = true
         showLibrary = false
         filteredCollectionType = null
+        artistAlbumPreviews = emptyMap()
+        genreArtworkPreviews = emptyMap()
         updateLibraryBackCallback()
-        executor.execute { collectionViewModel.loadInitial(type) }
+        executor.execute {
+            collectionViewModel.loadInitial(type)
+            if (type == LibraryCollectionType.ARTISTS) refreshArtistAlbumPreviews()
+            if (type == LibraryCollectionType.GENRES) refreshGenreArtworkPreviews()
+        }
+    }
+
+    private fun refreshArtistAlbumPreviews() {
+        val rows = collectionViewModel.state.value.collections
+        val previews = rows.associate { row ->
+            row.title to libraryRepository.loadArtistAlbumPreviews(row.title)
+        }
+        runOnUiThread {
+            if (!isDestroyed) artistAlbumPreviews = artistAlbumPreviews + previews
+        }
+    }
+
+    private fun refreshGenreArtworkPreviews() {
+        val rows = collectionViewModel.state.value.collections
+        val previews = rows.associate { row ->
+            row.title to libraryRepository.loadGenreArtworkPreviews(row.title)
+        }
+        runOnUiThread {
+            if (!isDestroyed) genreArtworkPreviews = genreArtworkPreviews + previews
+        }
     }
 
     private fun openAlbumDetail(row: LibraryCollectionRow) {
@@ -932,12 +1014,17 @@ class MainActivity : ComponentActivity() {
         libraryDetailType = type
         libraryDetailRow = row
         libraryDetailSongs = emptyList()
+        libraryDetailAlbums = emptyList()
+        libraryDetailFolderChildren = emptyList()
         updateLibraryBackCallback()
         executor.execute {
+            val folderParts = row.key.split('\u001E')
             val filter = when (type) {
                 LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
                 LibraryCollectionType.GENRES -> LibraryTrackFilter.Genre(row.title)
-                LibraryCollectionType.FOLDERS -> LibraryTrackFilter.Folder(row.key)
+                LibraryCollectionType.FOLDERS -> if (folderParts.size == 2) {
+                    LibraryTrackFilter.Folder(libraryRepository.loadSafFolder(folderParts[0], folderParts[1])?.uri ?: row.key)
+                } else LibraryTrackFilter.Folder(row.key)
                 LibraryCollectionType.ALBUMS -> return@execute
             }
             val songs = mutableListOf<LibrarySong>()
@@ -947,7 +1034,22 @@ class MainActivity : ComponentActivity() {
                 songs += page.songs
                 offset += page.songs.size
             } while (page.hasMore && page.songs.isNotEmpty())
-            runOnUiThread { if (!isDestroyed) libraryDetailSongs = songs }
+            val albums = if (type == LibraryCollectionType.ARTISTS) {
+                libraryRepository.loadArtistAlbumRows(row.title)
+            } else {
+                emptyList()
+            }
+            val folderChildren = if (type == LibraryCollectionType.FOLDERS && folderParts.size == 2) {
+                libraryRepository.loadSafFolderChildren(folderParts[0], folderParts[1])
+                    .map { child -> LibraryCollectionRow(folderParts[0] + '\u001E' + child.documentId, child.displayName, child.parentDocumentId, 0) }
+            } else emptyList()
+            runOnUiThread {
+                if (!isDestroyed) {
+                    libraryDetailSongs = songs
+                    libraryDetailAlbums = albums
+                    libraryDetailFolderChildren = folderChildren
+                }
+            }
         }
     }
 

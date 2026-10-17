@@ -241,7 +241,7 @@ class SelectedAudioDiscoveryTest {
         mimeType: String?,
         size: Long? = null,
         modified: Long? = null,
-    ) = TreeDocument(documentId, uri, name, mimeType, isDirectory = mimeType == DIRECTORY_MIME, sizeBytes = size, modifiedAtEpochMs = modified)
+    ) = TreeDocument(documentId, uri = uri, displayName = name, mimeType = mimeType, isDirectory = mimeType == DIRECTORY_MIME, sizeBytes = size, modifiedAtEpochMs = modified)
 
     private fun TreeDocument.toDiscoveryFile(sourceId: String, format: AudioFormat) = DiscoveredAudioFile(
         sourceId = sourceId,

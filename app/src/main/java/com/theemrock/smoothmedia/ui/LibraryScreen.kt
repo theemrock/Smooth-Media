@@ -4,6 +4,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
@@ -15,11 +16,13 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.navigationBarsPadding
-import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
+import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.rememberUpdatedState
@@ -38,6 +41,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -91,7 +95,7 @@ fun LibraryScreen(
     initialScrollOffset: Int = 0,
     onScrollPositionChanged: (Int, Int) -> Unit = { _, _ -> },
 ) {
-    Surface(color = Ink, modifier = Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+    Surface(color = Ink, modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             LibraryNavigationBar(
                 onMenu = onMenu,
@@ -190,7 +194,9 @@ private fun RowScope.SectionTab(label: String, selected: Boolean, onClick: () ->
 
 @Composable
 private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResolver: AndroidArtworkResolver?, onSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit, initialScrollIndex: Int, initialScrollOffset: Int, onScrollPositionChanged: (Int, Int) -> Unit) {
+    var gridMode by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState(initialScrollIndex, initialScrollOffset)
+    val gridState = rememberLazyGridState()
     val latestNearEnd = rememberUpdatedState(onNearEnd)
     val latestState = rememberUpdatedState(state)
     val latestScrollCallback = rememberUpdatedState(onScrollPositionChanged)
@@ -209,23 +215,72 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
                 }
             }
     }
-    BoxWithConstraints(modifier = Modifier.fillMaxSize()) {
-        val artworkSize = allSongsArtworkSizeDp(maxWidth.value).dp
-        LazyColumn(
-            state = listState,
-            modifier = Modifier.fillMaxSize(),
-            contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            items(state.songs, key = { it.trackId }) { song -> SongRow(song, artworkResolver, artworkSize, onSong, onAddToQueue, onPlayNext) }
-            item {
-                if (state.loading) {
-                    Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
-                        CircularProgressIndicator(color = Cyan, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+    Column(modifier = Modifier.fillMaxSize()) {
+        LibraryViewModeToggle(gridMode = gridMode, onGridModeChanged = { gridMode = it })
+        BoxWithConstraints(modifier = Modifier.weight(1f)) {
+            val artworkSize = allSongsArtworkSizeDp(maxWidth.value).dp
+            if (gridMode) {
+                LaunchedEffect(gridState) {
+                    snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
+                        .distinctUntilChanged()
+                        .collect { last ->
+                            val current = latestState.value
+                            if (!current.loading && current.errorMessage == null && current.hasMore && last >= current.songs.lastIndex - 5) latestNearEnd.value()
+                        }
+                }
+                Row(modifier = Modifier.fillMaxSize()) {
+                    LazyVerticalGrid(
+                        state = gridState,
+                        columns = GridCells.Adaptive(minSize = 156.dp),
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        gridItems(state.songs, key = { it.trackId }) { song -> SongGridCard(song, artworkResolver, onSong, onAddToQueue, onPlayNext) }
+                        item { if (state.loading) CircularProgressIndicator(color = Cyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp) }
                     }
+                    LibraryGridScrollbar(gridState, Modifier.padding(top = 8.dp, bottom = 8.dp))
+                }
+            } else {
+                Row(modifier = Modifier.fillMaxSize()) {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.weight(1f),
+                        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(2.dp),
+                    ) {
+                        items(state.songs, key = { it.trackId }) { song -> SongRow(song, artworkResolver, artworkSize, onSong, onAddToQueue, onPlayNext) }
+                        item {
+                            if (state.loading) Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
+                                CircularProgressIndicator(color = Cyan, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
+                            }
+                        }
+                    }
+                    LibraryListScrollbar(listState, Modifier.padding(top = 8.dp, bottom = 8.dp))
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun SongGridCard(
+    song: LibrarySong,
+    artworkResolver: AndroidArtworkResolver?,
+    onSong: (LibrarySong) -> Unit,
+    onAddToQueue: (LibrarySong) -> Unit,
+    onPlayNext: (LibrarySong) -> Unit,
+) {
+    Column(modifier = Modifier.fillMaxWidth().alpha(if (song.isAccessible) 1f else .58f).clickable(enabled = song.isAccessible) { onSong(song) }) {
+        if (artworkResolver != null) {
+            LibraryArtwork(ArtworkRequest.Track(song.trackId), artworkResolver, Modifier.fillMaxWidth().aspectRatio(1f), "Album artwork", 192)
+        } else {
+            AlbumPlaceholder(Modifier.fillMaxWidth().aspectRatio(1f))
+        }
+        Text(song.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(song.artist, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        Text(formatDuration(song.durationMs), color = Muted, fontSize = 11.sp)
     }
 }
 
@@ -242,7 +297,7 @@ private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         if (artworkResolver == null) {
-            AlbumPlaceholder(artworkSize)
+            AlbumPlaceholder(Modifier.size(artworkSize))
         } else {
             LibraryArtwork(
                 request = ArtworkRequest.Track(song.trackId),
@@ -276,9 +331,9 @@ private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?,
 }
 
 @Composable
-private fun AlbumPlaceholder(size: androidx.compose.ui.unit.Dp) {
+private fun AlbumPlaceholder(modifier: Modifier) {
     Box(
-        modifier = Modifier.size(size).clip(RoundedCornerShape(7.dp)).background(
+        modifier = modifier.clip(RoundedCornerShape(7.dp)).background(
             Brush.linearGradient(listOf(Color(0xFF172A31), Color(0xFF071014))),
         ).border(1.dp, Cyan.copy(alpha = .55f), RoundedCornerShape(8.dp)),
         contentAlignment = Alignment.Center,

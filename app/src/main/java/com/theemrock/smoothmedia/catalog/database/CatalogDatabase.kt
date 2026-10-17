@@ -19,8 +19,13 @@ import com.theemrock.smoothmedia.catalog.database.entity.TrackEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackLocationEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackMetadataEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackMetadataOverrideEntity
+import com.theemrock.smoothmedia.catalog.database.entity.LyricsCacheEntity
+import com.theemrock.smoothmedia.catalog.database.entity.SafDocumentEntity
+import com.theemrock.smoothmedia.catalog.database.entity.GenreNodeEntity
+import com.theemrock.smoothmedia.catalog.database.entity.GenreEdgeEntity
+import com.theemrock.smoothmedia.catalog.database.entity.TrackGenreAssignmentEntity
 
-private const val CATALOG_SCHEMA_VERSION = 3
+private const val CATALOG_SCHEMA_VERSION = 7
 
 @Database(
     entities = [
@@ -35,6 +40,11 @@ private const val CATALOG_SCHEMA_VERSION = 3
         CatalogExclusionEntity::class,
         TrackMetadataEntity::class,
         TrackMetadataOverrideEntity::class,
+        LyricsCacheEntity::class,
+        SafDocumentEntity::class,
+        GenreNodeEntity::class,
+        GenreEdgeEntity::class,
+        TrackGenreAssignmentEntity::class,
     ],
     version = CATALOG_SCHEMA_VERSION,
     exportSchema = true,
@@ -53,6 +63,12 @@ abstract class CatalogDatabase : RoomDatabase() {
     abstract fun catalogExclusionDao(): CatalogExclusionDao
 
     abstract fun trackMetadataDao(): com.theemrock.smoothmedia.catalog.database.dao.TrackMetadataDao
+
+    abstract fun lyricsCacheDao(): com.theemrock.smoothmedia.catalog.database.dao.LyricsCacheDao
+
+    abstract fun safDocumentDao(): com.theemrock.smoothmedia.catalog.database.dao.SafDocumentDao
+
+    abstract fun genreDao(): com.theemrock.smoothmedia.catalog.database.dao.GenreDao
 
     companion object {
         const val SCHEMA_VERSION = CATALOG_SCHEMA_VERSION

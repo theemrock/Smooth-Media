@@ -5,6 +5,7 @@ import com.theemrock.smoothmedia.catalog.database.CatalogDatabase
 import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.ScanSessionEntity
 import com.theemrock.smoothmedia.catalog.database.entity.ScanSessionStatus
+import com.theemrock.smoothmedia.catalog.database.entity.SafDocumentEntity
 import com.theemrock.smoothmedia.catalog.ingestion.CatalogIdFactory
 import com.theemrock.smoothmedia.catalog.ingestion.CatalogIngestionUseCase
 import com.theemrock.smoothmedia.catalog.identity.LogicalMatchAssessment
@@ -35,6 +36,20 @@ class ManualScanController(
     private val discovery = SelectedAudioDiscovery(
         permissions = AndroidTreePermissionGateway(contentResolver),
         treeReader = AndroidSafDocumentTreeReader(contentResolver),
+        onDocument = { sourceId, document ->
+            database.safDocumentDao().upsert(
+                SafDocumentEntity(
+                    sourceId = sourceId,
+                    documentId = document.documentId,
+                    uri = document.uri,
+                    parentDocumentId = document.parentDocumentId,
+                    displayName = document.displayName,
+                    isDirectory = document.isDirectory,
+                    available = true,
+                    updatedAtEpochMs = nowEpochMs(),
+                ),
+            )
+        },
     )
     private val hasher = SafFullFileHasher(contentResolver)
     private val ingestion = CatalogIngestionUseCase(

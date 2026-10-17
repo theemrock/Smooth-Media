@@ -116,6 +116,62 @@ class CatalogMigrationTest {
         }
     }
 
+    @Test
+    fun versionThreeToFour_addsLyricsCacheWithoutChangingTracks() {
+        migrationHelper.createDatabase(databaseName, 3).apply {
+            insertVersionTwoFixture(this)
+            execSQL("INSERT INTO track_metadata (trackId, normalizedTitleStatus, normalizedArtistStatus, normalizedAlbumStatus, normalizedAlbumArtistStatus, normalizedGenresStatus, normalizedTrackNumberStatus, normalizedDiscNumberStatus, normalizedYearStatus, normalizedDurationMsStatus, updatedAtEpochMs) VALUES ('track-1','MISSING','MISSING','MISSING','MISSING','MISSING','MISSING','MISSING','MISSING','MISSING',1000)")
+            close()
+        }
+
+        val migrated = migrationHelper.runMigrationsAndValidate(databaseName, 4, true, *CatalogMigrations.ALL)
+        try {
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM tracks"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM lyrics_cache"))
+            migrated.execSQL("INSERT INTO lyrics_cache VALUES ('track-1','SYNCED','[00:01.00]Hello','LOCAL_SIDECAR','folder/song.lrc',2000)")
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM lyrics_cache WHERE trackId='track-1'"))
+        } finally {
+            migrated.close()
+        }
+    }
+
+    @Test
+    fun versionFourToFive_addsSafDocumentsWithoutChangingCatalog() {
+        migrationHelper.createDatabase(databaseName, 4).apply {
+            insertVersionTwoFixture(this)
+            close()
+        }
+
+        val migrated = migrationHelper.runMigrationsAndValidate(databaseName, 5, true, *CatalogMigrations.ALL)
+        try {
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM tracks"))
+            migrated.execSQL("INSERT INTO saf_documents VALUES ('source-1','root',NULL,'Music',1,1,2000)")
+            migrated.execSQL("INSERT INTO saf_documents VALUES ('source-1','file','root','song.mp3',0,1,2000)")
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM saf_documents WHERE parentDocumentId='root'"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM track_locations"))
+        } finally {
+            migrated.close()
+        }
+    }
+
+    @Test
+    fun versionFiveToSix_addsProviderUriWithoutChangingDocumentIdentity() {
+        migrationHelper.createDatabase(databaseName, 5).apply {
+            insertVersionTwoFixture(this)
+            execSQL("INSERT INTO saf_documents VALUES ('source-1','root',NULL,'Music',1,1,2000)")
+            close()
+        }
+
+        val migrated = migrationHelper.runMigrationsAndValidate(databaseName, 6, true, *CatalogMigrations.ALL)
+        try {
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM saf_documents WHERE documentId='root'"))
+            assertEquals("content://provider/tree/music", migrated.singleString("SELECT uri FROM saf_documents WHERE documentId='root'"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM tracks"))
+        } finally {
+            migrated.close()
+        }
+    }
+
     private fun insertVersionOneFixture(database: SupportSQLiteDatabase) {
         database.execSQL("INSERT INTO tracks VALUES ('track-1', 'ACTIVE', 1000, 1000)")
         database.execSQL(

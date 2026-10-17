@@ -6,6 +6,7 @@ import androidx.room.RawQuery
 import androidx.sqlite.db.SupportSQLiteQuery
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryArtworkCandidate
+import com.theemrock.smoothmedia.library.LibraryArtistAlbumPreview
 import com.theemrock.smoothmedia.library.LibraryTrackRow
 
 @Dao
@@ -374,6 +375,68 @@ interface LibraryDao {
     @Query(
         """
         SELECT
+            COALESCE(album_override.value, m.normalizedAlbum) AS album,
+            COALESCE(album_artist_override.value, m.normalizedAlbumArtist, '') AS albumArtist
+        FROM tracks AS t
+        LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
+        LEFT JOIN track_metadata_overrides AS artist_override
+            ON artist_override.trackId = t.track_id AND artist_override.fieldName = 'ARTIST'
+        LEFT JOIN track_metadata_overrides AS album_override
+            ON album_override.trackId = t.track_id AND album_override.fieldName = 'ALBUM'
+        LEFT JOIN track_metadata_overrides AS album_artist_override
+            ON album_artist_override.trackId = t.track_id AND album_artist_override.fieldName = 'ALBUM_ARTIST'
+        WHERE t.catalog_lifecycle = 'ACTIVE'
+          AND COALESCE(artist_override.value, m.normalizedArtist) = :artist
+          AND COALESCE(album_override.value, m.normalizedAlbum) IS NOT NULL
+          AND trim(COALESCE(album_override.value, m.normalizedAlbum)) <> ''
+          AND (
+              NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id = t.track_id)
+              OR EXISTS (
+                  SELECT 1
+                  FROM track_locations visible_l
+                  LEFT JOIN locator_bindings visible_b ON visible_b.location_id = visible_l.location_id
+                  LEFT JOIN catalog_exclusions visible_e
+                    ON visible_e.source_id = visible_l.source_id AND visible_e.locator = visible_b.locator
+                  WHERE visible_l.track_id = t.track_id AND visible_e.exclusion_id IS NULL
+              )
+          )
+        GROUP BY album, albumArtist
+        ORDER BY album COLLATE NOCASE, albumArtist COLLATE NOCASE
+        LIMIT :limit
+        """,
+    )
+    fun loadArtistAlbumPreviews(artist: String, limit: Int): List<LibraryArtistAlbumPreview>
+
+    @Query(
+        """
+        SELECT t.track_id
+        FROM tracks AS t
+        LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
+        LEFT JOIN track_metadata_overrides AS genre_override
+            ON genre_override.trackId = t.track_id AND genre_override.fieldName = 'GENRE'
+        WHERE t.catalog_lifecycle = 'ACTIVE'
+          AND COALESCE(genre_override.value, m.normalizedGenres) = :genre
+          AND (
+              NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id = t.track_id)
+              OR EXISTS (
+                  SELECT 1
+                  FROM track_locations visible_l
+                  LEFT JOIN locator_bindings visible_b ON visible_b.location_id = visible_l.location_id
+                  LEFT JOIN catalog_exclusions visible_e
+                      ON visible_e.source_id = visible_l.source_id
+                     AND visible_e.locator = visible_b.locator
+                  WHERE visible_l.track_id = t.track_id AND visible_e.exclusion_id IS NULL
+              )
+          )
+        ORDER BY t.track_id
+        LIMIT :limit
+        """,
+    )
+    fun loadGenreArtworkPreviews(genre: String, limit: Int): List<String>
+
+    @Query(
+        """
+        SELECT
             genre AS `key`,
             genre AS title,
             NULL AS subtitle,
@@ -415,8 +478,8 @@ interface LibraryDao {
     @Query(
         """
         SELECT
-            path AS `key`,
-            path AS title,
+            sourceId || char(30) || folderPath AS `key`,
+            folderPath AS title,
             NULL AS subtitle,
             COUNT(DISTINCT trackId) AS trackCount,
             0 AS albumCount,
@@ -425,19 +488,21 @@ interface LibraryDao {
         FROM (
             SELECT
                 t.track_id AS trackId,
-                l.path AS path
+                COALESCE(NULLIF(l.path, ''), s.volume_name, b.locator) AS folderPath,
+                COALESCE(l.source_id, 'NO_SOURCE') AS sourceId
             FROM tracks AS t
             JOIN track_locations AS l ON l.track_id = t.track_id
             LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
+            LEFT JOIN library_sources AS s ON s.source_id = l.source_id
             LEFT JOIN catalog_exclusions AS e
                 ON e.source_id = l.source_id AND e.locator = b.locator
             WHERE t.catalog_lifecycle = 'ACTIVE'
               AND e.exclusion_id IS NULL
-              AND l.path IS NOT NULL
-              AND trim(l.path) <> ''
+              AND COALESCE(NULLIF(l.path, ''), s.volume_name, b.locator) IS NOT NULL
+              AND trim(COALESCE(NULLIF(l.path, ''), s.volume_name, b.locator)) <> ''
         )
-        GROUP BY path
-        ORDER BY path COLLATE NOCASE, `key`
+        GROUP BY sourceId, folderPath
+        ORDER BY folderPath COLLATE NOCASE, `key`
         LIMIT :limit OFFSET :offset
         """,
     )
@@ -533,13 +598,17 @@ interface LibraryDao {
     @Query(
         """
         SELECT COUNT(*) FROM (
-            SELECT l.path
+            SELECT COALESCE(NULLIF(l.path, ''), s.volume_name, b.locator), l.source_id
             FROM tracks AS t
             JOIN track_locations AS l ON l.track_id = t.track_id
             LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
+            LEFT JOIN library_sources AS s ON s.source_id = l.source_id
             LEFT JOIN catalog_exclusions AS e ON e.source_id = l.source_id AND e.locator = b.locator
-            WHERE t.catalog_lifecycle = 'ACTIVE' AND e.exclusion_id IS NULL AND l.path IS NOT NULL AND trim(l.path) <> ''
-            GROUP BY l.path
+            WHERE t.catalog_lifecycle = 'ACTIVE'
+              AND e.exclusion_id IS NULL
+              AND COALESCE(NULLIF(l.path, ''), s.volume_name, b.locator) IS NOT NULL
+              AND trim(COALESCE(NULLIF(l.path, ''), s.volume_name, b.locator)) <> ''
+            GROUP BY COALESCE(NULLIF(l.path, ''), s.volume_name, b.locator), l.source_id
         )
         """,
     )

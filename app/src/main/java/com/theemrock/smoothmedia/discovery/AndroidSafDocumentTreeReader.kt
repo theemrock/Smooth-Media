@@ -66,6 +66,7 @@ class AndroidSafDocumentTreeReader(
                     val uri = DocumentsContract.buildDocumentUriUsingTree(parentUri, documentId)
                     TreeDocument(
                         documentId = documentId,
+                        parentDocumentId = directoryDocumentId(parentUri),
                         uri = uri.toString(),
                         displayName = displayName,
                         mimeType = mimeType,
