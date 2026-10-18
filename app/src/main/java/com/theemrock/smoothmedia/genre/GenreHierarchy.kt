@@ -5,7 +5,7 @@ data class GenreNode(val id: String, val parentIds: Set<String> = emptySet())
 sealed interface GenreQuery {
     fun matches(values: Set<String>): Boolean
 
-    data class Term(val id: String) : GenreQuery {
+    data class Term(val id: String, val includeDescendants: Boolean = false) : GenreQuery {
         override fun matches(values: Set<String>): Boolean = id.trim().lowercase() in values
     }
 

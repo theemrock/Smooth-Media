@@ -23,8 +23,25 @@ class GenreHierarchyTest {
     fun rejectsCyclesAndMissingParents() {
         val cycle = GenreHierarchy.build(listOf(GenreNode("a", setOf("b")), GenreNode("b", setOf("a"))))
         val missing = GenreHierarchy.build(listOf(GenreNode("child", setOf("missing"))))
+        val selfParent = GenreHierarchy.build(listOf(GenreNode("self", setOf("self"))))
 
         assertTrue(cycle is GenreBuildResult.Invalid)
         assertTrue(missing is GenreBuildResult.Invalid)
+        assertTrue(selfParent is GenreBuildResult.Invalid)
+    }
+
+    @Test
+    fun trimsIdsAndDeduplicatesDescendantsAcrossMultipleParents() {
+        val result = GenreHierarchy.build(
+            listOf(
+                GenreNode(" root "),
+                GenreNode("left", setOf("root")),
+                GenreNode("right", setOf("root")),
+                GenreNode("leaf", setOf("left", "right")),
+            ),
+        )
+
+        val graph = (result as GenreBuildResult.Valid).value
+        assertEquals(listOf("leaf", "left", "right").sorted(), graph.descendantsOf("root"))
     }
 }

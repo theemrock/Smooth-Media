@@ -235,6 +235,7 @@ sealed interface LibraryTrackFilter {
     ) : LibraryTrackFilter
     data class Artist(val artist: String) : LibraryTrackFilter
     data class Genre(val genre: String) : LibraryTrackFilter
+    data class GenreId(val genreId: String, val includeDescendants: Boolean = false) : LibraryTrackFilter
     data class Folder(val path: String) : LibraryTrackFilter
     data class SafFolder(val sourceId: String, val documentId: String) : LibraryTrackFilter
 }
@@ -506,7 +507,11 @@ class RoomLibraryRepository(
         val rows = when (type) {
             LibraryCollectionType.ALBUMS -> dao.loadAlbums(offset, limit + 1)
             LibraryCollectionType.ARTISTS -> dao.loadArtists(offset, limit + 1)
-            LibraryCollectionType.GENRES -> dao.loadGenres(offset, limit + 1)
+            LibraryCollectionType.GENRES -> if (dao.countCanonicalGenres() > 0) {
+                dao.loadCanonicalGenres(offset, limit + 1)
+            } else {
+                dao.loadGenres(offset, limit + 1)
+            }
             LibraryCollectionType.FOLDERS -> {
                 val graphRows = safDocumentDao?.loadDirectoryRows(offset, limit + 1).orEmpty()
                 if (safDocumentDao?.countDirectories()?.let { it > 0 } == true) graphRows
@@ -522,7 +527,7 @@ class RoomLibraryRepository(
     override fun countCollections(type: LibraryCollectionType): Int = when (type) {
         LibraryCollectionType.ALBUMS -> dao.countAlbums()
         LibraryCollectionType.ARTISTS -> dao.countArtists()
-        LibraryCollectionType.GENRES -> dao.countGenres()
+        LibraryCollectionType.GENRES -> if (dao.countCanonicalGenres() > 0) dao.countCanonicalGenres() else dao.countGenres()
         LibraryCollectionType.FOLDERS -> {
             val graphCount = safDocumentDao?.countDirectories()
             if (graphCount != null && graphCount > 0) graphCount else dao.countFolders()
@@ -590,6 +595,7 @@ class RoomLibraryRepository(
         )
         is LibraryTrackFilter.Artist -> arrayOf(filter.artist)
         is LibraryTrackFilter.Genre -> arrayOf(filter.genre)
+        is LibraryTrackFilter.GenreId -> arrayOf(filter.genreId)
         is LibraryTrackFilter.Folder -> arrayOf(filter.path, filter.path)
         is LibraryTrackFilter.SafFolder -> arrayOf(filter.sourceId, filter.documentId)
     }
@@ -662,10 +668,10 @@ class RoomLibraryRepository(
     }
 
     private fun filteredTracksSql(filter: LibraryTrackFilter, limit: Int, offset: Int): String =
-        folderScopeCte(filter) + filteredSelectSql(filter) + " LIMIT $limit OFFSET $offset"
+        genreScopeCte(filter) + folderScopeCte(filter) + filteredSelectSql(filter) + " LIMIT $limit OFFSET $offset"
 
     private fun filteredCountSql(filter: LibraryTrackFilter): String =
-        folderScopeCte(filter) + "SELECT COUNT(*) FROM tracks AS t LEFT JOIN track_metadata AS m ON m.trackId=t.track_id WHERE " + visibleTrackWhere(filter)
+        genreScopeCte(filter) + folderScopeCte(filter) + "SELECT COUNT(*) FROM tracks AS t LEFT JOIN track_metadata AS m ON m.trackId=t.track_id WHERE " + visibleTrackWhere(filter)
 
     private fun folderScopeCte(filter: LibraryTrackFilter): String = if (filter is LibraryTrackFilter.SafFolder) {
         """
@@ -687,6 +693,11 @@ class RoomLibraryRepository(
         is LibraryTrackFilter.Album -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ALBUM'), m.normalizedAlbum)=? AND (?='' OR COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ALBUM_ARTIST'), m.normalizedAlbumArtist, '')=?) AND ( (?='${AlbumGroupingKey.UNKNOWN_SOURCE}' AND ?='${AlbumGroupingKey.UNKNOWN_FOLDER}' AND NOT EXISTS (SELECT 1 FROM track_locations scope_l WHERE scope_l.track_id=t.track_id)) OR EXISTS (SELECT 1 FROM track_locations scope_l LEFT JOIN locator_bindings scope_b ON scope_b.location_id=scope_l.location_id WHERE scope_l.track_id=t.track_id AND COALESCE(scope_l.source_id,'${AlbumGroupingKey.UNKNOWN_SOURCE}')=? AND COALESCE(NULLIF(scope_l.path,''),scope_b.locator,'${AlbumGroupingKey.UNKNOWN_FOLDER}') LIKE ? || '%') )"
             is LibraryTrackFilter.Artist -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='ARTIST'), m.normalizedArtist)=?"
             is LibraryTrackFilter.Genre -> "COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='GENRE'), m.normalizedGenres)=?"
+            is LibraryTrackFilter.GenreId -> if (filter.includeDescendants) {
+                "EXISTS (SELECT 1 FROM track_genre_assignments genre_assignment JOIN genre_scope genre_filter ON genre_filter.genreId=genre_assignment.genreId WHERE genre_assignment.trackId=t.track_id)"
+            } else {
+                "EXISTS (SELECT 1 FROM track_genre_assignments genre_assignment WHERE genre_assignment.trackId=t.track_id AND genre_assignment.genreId=?)"
+            }
         is LibraryTrackFilter.Folder -> "EXISTS (SELECT 1 FROM track_locations filter_l LEFT JOIN locator_bindings filter_b ON filter_b.location_id=filter_l.location_id LEFT JOIN library_sources filter_s ON filter_s.source_id=filter_l.source_id LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_l.track_id=t.track_id AND (filter_b.locator=? OR COALESCE(NULLIF(filter_l.path,''),filter_s.volume_name,filter_b.locator)=?) AND filter_e.exclusion_id IS NULL)"
         is LibraryTrackFilter.SafFolder -> "EXISTS (SELECT 1 FROM saf_documents filter_f JOIN folder_scope filter_scope ON filter_scope.sourceId=filter_f.sourceId AND filter_scope.documentId=filter_f.parentDocumentId JOIN track_locations filter_l ON filter_l.source_id=filter_f.sourceId JOIN locator_bindings filter_b ON filter_b.source_id=filter_l.source_id AND filter_b.location_id=filter_l.location_id AND filter_b.locator=filter_f.uri LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_f.isDirectory=0 AND filter_f.available=1 AND filter_l.track_id=t.track_id AND filter_e.exclusion_id IS NULL)"
         }
@@ -716,6 +727,18 @@ class RoomLibraryRepository(
               COALESCE((SELECT value FROM track_metadata_overrides WHERE trackId=t.track_id AND fieldName='TITLE'),m.normalizedTitle,'') COLLATE NOCASE,t.track_id
         """.trimIndent()
     }
+
+    private fun genreScopeCte(filter: LibraryTrackFilter): String = if (filter is LibraryTrackFilter.GenreId && filter.includeDescendants) {
+        """
+        WITH RECURSIVE genre_scope(genreId) AS (
+            SELECT ?
+            UNION
+            SELECT e.childGenreId
+            FROM genre_edges e
+            INNER JOIN genre_scope parent ON parent.genreId=e.parentGenreId
+        )
+        """.trimIndent() + "\n"
+    } else ""
 }
 
 data class LibraryUiState(

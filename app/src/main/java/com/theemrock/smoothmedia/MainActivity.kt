@@ -1410,7 +1410,7 @@ class MainActivity : ComponentActivity() {
             val folderParts = row.key.split('\u001E')
             val filter = when (type) {
                 LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
-                LibraryCollectionType.GENRES -> LibraryTrackFilter.Genre(row.title)
+                LibraryCollectionType.GENRES -> LibraryTrackFilter.GenreId(row.key, includeDescendants = true)
                 LibraryCollectionType.FOLDERS -> if (folderParts.size == 2) {
                     LibraryTrackFilter.SafFolder(folderParts[0], folderParts[1])
                 } else LibraryTrackFilter.Folder(row.key)
@@ -1440,7 +1440,7 @@ class MainActivity : ComponentActivity() {
                     }
             } else emptyList()
             val genreChildren = if (type == LibraryCollectionType.GENRES) {
-                RoomGenreRepository(runtime.database.genreDao()).childGenresOf(row.key).map { child ->
+                RoomGenreRepository(runtime.database).childGenresOf(row.key).map { child ->
                     LibraryCollectionRow(child.id, child.displayName, null, child.directTrackCount)
                 }
             } else emptyList()
@@ -1462,7 +1462,7 @@ class MainActivity : ComponentActivity() {
         val filter = when (type) {
             LibraryCollectionType.ALBUMS -> AlbumGroupingKey.decode(row.key, row.title, row.subtitle.orEmpty()).toFilter()
             LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
-            LibraryCollectionType.GENRES -> LibraryTrackFilter.Genre(row.title)
+            LibraryCollectionType.GENRES -> LibraryTrackFilter.GenreId(row.key, includeDescendants = true)
             LibraryCollectionType.FOLDERS -> row.key.split('\u001E').takeIf { it.size == 2 }
                 ?.let { LibraryTrackFilter.SafFolder(it[0], it[1]) }
                 ?: LibraryTrackFilter.Folder(row.key)

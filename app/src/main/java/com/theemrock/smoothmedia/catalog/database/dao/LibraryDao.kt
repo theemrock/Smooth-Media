@@ -488,6 +488,28 @@ interface LibraryDao {
 
     @Query(
         """
+        SELECT n.genreId AS `key`,
+               n.displayName AS title,
+               NULL AS subtitle,
+               COUNT(DISTINCT t.track_id) AS trackCount,
+               0 AS albumCount,
+               0 AS mp3Count,
+               0 AS flacCount
+        FROM genre_nodes n
+        LEFT JOIN track_genre_assignments a ON a.genreId=n.genreId
+        LEFT JOIN tracks t ON t.track_id=a.trackId AND t.catalog_lifecycle='ACTIVE'
+        GROUP BY n.genreId, n.displayName
+        ORDER BY n.normalizedName, n.genreId
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    fun loadCanonicalGenres(offset: Int, limit: Int): List<LibraryCollectionRow>
+
+    @Query("SELECT COUNT(*) FROM genre_nodes")
+    fun countCanonicalGenres(): Int
+
+    @Query(
+        """
         SELECT
             sourceId || char(30) || folderPath AS `key`,
             folderPath AS title,
