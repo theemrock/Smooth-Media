@@ -221,7 +221,7 @@ private fun CollectionListRow(
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
         if (type == LibraryCollectionType.ALBUMS && artworkResolver != null) {
-            LibraryArtwork(ArtworkRequest.Album(collection.title, collection.subtitle.orEmpty()), artworkResolver, Modifier.size(64.dp), "Album artwork for ${collection.title}", 128)
+            LibraryArtwork(ArtworkRequest.Album(collection.title, collection.subtitle.orEmpty(), collection.key), artworkResolver, Modifier.size(64.dp), "Album artwork for ${collection.title}", 128)
         } else if (type == LibraryCollectionType.GENRES && artworkResolver != null && genrePreviews.orEmpty().isNotEmpty()) {
             LibraryArtwork(ArtworkRequest.Track(genrePreviews.orEmpty().first().trackId), artworkResolver, Modifier.size(64.dp), "Artwork for ${collection.title}", 128)
         } else {
@@ -460,7 +460,7 @@ private fun CollectionCard(
             ) {
                 if (type == LibraryCollectionType.ALBUMS && artworkResolver != null) {
                     LibraryArtwork(
-                        request = ArtworkRequest.Album(collection.title, collection.subtitle.orEmpty()),
+                        request = ArtworkRequest.Album(collection.title, collection.subtitle.orEmpty(), collection.key),
                         resolver = artworkResolver,
                         modifier = Modifier.fillMaxSize(),
                         contentDescription = "Album artwork for ${collection.title}",

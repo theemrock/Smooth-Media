@@ -474,7 +474,7 @@ private fun DashboardCollectionSection(
                     Column(modifier = Modifier.width(cardWidth).clickable { onSelected(type, row) }) {
                     if (type == LibraryCollectionType.ALBUMS && artworkResolver != null) {
                         LibraryArtwork(
-                            request = ArtworkRequest.Album(row.title, row.subtitle.orEmpty()),
+                            request = ArtworkRequest.Album(row.title, row.subtitle.orEmpty(), row.key),
                             resolver = artworkResolver,
                             modifier = Modifier.size(cardWidth).clip(RoundedCornerShape(8.dp)),
                             contentDescription = "Artwork: ${row.title}",

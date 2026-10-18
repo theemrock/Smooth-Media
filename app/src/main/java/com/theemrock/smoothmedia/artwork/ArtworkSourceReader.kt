@@ -86,6 +86,22 @@ class ArtworkSourceReader(
         }
     }
 
+    fun readFolderFile(locator: String): ArtworkSourceResult {
+        return try {
+            val payload = backend.readFile(locator, maxEncodedBytes)
+                ?: return missing(ArtworkSourceType.FOLDER_IMAGE, locator)
+            inspect(ArtworkSourceType.FOLDER_IMAGE, locator, payload)
+        } catch (_: SecurityException) {
+            failure(ArtworkSourceType.FOLDER_IMAGE, locator, ArtworkFailureReason.PERMISSION_LOST)
+        } catch (_: ArtworkPayloadTooLargeException) {
+            failure(ArtworkSourceType.FOLDER_IMAGE, locator, ArtworkFailureReason.TOO_LARGE)
+        } catch (_: IllegalArgumentException) {
+            failure(ArtworkSourceType.FOLDER_IMAGE, locator, ArtworkFailureReason.SOURCE_UNAVAILABLE)
+        } catch (_: Exception) {
+            failure(ArtworkSourceType.FOLDER_IMAGE, locator, ArtworkFailureReason.READ_FAILED)
+        }
+    }
+
     fun readFolderArtwork(
         folderLocator: String,
         isCancelled: () -> Boolean = { false },

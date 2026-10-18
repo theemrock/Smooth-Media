@@ -22,6 +22,20 @@ class ArtworkSourceReaderTest {
     }
 
     @Test
+    fun persistedFolderFileCanBeReadAsArtwork() {
+        val reader = ArtworkSourceReader(
+            backend = FakeArtworkBackend(files = mapOf("cover" to byteArrayOf(1, 2))),
+            inspector = ArtworkImageInspector { ArtworkImageInfo("image/jpeg", 320, 320) },
+        )
+
+        val result = reader.readFolderFile("cover")
+
+        assertEquals(ArtworkSourceType.FOLDER_IMAGE, result.sourceType)
+        assertEquals(ArtworkAvailability.AVAILABLE, result.availability)
+        assertEquals("cover", result.locator)
+    }
+
+    @Test
     fun folderArtworkPrefersCoverAndIgnoresOtherFiles() {
         val backend = FakeArtworkBackend(
             children = listOf(

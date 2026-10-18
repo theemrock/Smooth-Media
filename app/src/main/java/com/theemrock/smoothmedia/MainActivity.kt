@@ -2,6 +2,7 @@ package com.theemrock.smoothmedia
 
 import android.app.Activity
 import android.os.Bundle
+import java.io.File
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.compose.setContent
@@ -54,6 +55,8 @@ import com.theemrock.smoothmedia.playback.RepeatMode
 import com.theemrock.smoothmedia.playback.PlaybackQueueStore
 import com.theemrock.smoothmedia.playback.QueueMode
 import com.theemrock.smoothmedia.artwork.AndroidArtworkResolver
+import com.theemrock.smoothmedia.artwork.ArtworkDiskCache
+import com.theemrock.smoothmedia.artwork.ArtworkRepository
 import com.theemrock.smoothmedia.ui.LibraryScreen
 import com.theemrock.smoothmedia.ui.LibraryDashboardScreen
 import com.theemrock.smoothmedia.ui.LibraryCollectionScreen
@@ -392,7 +395,12 @@ class MainActivity : ComponentActivity() {
             runtime.database.safDocumentDao(),
         )
         lyricsCache = RoomLyricsCache(runtime.database.lyricsCacheDao())
-        artworkResolver = AndroidArtworkResolver(contentResolver, libraryRepository)
+        artworkResolver = AndroidArtworkResolver(
+            contentResolver = contentResolver,
+            candidates = libraryRepository,
+            diskCache = ArtworkDiskCache(File(cacheDir, "artwork-thumbnails")),
+            artworkRepository = ArtworkRepository(runtime.database),
+        )
         searchViewModel = LibrarySearchViewModel(libraryRepository)
         libraryViewModel = LibraryViewModel(
             pageLoader = libraryRepository::loadPage,

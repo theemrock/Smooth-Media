@@ -112,7 +112,7 @@ private fun AlbumDetailHeader(data: LibraryAlbumDetailData, totalDuration: Long,
     Row(modifier = Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
         if (artworkResolver != null) {
             LibraryArtwork(
-                request = ArtworkRequest.Album(data.album.title, data.album.subtitle.orEmpty()),
+                request = ArtworkRequest.Album(data.album.title, data.album.subtitle.orEmpty(), data.album.key),
                 resolver = artworkResolver,
                 modifier = Modifier.size(144.dp).clip(RoundedCornerShape(10.dp)),
                 contentDescription = "Albüm kapağı",

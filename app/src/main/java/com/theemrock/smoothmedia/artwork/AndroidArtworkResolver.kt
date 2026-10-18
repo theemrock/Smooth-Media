@@ -13,8 +13,10 @@ sealed interface ArtworkRequest {
     data class Album(
         val album: String,
         val albumArtist: String,
+        val collectionKey: String? = null,
     ) : ArtworkRequest {
-        override val cacheKey: String = "album\u0000$album\u0000$albumArtist"
+        override val cacheKey: String = collectionKey?.let { "album-key\u0000$it" }
+            ?: "album\u0000$album\u0000$albumArtist"
     }
 
     data class Track(val trackId: String) : ArtworkRequest {
@@ -26,6 +28,8 @@ class AndroidArtworkResolver(
     private val contentResolver: ContentResolver,
     private val candidates: LibraryArtworkCandidateRepository,
     maxCacheBytes: Int = 4 * 1024 * 1024,
+    private val diskCache: ArtworkDiskCache? = null,
+    private val artworkRepository: ArtworkRepository? = null,
 ) {
     private val sourceReader = ArtworkSourceReader(
         backend = AndroidArtworkSourceBackend(contentResolver),
@@ -37,22 +41,43 @@ class AndroidArtworkResolver(
     private val failedCache = LruCache<String, Boolean>(128)
 
     fun load(request: ArtworkRequest, targetPx: Int): Bitmap? {
-        bitmapCache.get(request.cacheKey)?.let { return it }
-        if (failedCache.get(request.cacheKey) == true) return null
+        val persistedAsset = persistedAsset(request)
+        val cacheIdentity = persistedAsset?.assetId ?: request.cacheKey
+        val cacheVersion = persistedAsset?.updatedAtEpochMs?.toString() ?: "v1"
+        val cacheKey = ArtworkCacheKey.forThumbnail(cacheIdentity, targetPx, cacheVersion)
+        bitmapCache.get(cacheKey)?.let { return it }
+        diskCache?.get(cacheKey)?.let { encoded ->
+            decodeSampled(encoded, targetPx)?.let { bitmap ->
+                bitmapCache.put(cacheKey, bitmap)
+                return bitmap
+            }
+            diskCache.invalidate(cacheKey)
+        }
+        if (failedCache.get(cacheKey) == true) return null
         val selector = EmbeddedArtworkSelector(
             candidateLoader = { key -> loadCandidates(request, key) },
             artworkReader = ::readEmbeddedArtwork,
         )
-        val bytes = selector.load(request.cacheKey) ?: run {
-            failedCache.put(request.cacheKey, true)
+        val bytes = persistedAsset?.let(::readPersistedArtwork)
+            ?: selector.load(request.cacheKey)
+            ?: run {
+            failedCache.put(cacheKey, true)
             return null
         }
         val bitmap = decodeSampled(bytes, targetPx) ?: run {
-            failedCache.put(request.cacheKey, true)
+            failedCache.put(cacheKey, true)
             return null
         }
-        bitmapCache.put(request.cacheKey, bitmap)
+        diskCache?.put(cacheKey, bytes)
+        bitmapCache.put(cacheKey, bitmap)
         return bitmap
+    }
+
+    fun invalidate(request: ArtworkRequest, targetPx: Int) {
+        val cacheKey = ArtworkCacheKey.forThumbnail(request.cacheKey, targetPx)
+        bitmapCache.remove(cacheKey)
+        failedCache.remove(cacheKey)
+        diskCache?.invalidate(cacheKey)
     }
 
     private fun loadCandidates(request: ArtworkRequest, key: String): List<ArtworkCandidate> =
@@ -64,6 +89,18 @@ class AndroidArtworkResolver(
     private fun readEmbeddedArtwork(locator: String): ByteArray? {
         return sourceReader.readEmbedded(locator).payload
     }
+
+    private fun persistedAsset(request: ArtworkRequest) =
+        (request as? ArtworkRequest.Album)
+            ?.collectionKey
+            ?.let { artworkRepository?.resolveAsset(it) }
+
+    private fun readPersistedArtwork(asset: com.theemrock.smoothmedia.catalog.database.entity.ArtworkAssetEntity): ByteArray? =
+        when (asset.sourceType) {
+            ArtworkSourceType.EMBEDDED_AUDIO.name -> sourceReader.readEmbedded(asset.sourceLocator).payload
+            ArtworkSourceType.FOLDER_IMAGE.name -> sourceReader.readFolderFile(asset.sourceLocator).payload
+            else -> null
+        }
 
     private fun decodeSampled(bytes: ByteArray, targetPx: Int): Bitmap? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }

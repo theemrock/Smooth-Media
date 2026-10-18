@@ -105,7 +105,7 @@ fun LibraryDetailScreen(
               LazyColumn(state = albumListState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 items(albums, key = { it.key }) { album ->
                     Row(modifier = Modifier.fillMaxWidth().clickable { onAlbumSelected(album) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                        if (artworkResolver != null) LibraryArtwork(ArtworkRequest.Album(album.title, album.subtitle.orEmpty()), artworkResolver, Modifier.size(52.dp).clip(RoundedCornerShape(7.dp)), "Album artwork", 128)
+                        if (artworkResolver != null) LibraryArtwork(ArtworkRequest.Album(album.title, album.subtitle.orEmpty(), album.key), artworkResolver, Modifier.size(52.dp).clip(RoundedCornerShape(7.dp)), "Album artwork", 128)
                         Column(modifier = Modifier.weight(1f).padding(horizontal = 10.dp)) {
                             Text(album.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
                             Text("${album.subtitle.orEmpty()} · ${album.trackCount} şarkı", color = Color(0xFFAAB9C2), fontSize = 12.sp)
