@@ -142,6 +142,7 @@ object CatalogMigrations {
             db.execSQL("CREATE INDEX IF NOT EXISTS index_artwork_album_bindings_assetId ON artwork_album_bindings(assetId)")
             db.execSQL("CREATE INDEX IF NOT EXISTS index_artwork_album_bindings_sourceId ON artwork_album_bindings(sourceId)")
             db.execSQL("CREATE TABLE IF NOT EXISTS artwork_overrides (collectionKey TEXT NOT NULL, assetId TEXT NOT NULL, updatedAtEpochMs INTEGER NOT NULL, PRIMARY KEY(collectionKey), FOREIGN KEY(assetId) REFERENCES artwork_assets(assetId) ON UPDATE NO ACTION ON DELETE NO ACTION)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_artwork_overrides_assetId ON artwork_overrides(assetId)")
         }
     }
 

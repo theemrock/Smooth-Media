@@ -252,6 +252,12 @@ class CatalogMigrationTest {
             assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM track_locations"))
             assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM locator_bindings"))
             assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM metadata_recovery_decisions"))
+            assertEquals(
+                1,
+                migrated.singleInt(
+                    "SELECT COUNT(*) FROM sqlite_master WHERE type = 'index' AND name = 'index_artwork_overrides_assetId'",
+                ),
+            )
             migrated.execSQL("INSERT INTO artwork_assets VALUES ('asset-1','hash-1','EMBEDDED_AUDIO','content://provider/document/track','source-1','image/jpeg',100,100,'AVAILABLE',NULL,4000,4000)")
             migrated.execSQL("INSERT INTO artwork_album_bindings VALUES ('album-source-1','asset-1','source-1',0,4000)")
             migrated.execSQL("INSERT INTO artwork_overrides VALUES ('album-source-1','asset-1',4000)")

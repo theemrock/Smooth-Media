@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <cloud-backup disableIfNoBackup="true">
+        <!-- Keep Room catalog, scan state, recovery decisions and artwork bindings out of cloud restore. -->
+        <exclude domain="database" path="." />
+    </cloud-backup>
+    <device-transfer>
+        <!-- Prevent device-to-device restore from resurrecting the previous catalog. -->
+        <exclude domain="database" path="." />
+    </device-transfer>
+</data-extraction-rules>

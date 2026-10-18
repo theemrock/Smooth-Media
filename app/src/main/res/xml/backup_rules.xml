@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<full-backup-content>
+    <!-- Catalog state is user/device scoped and must not be restored into a clean install. -->
+    <exclude domain="database" path="." />
+</full-backup-content>
