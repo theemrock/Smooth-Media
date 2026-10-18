@@ -3,8 +3,6 @@ package com.theemrock.smoothmedia.artwork
 import android.content.ContentResolver
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
-import android.media.MediaMetadataRetriever
-import android.net.Uri
 import android.util.LruCache
 import com.theemrock.smoothmedia.library.LibraryArtworkCandidate
 import com.theemrock.smoothmedia.library.LibraryArtworkCandidateRepository
@@ -29,6 +27,10 @@ class AndroidArtworkResolver(
     private val candidates: LibraryArtworkCandidateRepository,
     maxCacheBytes: Int = 4 * 1024 * 1024,
 ) {
+    private val sourceReader = ArtworkSourceReader(
+        backend = AndroidArtworkSourceBackend(contentResolver),
+        inspector = AndroidBitmapArtworkInspector(),
+    )
     private val bitmapCache = object : LruCache<String, Bitmap>(maxCacheBytes) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
@@ -60,17 +62,7 @@ class AndroidArtworkResolver(
         }.map(LibraryArtworkCandidate::toArtworkCandidate)
 
     private fun readEmbeddedArtwork(locator: String): ByteArray? {
-        val retriever = MediaMetadataRetriever()
-        return try {
-            contentResolver.openFileDescriptor(Uri.parse(locator), "r")?.use { descriptor ->
-                retriever.setDataSource(descriptor.fileDescriptor)
-                retriever.embeddedPicture
-            }
-        } catch (_: Exception) {
-            null
-        } finally {
-            runCatching { retriever.release() }
-        }
+        return sourceReader.readEmbedded(locator).payload
     }
 
     private fun decodeSampled(bytes: ByteArray, targetPx: Int): Bitmap? {
