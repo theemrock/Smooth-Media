@@ -20,6 +20,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.setValue
@@ -91,6 +92,10 @@ fun SourceManagementScreen(
     metadataApplyStatus: String? = null,
     metadataApplyRunning: Boolean = false,
     onMetadataApply: () -> Unit = {},
+    autonomousApplyEnabled: Boolean = false,
+    autonomousApplyToggleEnabled: Boolean = false,
+    autonomousApplyStatus: String? = null,
+    onAutonomousApplyToggle: (Boolean) -> Unit = {},
     showStandaloneMetadataControls: Boolean = true,
     catalogTrackCounts: Map<String, Int> = emptyMap(),
     onMenu: () -> Unit = {},
@@ -148,6 +153,10 @@ fun SourceManagementScreen(
                             applyStatus = metadataApplyStatus,
                             applyRunning = metadataApplyRunning,
                             onApply = onMetadataApply,
+                            autonomousApplyEnabled = autonomousApplyEnabled,
+                            autonomousApplyToggleEnabled = autonomousApplyToggleEnabled,
+                            autonomousApplyStatus = autonomousApplyStatus,
+                            onAutonomousApplyToggle = onAutonomousApplyToggle,
                         )
                     }
                 }
@@ -205,6 +214,10 @@ private fun MetadataSection(
     applyStatus: String?,
     applyRunning: Boolean,
     onApply: () -> Unit,
+    autonomousApplyEnabled: Boolean,
+    autonomousApplyToggleEnabled: Boolean,
+    autonomousApplyStatus: String?,
+    onAutonomousApplyToggle: (Boolean) -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
@@ -213,6 +226,33 @@ private fun MetadataSection(
             Text("Salt-okunur metadata audit", style = MaterialTheme.typography.titleSmall)
             Text("Otonom onarım: devre dışı (yalnız dry-run)", style = MaterialTheme.typography.bodySmall)
             Text("Apply durumu: DEVRE DIŞI", style = MaterialTheme.typography.bodySmall)
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = androidx.compose.ui.Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.SpaceBetween,
+            ) {
+                Column(modifier = Modifier.weight(1f)) {
+                    Text("Otonom metadata onarımı", style = MaterialTheme.typography.titleSmall)
+                    Text(
+                        if (autonomousApplyToggleEnabled) {
+                            if (autonomousApplyEnabled) "ETKİN" else "DEVRE DIŞI"
+                        } else {
+                            "DEVRE DIŞI · doğrulanmış yedek gerekli"
+                        },
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
+                Switch(
+                    checked = autonomousApplyEnabled,
+                    onCheckedChange = onAutonomousApplyToggle,
+                    enabled = autonomousApplyToggleEnabled,
+                )
+            }
+            Text(
+                "Yalnız kanıtlanmış yüksek güvenli Room metadata düzeltmeleri; ses dosyaları değişmez.",
+                style = MaterialTheme.typography.bodySmall,
+            )
+            autonomousApplyStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             OutlinedButton(onClick = onApplyDryRun, enabled = !applyDryRunRunning) {
                 Text(if (applyDryRunRunning) "Dry-run değerlendiriliyor..." else "Apply dry-run başlat")
             }

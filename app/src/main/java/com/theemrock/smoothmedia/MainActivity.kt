@@ -82,6 +82,10 @@ import com.theemrock.smoothmedia.metadata.RoomMetadataApplyDryRunSummary
 import com.theemrock.smoothmedia.metadata.RoomMetadataApplySessionStore
 import com.theemrock.smoothmedia.metadata.RoomMetadataApplyExecutor
 import com.theemrock.smoothmedia.metadata.ControlledMetadataRoomWriter
+import com.theemrock.smoothmedia.metadata.MetadataAutonomousApplyCoordinator
+import com.theemrock.smoothmedia.metadata.MetadataAutonomousApplyDecision
+import com.theemrock.smoothmedia.metadata.MetadataAutonomousSettings
+import com.theemrock.smoothmedia.metadata.SharedPreferencesMetadataAutonomousSettings
 import com.theemrock.smoothmedia.metadata.RoomTrackMetadataRepository
 import com.theemrock.smoothmedia.metadata.TrackMetadataRepository
 import com.theemrock.smoothmedia.metadata.TrackMetadataEnrichmentUseCase
@@ -143,6 +147,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var metadataRepository: TrackMetadataRepository
     private lateinit var metadataPreviewCoordinator: MetadataRefreshPreviewCoordinator
     private lateinit var metadataRecoveryCoordinator: MetadataRecoverySessionCoordinator
+    private lateinit var metadataAutonomousSettings: MetadataAutonomousSettings
+    private lateinit var metadataAutonomousCoordinator: MetadataAutonomousApplyCoordinator
     private var sources by mutableStateOf<List<LibrarySourceEntity>>(emptyList())
     private var sourceTrackCounts by mutableStateOf<Map<String, Int>>(emptyMap())
     private var statusMessage by mutableStateOf<String?>(null)
@@ -167,6 +173,10 @@ class MainActivity : ComponentActivity() {
     private var metadataApplyDryRunRunning by mutableStateOf(false)
     private var metadataApplyStatus by mutableStateOf<String?>(null)
     private var metadataApplyRunning by mutableStateOf(false)
+    private var metadataAutonomousEnabled by mutableStateOf(false)
+    private var metadataAutonomousToggleEnabled by mutableStateOf(false)
+    private var metadataAutonomousStatus by mutableStateOf<String?>(null)
+    private val metadataAutonomousTriggerRunning = AtomicBoolean(false)
     private var dashboardData by mutableStateOf<LibraryDashboardData?>(null)
     private var showDashboard by mutableStateOf(true)
     private var showLibrary by mutableStateOf(false)
@@ -237,6 +247,16 @@ class MainActivity : ComponentActivity() {
         )
         enableEdgeToEdge()
         runtime = SourceRegistryFactory.create(this)
+        metadataAutonomousSettings = SharedPreferencesMetadataAutonomousSettings(this)
+        metadataAutonomousEnabled = metadataAutonomousSettings.enabled
+        // No verified in-app WAL backup provider exists yet; keep the switch
+        // disabled and make the autonomous trigger fail closed.
+        metadataAutonomousCoordinator = MetadataAutonomousApplyCoordinator(
+            database = runtime.database,
+            settings = metadataAutonomousSettings,
+            owner = "autonomous-apply-${android.os.Process.myPid()}",
+            backupVerified = { false },
+        )
         executor = Executors.newSingleThreadExecutor()
         scanControlExecutor = Executors.newSingleThreadExecutor()
         equalizerProfileStore = EqualizerProfileStore(this)
@@ -703,6 +723,10 @@ class MainActivity : ComponentActivity() {
                             metadataApplyStatus = metadataApplyStatus,
                             metadataApplyRunning = metadataApplyRunning,
                             onMetadataApply = ::startApprovedMetadataApply,
+                            autonomousApplyEnabled = metadataAutonomousEnabled,
+                            autonomousApplyToggleEnabled = metadataAutonomousToggleEnabled,
+                            autonomousApplyStatus = metadataAutonomousStatus,
+                            onAutonomousApplyToggle = ::setMetadataAutonomousEnabledFromUi,
                             showStandaloneMetadataControls = true,
                         )
                     } else if (showLibraryManagement) {
@@ -1073,6 +1097,9 @@ class MainActivity : ComponentActivity() {
                 metadataRecoveryStatus = session.status
                 metadataRecoveryProgress = session
             }
+            if (session.status == MetadataRecoverySessionStatus.COMPLETED) {
+                triggerAutonomousApply(session.sessionId)
+            }
         }
     }
 
@@ -1087,6 +1114,9 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 metadataRecoveryStatus = status
                 metadataRecoveryProgress = snapshot
+            }
+            if (status == MetadataRecoverySessionStatus.COMPLETED) {
+                triggerAutonomousApply(sessionId)
             }
             if (status != MetadataRecoverySessionStatus.RUNNING) return
             if (snapshot?.leaseOwner != null) Thread.sleep(250)
@@ -1113,6 +1143,40 @@ class MainActivity : ComponentActivity() {
             runOnUiThread {
                 metadataRecoveryStatus = MetadataRecoverySessionStatus.CANCELLED
                 metadataRecoveryProgress = snapshot
+            }
+        }
+    }
+
+    private fun setMetadataAutonomousEnabledFromUi(enabled: Boolean) {
+        if (enabled && !metadataAutonomousToggleEnabled) {
+            metadataAutonomousStatus = "Otonom onarım etkinleştirilemedi: doğrulanmış WAL yedeği gerekli."
+            return
+        }
+        metadataAutonomousSettings.setEnabled(enabled)
+        metadataAutonomousEnabled = enabled
+        metadataAutonomousStatus = if (enabled) "Otonom onarım etkin." else "Otonom onarım devre dışı."
+    }
+
+    private fun triggerAutonomousApply(auditSessionId: String) {
+        if (!metadataAutonomousEnabled) {
+            metadataAutonomousStatus = "Audit tamamlandı; otonom onarım devre dışı."
+            return
+        }
+        if (!metadataAutonomousTriggerRunning.compareAndSet(false, true)) return
+        executor.execute {
+            try {
+                val result = metadataAutonomousCoordinator.onAuditCompleted(auditSessionId)
+                runOnUiThread {
+                    metadataAutonomousStatus = when (result.decision) {
+                        MetadataAutonomousApplyDecision.DISABLED -> "Otonom onarım devre dışı."
+                        MetadataAutonomousApplyDecision.BLOCKED_AUDIT -> "Otonom onarım engellendi: audit tamamlanmadı."
+                        MetadataAutonomousApplyDecision.BLOCKED_BACKUP -> "Otonom onarım engellendi: doğrulanmış yedek yok."
+                        MetadataAutonomousApplyDecision.NO_WORK -> "Otonom onarım için yeni uygun karar yok."
+                        MetadataAutonomousApplyDecision.READY -> "Otonom onarım sonucu: ${result.succeeded} alan uygulandı."
+                    }
+                }
+            } finally {
+                metadataAutonomousTriggerRunning.set(false)
             }
         }
     }

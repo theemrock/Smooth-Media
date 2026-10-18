@@ -20,6 +20,9 @@ interface MetadataApplyDao {
     @Query("SELECT * FROM metadata_apply_sessions WHERE auditSessionId = :auditSessionId AND status = 'DRY_RUN' ORDER BY startedAtEpochMs DESC LIMIT 1")
     fun findPendingDryRun(auditSessionId: String): MetadataApplySessionEntity?
 
+    @Query("SELECT * FROM metadata_apply_sessions WHERE auditSessionId = :auditSessionId AND status = 'COMPLETED' ORDER BY completedAtEpochMs DESC LIMIT 1")
+    fun findCompletedForAudit(auditSessionId: String): MetadataApplySessionEntity?
+
     @Query("UPDATE metadata_apply_sessions SET status = :status, cursorDecisionKey = :cursor, processedItems = processedItems + :processed, successCount = successCount + :success, skippedStaleCount = skippedStaleCount + :stale, failedCount = failedCount + :failed, updatedAtEpochMs = :now, completedAtEpochMs = :completedAt WHERE sessionId = :sessionId")
     fun updateSessionProgress(sessionId: String, status: String, cursor: String?, processed: Int, success: Int, stale: Int, failed: Int, now: Long, completedAt: Long?): Int
 
