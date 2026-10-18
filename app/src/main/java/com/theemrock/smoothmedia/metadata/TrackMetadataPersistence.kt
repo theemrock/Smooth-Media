@@ -132,15 +132,15 @@ class RoomTrackMetadataRepository(
 
     private fun normalizeOverride(field: MetadataOverrideField, value: String): MetadataField<*>? =
         when (field) {
-            MetadataOverrideField.TITLE -> normalizer.normalize(RawAudioMetadata(title = value)).title
-            MetadataOverrideField.ARTIST -> normalizer.normalize(RawAudioMetadata(artist = value)).artist
-            MetadataOverrideField.ALBUM -> normalizer.normalize(RawAudioMetadata(album = value)).album
-            MetadataOverrideField.ALBUM_ARTIST -> normalizer.normalize(RawAudioMetadata(albumArtist = value)).albumArtist
-            MetadataOverrideField.GENRE -> normalizer.normalize(RawAudioMetadata(genre = value)).genres
-            MetadataOverrideField.TRACK_NUMBER -> normalizer.normalize(RawAudioMetadata(trackNumber = value)).trackNumber
-            MetadataOverrideField.DISC_NUMBER -> normalizer.normalize(RawAudioMetadata(discNumber = value)).discNumber
-            MetadataOverrideField.YEAR -> normalizer.normalize(RawAudioMetadata(year = value)).year
-            MetadataOverrideField.DURATION_MS -> normalizer.normalize(RawAudioMetadata(durationMs = value)).durationMs
+            MetadataOverrideField.TITLE -> normalizer.normalizeUserOverride(RawAudioMetadata(title = value)).title
+            MetadataOverrideField.ARTIST -> normalizer.normalizeUserOverride(RawAudioMetadata(artist = value)).artist
+            MetadataOverrideField.ALBUM -> normalizer.normalizeUserOverride(RawAudioMetadata(album = value)).album
+            MetadataOverrideField.ALBUM_ARTIST -> normalizer.normalizeUserOverride(RawAudioMetadata(albumArtist = value)).albumArtist
+            MetadataOverrideField.GENRE -> normalizer.normalizeUserOverride(RawAudioMetadata(genre = value)).genres
+            MetadataOverrideField.TRACK_NUMBER -> normalizer.normalizeUserOverride(RawAudioMetadata(trackNumber = value)).trackNumber
+            MetadataOverrideField.DISC_NUMBER -> normalizer.normalizeUserOverride(RawAudioMetadata(discNumber = value)).discNumber
+            MetadataOverrideField.YEAR -> normalizer.normalizeUserOverride(RawAudioMetadata(year = value)).year
+            MetadataOverrideField.DURATION_MS -> normalizer.normalizeUserOverride(RawAudioMetadata(durationMs = value)).durationMs
         }
 
     private fun applyOverride(
@@ -159,7 +159,7 @@ class RoomTrackMetadataRepository(
             MetadataOverrideField.YEAR -> RawAudioMetadata(year = value)
             MetadataOverrideField.DURATION_MS -> RawAudioMetadata(durationMs = value)
         }
-        val override = normalizer.normalize(raw)
+        val override = normalizer.normalizeUserOverride(raw)
         return when (field) {
             MetadataOverrideField.TITLE -> metadata.copy(title = override.title)
             MetadataOverrideField.ARTIST -> metadata.copy(artist = override.artist)

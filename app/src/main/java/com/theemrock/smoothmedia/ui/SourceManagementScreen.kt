@@ -33,11 +33,15 @@ import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceAvailability
 import com.theemrock.smoothmedia.catalog.database.entity.SourcePermissionState
 import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoverySessionEntity
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoverySessionStatus
 import com.theemrock.smoothmedia.catalog.scan.ManualScanProgress
 import com.theemrock.smoothmedia.catalog.scan.ScanPhase
 import com.theemrock.smoothmedia.metadata.MetadataBatchProgress
 import com.theemrock.smoothmedia.metadata.MetadataSessionProgress
 import com.theemrock.smoothmedia.metadata.MetadataSessionStatus
+import com.theemrock.smoothmedia.metadata.MetadataRefreshPreviewResult
+import com.theemrock.smoothmedia.metadata.RoomMetadataApplyDryRunSummary
 import com.theemrock.smoothmedia.source.SourceRefreshResult
 import com.theemrock.smoothmedia.source.SourceRegistrationResult
 import com.theemrock.smoothmedia.source.SourceRemovalResult
@@ -72,6 +76,21 @@ fun SourceManagementScreen(
     metadataSessionProgress: MetadataSessionProgress? = null,
     onMetadataSessionStart: () -> Unit = {},
     onMetadataSessionStop: () -> Unit = {},
+    metadataPreviewRunning: Boolean = false,
+    metadataPreview: MetadataRefreshPreviewResult? = null,
+    onMetadataPreview: () -> Unit = {},
+    metadataRecoveryStatus: MetadataRecoverySessionStatus? = null,
+    metadataRecoveryProgress: MetadataRecoverySessionEntity? = null,
+    onMetadataRecoveryStart: () -> Unit = {},
+    onMetadataRecoveryPause: () -> Unit = {},
+    onMetadataRecoveryResume: () -> Unit = {},
+    onMetadataRecoveryStop: () -> Unit = {},
+    metadataApplyDryRun: RoomMetadataApplyDryRunSummary? = null,
+    metadataApplyDryRunRunning: Boolean = false,
+    onMetadataApplyDryRun: () -> Unit = {},
+    metadataApplyStatus: String? = null,
+    metadataApplyRunning: Boolean = false,
+    onMetadataApply: () -> Unit = {},
     showStandaloneMetadataControls: Boolean = true,
     catalogTrackCounts: Map<String, Int> = emptyMap(),
     onMenu: () -> Unit = {},
@@ -114,6 +133,21 @@ fun SourceManagementScreen(
                             sessionProgress = metadataSessionProgress,
                             onSessionStart = onMetadataSessionStart,
                             onSessionStop = onMetadataSessionStop,
+                            previewRunning = metadataPreviewRunning,
+                            preview = metadataPreview,
+                            onPreview = onMetadataPreview,
+                            recoveryStatus = metadataRecoveryStatus,
+                            recoveryProgress = metadataRecoveryProgress,
+                            onRecoveryStart = onMetadataRecoveryStart,
+                            onRecoveryPause = onMetadataRecoveryPause,
+                            onRecoveryResume = onMetadataRecoveryResume,
+                            onRecoveryStop = onMetadataRecoveryStop,
+                            applyDryRun = metadataApplyDryRun,
+                            applyDryRunRunning = metadataApplyDryRunRunning,
+                            onApplyDryRun = onMetadataApplyDryRun,
+                            applyStatus = metadataApplyStatus,
+                            applyRunning = metadataApplyRunning,
+                            onApply = onMetadataApply,
                         )
                     }
                 }
@@ -156,11 +190,64 @@ private fun MetadataSection(
     sessionProgress: MetadataSessionProgress?,
     onSessionStart: () -> Unit,
     onSessionStop: () -> Unit,
+    previewRunning: Boolean,
+    preview: MetadataRefreshPreviewResult?,
+    onPreview: () -> Unit,
+    recoveryStatus: MetadataRecoverySessionStatus?,
+    recoveryProgress: MetadataRecoverySessionEntity?,
+    onRecoveryStart: () -> Unit,
+    onRecoveryPause: () -> Unit,
+    onRecoveryResume: () -> Unit,
+    onRecoveryStop: () -> Unit,
+    applyDryRun: RoomMetadataApplyDryRunSummary?,
+    applyDryRunRunning: Boolean,
+    onApplyDryRun: () -> Unit,
+    applyStatus: String?,
+    applyRunning: Boolean,
+    onApply: () -> Unit,
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Column(modifier = Modifier.padding(16.dp)) {
             Text(stringResource(R.string.metadata_title), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.metadata_missing_count, missingCount))
+            Text("Salt-okunur metadata audit", style = MaterialTheme.typography.titleSmall)
+            Text("Otonom onarım: devre dışı (yalnız dry-run)", style = MaterialTheme.typography.bodySmall)
+            Text("Apply durumu: DEVRE DIŞI", style = MaterialTheme.typography.bodySmall)
+            OutlinedButton(onClick = onApplyDryRun, enabled = !applyDryRunRunning) {
+                Text(if (applyDryRunRunning) "Dry-run değerlendiriliyor..." else "Apply dry-run başlat")
+            }
+            applyDryRun?.let { result ->
+                Text("Dry-run: ${result.evaluated} karar; uygun ${result.eligible}, değişiklik yok ${result.noChange}")
+                Text(
+                    "Stale ${result.skippedStale} · override ${result.skippedOverride} · okuma ${result.readError} · engelli ${result.blocked}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+                if (result.eligible > 0 && !applyRunning && applyStatus == null) {
+                    OutlinedButton(onClick = onApply) { Text("Onaylı metadata apply") }
+                }
+            }
+            applyStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+            recoveryProgress?.let {
+                Text("${it.status.name}: ${it.processedTracks}/${it.totalTracks} track")
+                Text(
+                    "AUTO ${it.autoRepairCount} · NO_CHANGE ${it.noChangeCount} · REVIEW ${it.reviewRequiredCount} · READ_ERROR ${it.readErrorCount}",
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            when (recoveryStatus) {
+                MetadataRecoverySessionStatus.RUNNING -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedButton(onClick = onRecoveryPause) { Text("Duraklat") }
+                    OutlinedButton(onClick = onRecoveryStop) { Text("Durdur") }
+                }
+                MetadataRecoverySessionStatus.PAUSED -> Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Button(onClick = onRecoveryResume) { Text("Devam et") }
+                    OutlinedButton(onClick = onRecoveryStop) { Text("Durdur") }
+                }
+                MetadataRecoverySessionStatus.COMPLETED,
+                MetadataRecoverySessionStatus.CANCELLED,
+                MetadataRecoverySessionStatus.FAILED,
+                null -> Button(onClick = onRecoveryStart) { Text("Audit başlat") }
+            }
             when {
                 sessionRunning -> Text(stringResource(R.string.metadata_session_running))
                 sessionStatus == MetadataSessionStatus.COMPLETED ->
@@ -193,6 +280,28 @@ private fun MetadataSection(
                         it.failed,
                     ),
                 )
+            }
+            Spacer(modifier = Modifier.height(8.dp))
+            OutlinedButton(onClick = onPreview, enabled = !previewRunning) {
+                Text(if (previewRunning) "Önizleme okunuyor..." else "Metadata önizlemesi (20)")
+            }
+            preview?.let { result ->
+                Text("Önizleme: ${result.items.size} kayıt; Room'a yazılmadı.")
+                result.items.forEach { item ->
+                    val title = item.displayTitle ?: item.trackId.take(8)
+                    item.rawSummary?.let { raw ->
+                        Text("ham: $raw", style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    item.normalizedSummary?.let { normalized ->
+                        Text("normalize: $normalized", style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                    val detail = when {
+                        item.status != com.theemrock.smoothmedia.metadata.MetadataPreviewStatus.READ -> item.status.name
+                        item.changes.isEmpty() -> "değişiklik yok"
+                        else -> item.changes.joinToString { "${it.field.name}: ${it.current ?: "∅"} → ${it.proposed ?: "∅"}" }
+                    }
+                    Text("$title — $detail", style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                }
             }
             Spacer(modifier = Modifier.height(8.dp))
             if (sessionRunning) {

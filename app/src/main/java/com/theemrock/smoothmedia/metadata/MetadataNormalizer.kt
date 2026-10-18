@@ -1,34 +1,48 @@
 package com.theemrock.smoothmedia.metadata
 
 class MetadataNormalizer {
-    fun normalize(raw: RawAudioMetadata): NormalizedAudioMetadata = NormalizedAudioMetadata(
-        title = text(raw.title),
-        artist = text(raw.artist),
-        album = text(raw.album),
-        albumArtist = text(raw.albumArtist),
-        genres = genre(raw.genre),
+    fun normalize(raw: RawAudioMetadata): NormalizedAudioMetadata = normalizeInternal(raw, repairMojibake = true)
+
+    fun normalizeUserOverride(raw: RawAudioMetadata): NormalizedAudioMetadata =
+        normalizeInternal(raw, repairMojibake = false)
+
+    private fun normalizeInternal(raw: RawAudioMetadata, repairMojibake: Boolean): NormalizedAudioMetadata =
+        NormalizedAudioMetadata(
+        title = text(raw.title, repairMojibake),
+        artist = text(raw.artist, repairMojibake),
+        album = text(raw.album, repairMojibake),
+        albumArtist = text(raw.albumArtist, repairMojibake),
+        genres = genre(raw.genre, repairMojibake),
         trackNumber = sequence(raw.trackNumber),
         discNumber = sequence(raw.discNumber),
         year = year(raw.year),
         durationMs = duration(raw.durationMs),
     )
 
-    private fun text(raw: String?): MetadataField<String> {
+    private fun text(raw: String?, repairMojibake: Boolean): MetadataField<String> {
         val value = raw?.trim()?.takeIf(String::isNotEmpty)
         return if (value == null) {
             MetadataField(null, MetadataFieldStatus.MISSING, raw)
         } else {
-            MetadataField(value, MetadataFieldStatus.AVAILABLE, raw)
+            MetadataField(
+                value = if (repairMojibake) TagTextDecoder.normalizeText(value) else value,
+                status = MetadataFieldStatus.AVAILABLE,
+                rawValue = raw,
+            )
         }
     }
 
-    private fun genre(raw: String?): MetadataField<List<String>> {
+    private fun genre(raw: String?, repairMojibake: Boolean): MetadataField<List<String>> {
         val value = raw?.trim()?.takeIf(String::isNotEmpty)
         return if (value == null) {
             MetadataField(null, MetadataFieldStatus.MISSING, raw)
         } else {
             // The platform exposes a combined value; preserve it instead of guessing separators.
-            MetadataField(listOf(value), MetadataFieldStatus.AVAILABLE, raw)
+            MetadataField(
+                value = listOf(if (repairMojibake) TagTextDecoder.normalizeText(value) else value),
+                status = MetadataFieldStatus.AVAILABLE,
+                rawValue = raw,
+            )
         }
     }
 

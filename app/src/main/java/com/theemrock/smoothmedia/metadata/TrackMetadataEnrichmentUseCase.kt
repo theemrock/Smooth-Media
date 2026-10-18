@@ -24,12 +24,24 @@ class TrackMetadataEnrichmentUseCase(
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
 ) {
     fun enrichTrack(trackId: String): MetadataEnrichmentResult {
-        if (trackDao.findTrack(trackId) == null) return MetadataEnrichmentResult.TrackNotFound(trackId)
+        return when (val result = readTrack(trackId)) {
+            is MetadataReadOnlyResult.Success -> {
+                metadata.replaceFileMetadata(trackId, result.raw, result.metadata, nowEpochMs())
+                MetadataEnrichmentResult.Updated(trackId, result.locationId)
+            }
+            is MetadataReadOnlyResult.Failed -> MetadataEnrichmentResult.ReadFailed(trackId, result.failures)
+            MetadataReadOnlyResult.NoAccessibleLocation -> MetadataEnrichmentResult.NoAccessibleLocation(trackId)
+            MetadataReadOnlyResult.Excluded -> MetadataEnrichmentResult.Excluded(trackId)
+            MetadataReadOnlyResult.TrackNotFound -> MetadataEnrichmentResult.TrackNotFound(trackId)
+        }
+    }
 
+    fun readTrack(trackId: String): MetadataReadOnlyResult {
+        if (trackDao.findTrack(trackId) == null) return MetadataReadOnlyResult.TrackNotFound
         val locations = trackDao.findLocations(trackId)
             .sortedBy { it.locationId }
             .filter { it.availability == LocationAvailability.AVAILABLE }
-        if (locations.isEmpty()) return MetadataEnrichmentResult.NoAccessibleLocation(trackId)
+        if (locations.isEmpty()) return MetadataReadOnlyResult.NoAccessibleLocation
 
         var excludedCount = 0
         val failures = mutableListOf<MetadataReadFailure>()
@@ -40,22 +52,14 @@ class TrackMetadataEnrichmentUseCase(
                 continue
             }
             when (val result = reader.read(Uri.parse(binding.locator))) {
-                is MetadataReadResult.Success -> {
-                    metadata.replaceFileMetadata(
-                        trackId = trackId,
-                        raw = result.raw,
-                        normalized = result.metadata,
-                        updatedAtEpochMs = nowEpochMs(),
-                    )
-                    return MetadataEnrichmentResult.Updated(trackId, location.locationId)
-                }
+                is MetadataReadResult.Success -> return MetadataReadOnlyResult.Success(trackId, location.locationId, result.raw, result.metadata)
                 is MetadataReadResult.Failed -> failures += result.reason
             }
         }
         return when {
-            excludedCount == locations.size -> MetadataEnrichmentResult.Excluded(trackId)
-            failures.isNotEmpty() -> MetadataEnrichmentResult.ReadFailed(trackId, failures)
-            else -> MetadataEnrichmentResult.NoAccessibleLocation(trackId)
+            excludedCount == locations.size -> MetadataReadOnlyResult.Excluded
+            failures.isNotEmpty() -> MetadataReadOnlyResult.Failed(trackId, failures)
+            else -> MetadataReadOnlyResult.NoAccessibleLocation
         }
     }
 }

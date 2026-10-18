@@ -108,5 +108,30 @@ object CatalogMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(FROM_1_TO_2, FROM_2_TO_3, FROM_3_TO_4, FROM_4_TO_5, FROM_5_TO_6, FROM_6_TO_7)
+    val FROM_7_TO_8 = object : Migration(7, 8) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS metadata_recovery_sessions (session_id TEXT NOT NULL PRIMARY KEY, status TEXT NOT NULL, cursor_track_id TEXT, total_tracks INTEGER NOT NULL, processed_tracks INTEGER NOT NULL, auto_repair_count INTEGER NOT NULL, no_change_count INTEGER NOT NULL, review_required_count INTEGER NOT NULL, unrecoverable_count INTEGER NOT NULL, read_error_count INTEGER NOT NULL, lease_owner TEXT, lease_expires_at_epoch_ms INTEGER, started_at_epoch_ms INTEGER NOT NULL, updated_at_epoch_ms INTEGER NOT NULL, completed_at_epoch_ms INTEGER)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_metadata_recovery_sessions_status ON metadata_recovery_sessions(status)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS metadata_recovery_decisions (session_id TEXT NOT NULL, track_id TEXT NOT NULL, field_name TEXT NOT NULL, decision TEXT NOT NULL, evidence_type TEXT NOT NULL, old_value TEXT, new_value TEXT, created_at_epoch_ms INTEGER NOT NULL, PRIMARY KEY(session_id, track_id, field_name), FOREIGN KEY(session_id) REFERENCES metadata_recovery_sessions(session_id) ON DELETE CASCADE, FOREIGN KEY(track_id) REFERENCES tracks(track_id) ON DELETE NO ACTION)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_metadata_recovery_decisions_track_id ON metadata_recovery_decisions(track_id)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_metadata_recovery_decisions_decision ON metadata_recovery_decisions(decision)")
+        }
+    }
+
+    val FROM_8_TO_9 = object : Migration(8, 9) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS metadata_apply_sessions (sessionId TEXT NOT NULL PRIMARY KEY, auditSessionId TEXT NOT NULL, status TEXT NOT NULL, cursorDecisionKey TEXT, totalItems INTEGER NOT NULL, processedItems INTEGER NOT NULL, successCount INTEGER NOT NULL, skippedStaleCount INTEGER NOT NULL, failedCount INTEGER NOT NULL, startedAtEpochMs INTEGER NOT NULL, updatedAtEpochMs INTEGER NOT NULL, completedAtEpochMs INTEGER, FOREIGN KEY(auditSessionId) REFERENCES metadata_recovery_sessions(session_id) ON DELETE NO ACTION)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_metadata_apply_sessions_auditSessionId ON metadata_apply_sessions(auditSessionId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_metadata_apply_sessions_status ON metadata_apply_sessions(status)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS metadata_apply_items (applySessionId TEXT NOT NULL, decisionSessionId TEXT NOT NULL, trackId TEXT NOT NULL, fieldName TEXT NOT NULL, sourceId TEXT NOT NULL, locationId TEXT NOT NULL, expectedOldValue TEXT, newValue TEXT, evidenceType TEXT NOT NULL, state TEXT NOT NULL, errorMessage TEXT, updatedAtEpochMs INTEGER NOT NULL, PRIMARY KEY(applySessionId, decisionSessionId, trackId, fieldName), FOREIGN KEY(applySessionId) REFERENCES metadata_apply_sessions(sessionId) ON DELETE CASCADE)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_metadata_apply_items_applySessionId_state ON metadata_apply_items(applySessionId, state)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_metadata_apply_items_trackId ON metadata_apply_items(trackId)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS metadata_apply_change_log (changeId INTEGER PRIMARY KEY AUTOINCREMENT NOT NULL, applySessionId TEXT NOT NULL, trackId TEXT NOT NULL, fieldName TEXT NOT NULL, oldValue TEXT, newValue TEXT, evidenceType TEXT NOT NULL, decisionKey TEXT NOT NULL, occurredAtEpochMs INTEGER NOT NULL, result TEXT NOT NULL, FOREIGN KEY(applySessionId) REFERENCES metadata_apply_sessions(sessionId) ON DELETE CASCADE)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_metadata_apply_change_log_applySessionId ON metadata_apply_change_log(applySessionId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_metadata_apply_change_log_trackId_fieldName ON metadata_apply_change_log(trackId, fieldName)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS metadata_apply_leases (applySessionId TEXT NOT NULL PRIMARY KEY, owner TEXT NOT NULL, expiresAtEpochMs INTEGER NOT NULL, heartbeatAtEpochMs INTEGER NOT NULL, FOREIGN KEY(applySessionId) REFERENCES metadata_apply_sessions(sessionId) ON DELETE CASCADE)")
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(FROM_1_TO_2, FROM_2_TO_3, FROM_3_TO_4, FROM_4_TO_5, FROM_5_TO_6, FROM_6_TO_7, FROM_7_TO_8, FROM_8_TO_9)
 }

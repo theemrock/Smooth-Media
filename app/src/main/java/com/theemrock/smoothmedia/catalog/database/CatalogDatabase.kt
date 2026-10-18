@@ -24,8 +24,14 @@ import com.theemrock.smoothmedia.catalog.database.entity.SafDocumentEntity
 import com.theemrock.smoothmedia.catalog.database.entity.GenreNodeEntity
 import com.theemrock.smoothmedia.catalog.database.entity.GenreEdgeEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackGenreAssignmentEntity
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoverySessionEntity
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoveryDecisionEntity
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataApplySessionEntity
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataApplyItemEntity
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataApplyChangeLogEntity
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataApplyLeaseEntity
 
-private const val CATALOG_SCHEMA_VERSION = 7
+private const val CATALOG_SCHEMA_VERSION = 9
 
 @Database(
     entities = [
@@ -45,6 +51,12 @@ private const val CATALOG_SCHEMA_VERSION = 7
         GenreNodeEntity::class,
         GenreEdgeEntity::class,
         TrackGenreAssignmentEntity::class,
+        MetadataRecoverySessionEntity::class,
+        MetadataRecoveryDecisionEntity::class,
+        MetadataApplySessionEntity::class,
+        MetadataApplyItemEntity::class,
+        MetadataApplyChangeLogEntity::class,
+        MetadataApplyLeaseEntity::class,
     ],
     version = CATALOG_SCHEMA_VERSION,
     exportSchema = true,
@@ -69,6 +81,10 @@ abstract class CatalogDatabase : RoomDatabase() {
     abstract fun safDocumentDao(): com.theemrock.smoothmedia.catalog.database.dao.SafDocumentDao
 
     abstract fun genreDao(): com.theemrock.smoothmedia.catalog.database.dao.GenreDao
+
+    abstract fun metadataRecoveryDao(): com.theemrock.smoothmedia.catalog.database.dao.MetadataRecoveryDao
+
+    abstract fun metadataApplyDao(): com.theemrock.smoothmedia.catalog.database.dao.MetadataApplyDao
 
     companion object {
         const val SCHEMA_VERSION = CATALOG_SCHEMA_VERSION

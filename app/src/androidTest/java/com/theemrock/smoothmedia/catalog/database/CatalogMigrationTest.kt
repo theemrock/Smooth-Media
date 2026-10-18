@@ -192,6 +192,51 @@ class CatalogMigrationTest {
         }
     }
 
+    @Test
+    fun versionSevenToEight_addsRecoveryTablesWithoutChangingCatalog() {
+        migrationHelper.createDatabase(databaseName, 7).apply {
+            insertVersionTwoFixture(this)
+            execSQL("INSERT INTO saf_documents VALUES ('source-1','root',NULL,'Music',1,1,2000,'content://provider/tree/music')")
+            execSQL("INSERT INTO genre_nodes VALUES ('genre-1','Rock','rock','METADATA',0.9,0)")
+            close()
+        }
+
+        val migrated = migrationHelper.runMigrationsAndValidate(databaseName, 8, true, *CatalogMigrations.ALL)
+        try {
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM tracks"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM track_locations"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM locator_bindings"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM saf_documents"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM genre_nodes"))
+            migrated.execSQL("INSERT INTO metadata_recovery_sessions VALUES ('recovery-1','RUNNING',NULL,1,0,0,0,0,0,0,NULL,NULL,3000,3000,NULL)")
+            migrated.execSQL("INSERT INTO metadata_recovery_decisions VALUES ('recovery-1','track-1','TITLE','NO_CHANGE','already equivalent','Title', 'Title',3000)")
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM metadata_recovery_decisions"))
+        } finally {
+            migrated.close()
+        }
+    }
+
+    @Test
+    fun versionEightToNine_addsApplyTablesWithoutChangingAuditOrCatalog() {
+        migrationHelper.createDatabase(databaseName, 8).apply {
+            insertVersionTwoFixture(this)
+            execSQL("INSERT INTO metadata_recovery_sessions VALUES ('recovery-1','COMPLETED',NULL,1,1,1,0,0,0,0,NULL,NULL,3000,3000,3000)")
+            execSQL("INSERT INTO metadata_recovery_decisions VALUES ('recovery-1','track-1','TITLE','AUTO_REPAIR','verified','Old','New',3000)")
+            close()
+        }
+
+        val migrated = migrationHelper.runMigrationsAndValidate(databaseName, 9, true, *CatalogMigrations.ALL)
+        try {
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM tracks"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM metadata_recovery_decisions"))
+            migrated.execSQL("INSERT INTO metadata_apply_sessions VALUES ('apply-1','recovery-1','DRY_RUN',NULL,1,0,0,0,0,4000,4000,NULL)")
+            migrated.execSQL("INSERT INTO metadata_apply_items VALUES ('apply-1','recovery-1','track-1','TITLE','source-1','location-1','Old','New','verified','PENDING',NULL,4000)")
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM metadata_apply_items"))
+        } finally {
+            migrated.close()
+        }
+    }
+
     private fun insertVersionOneFixture(database: SupportSQLiteDatabase) {
         database.execSQL("INSERT INTO tracks VALUES ('track-1', 'ACTIVE', 1000, 1000)")
         database.execSQL(

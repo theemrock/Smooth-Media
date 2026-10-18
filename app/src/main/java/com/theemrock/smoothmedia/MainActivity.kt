@@ -23,6 +23,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoverySessionEntity
+import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoverySessionStatus
 import com.theemrock.smoothmedia.catalog.scan.ManualScanController
 import com.theemrock.smoothmedia.catalog.scan.ManualScanProgress
 import com.theemrock.smoothmedia.catalog.scan.ManualScanResult
@@ -71,7 +73,17 @@ import com.theemrock.smoothmedia.metadata.MetadataSessionLaunchGate
 import com.theemrock.smoothmedia.metadata.MetadataSessionProgress
 import com.theemrock.smoothmedia.metadata.MetadataSessionStatus
 import com.theemrock.smoothmedia.metadata.MetadataMissingTrackPageCoordinator
+import com.theemrock.smoothmedia.metadata.MetadataRefreshPreviewCoordinator
+import com.theemrock.smoothmedia.metadata.MetadataRefreshPreviewResult
+import com.theemrock.smoothmedia.metadata.MetadataRecoveryEngine
+import com.theemrock.smoothmedia.metadata.MetadataRecoverySessionCoordinator
+import com.theemrock.smoothmedia.metadata.RoomMetadataApplyDryRun
+import com.theemrock.smoothmedia.metadata.RoomMetadataApplyDryRunSummary
+import com.theemrock.smoothmedia.metadata.RoomMetadataApplySessionStore
+import com.theemrock.smoothmedia.metadata.RoomMetadataApplyExecutor
+import com.theemrock.smoothmedia.metadata.ControlledMetadataRoomWriter
 import com.theemrock.smoothmedia.metadata.RoomTrackMetadataRepository
+import com.theemrock.smoothmedia.metadata.TrackMetadataRepository
 import com.theemrock.smoothmedia.metadata.TrackMetadataEnrichmentUseCase
 import com.theemrock.smoothmedia.source.AndroidSelectedTreeParser
 import com.theemrock.smoothmedia.source.SourceRegistryFactory
@@ -127,6 +139,10 @@ class MainActivity : ComponentActivity() {
     private lateinit var scanController: ManualScanController
     private lateinit var metadataCoordinator: MetadataMissingTrackPageCoordinator
     private lateinit var metadataSessionCoordinator: MetadataContinuousSessionCoordinator
+    private lateinit var metadataEnrichment: TrackMetadataEnrichmentUseCase
+    private lateinit var metadataRepository: TrackMetadataRepository
+    private lateinit var metadataPreviewCoordinator: MetadataRefreshPreviewCoordinator
+    private lateinit var metadataRecoveryCoordinator: MetadataRecoverySessionCoordinator
     private var sources by mutableStateOf<List<LibrarySourceEntity>>(emptyList())
     private var sourceTrackCounts by mutableStateOf<Map<String, Int>>(emptyMap())
     private var statusMessage by mutableStateOf<String?>(null)
@@ -142,6 +158,15 @@ class MainActivity : ComponentActivity() {
     private var metadataSessionRunning by mutableStateOf(false)
     private var metadataSessionStatus by mutableStateOf<MetadataSessionStatus?>(null)
     private var metadataSessionProgress by mutableStateOf<MetadataSessionProgress?>(null)
+    private var metadataPreviewRunning by mutableStateOf(false)
+    private var metadataPreview by mutableStateOf<MetadataRefreshPreviewResult?>(null)
+    private var metadataRecoveryStatus by mutableStateOf<MetadataRecoverySessionStatus?>(null)
+    private var metadataRecoveryProgress by mutableStateOf<MetadataRecoverySessionEntity?>(null)
+    private var metadataRecoverySessionId by mutableStateOf<String?>(null)
+    private var metadataApplyDryRun by mutableStateOf<RoomMetadataApplyDryRunSummary?>(null)
+    private var metadataApplyDryRunRunning by mutableStateOf(false)
+    private var metadataApplyStatus by mutableStateOf<String?>(null)
+    private var metadataApplyRunning by mutableStateOf(false)
     private var dashboardData by mutableStateOf<LibraryDashboardData?>(null)
     private var showDashboard by mutableStateOf(true)
     private var showLibrary by mutableStateOf(false)
@@ -308,13 +333,25 @@ class MainActivity : ComponentActivity() {
             }
         }
         onBackPressedDispatcher.addCallback(this, libraryBackCallback)
-        val metadataRepository = RoomTrackMetadataRepository(runtime.database.trackMetadataDao())
-        val metadataEnrichment = TrackMetadataEnrichmentUseCase(
+        metadataRepository = RoomTrackMetadataRepository(runtime.database.trackMetadataDao())
+        metadataEnrichment = TrackMetadataEnrichmentUseCase(
             trackDao = runtime.database.trackDao(),
             bindingDao = runtime.database.locatorBindingDao(),
             exclusionDao = runtime.database.catalogExclusionDao(),
             metadata = metadataRepository,
             reader = AndroidAudioMetadataReader(this),
+        )
+        metadataPreviewCoordinator = MetadataRefreshPreviewCoordinator(
+            read = metadataEnrichment::readTrack,
+            current = metadataRepository::find,
+        )
+        metadataRecoveryCoordinator = MetadataRecoverySessionCoordinator(
+            database = runtime.database,
+            engine = MetadataRecoveryEngine(
+                read = metadataEnrichment::readTrack,
+                current = metadataRepository::find,
+            ),
+            owner = "ui-recovery-${android.os.Process.myPid()}",
         )
         scanController = ManualScanController(
             database = runtime.database,
@@ -651,7 +688,22 @@ class MainActivity : ComponentActivity() {
                             metadataSessionProgress = metadataSessionProgress,
                             onMetadataSessionStart = { startMetadataSession() },
                             onMetadataSessionStop = { stopMetadataSession() },
-                            showStandaloneMetadataControls = false,
+                            metadataPreviewRunning = metadataPreviewRunning,
+                            metadataPreview = metadataPreview,
+                            onMetadataPreview = ::startMetadataPreview,
+                            metadataRecoveryStatus = metadataRecoveryStatus,
+                            metadataRecoveryProgress = metadataRecoveryProgress,
+                            onMetadataRecoveryStart = ::startMetadataRecovery,
+                            onMetadataRecoveryPause = ::pauseMetadataRecovery,
+                            onMetadataRecoveryResume = ::resumeMetadataRecovery,
+                            onMetadataRecoveryStop = ::stopMetadataRecovery,
+                            metadataApplyDryRun = metadataApplyDryRun,
+                            metadataApplyDryRunRunning = metadataApplyDryRunRunning,
+                            onMetadataApplyDryRun = ::startMetadataApplyDryRun,
+                            metadataApplyStatus = metadataApplyStatus,
+                            metadataApplyRunning = metadataApplyRunning,
+                            onMetadataApply = ::startApprovedMetadataApply,
+                            showStandaloneMetadataControls = true,
                         )
                     } else if (showLibraryManagement) {
                         LibraryManagementScreen(
@@ -671,6 +723,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         loadAndRefreshSources()
+        loadMetadataRecoveryState()
         loadMetadataMissingCount()
         loadDashboard()
         executor.execute { libraryViewModel.loadInitial() }
@@ -1002,6 +1055,136 @@ class MainActivity : ComponentActivity() {
 
     private fun stopMetadataSession() {
         metadataSessionCancelRequested.set(true)
+    }
+
+    private fun startMetadataRecovery() {
+        executor.execute {
+            val sessionId = runCatching { metadataRecoveryCoordinator.start() }.getOrNull() ?: return@execute
+            metadataRecoverySessionId = sessionId
+            runMetadataRecoveryLoop(sessionId)
+        }
+    }
+
+    private fun loadMetadataRecoveryState() {
+        executor.execute {
+            val session = runCatching { runtime.database.metadataRecoveryDao().findLatestSession() }.getOrNull() ?: return@execute
+            runOnUiThread {
+                metadataRecoverySessionId = session.sessionId
+                metadataRecoveryStatus = session.status
+                metadataRecoveryProgress = session
+            }
+        }
+    }
+
+    private fun runMetadataRecoveryLoop(sessionId: String) {
+        while (!isDestroyed) {
+            val attempt = runCatching { metadataRecoveryCoordinator.runNextBatch(sessionId) }
+            val status = attempt.getOrElse {
+                metadataRecoveryCoordinator.fail(sessionId)
+                MetadataRecoverySessionStatus.FAILED
+            }
+            val snapshot = runtime.database.metadataRecoveryDao().findSession(sessionId)
+            runOnUiThread {
+                metadataRecoveryStatus = status
+                metadataRecoveryProgress = snapshot
+            }
+            if (status != MetadataRecoverySessionStatus.RUNNING) return
+            if (snapshot?.leaseOwner != null) Thread.sleep(250)
+        }
+    }
+
+    private fun pauseMetadataRecovery() {
+        val sessionId = metadataRecoverySessionId ?: return
+        scanControlExecutor.execute { metadataRecoveryCoordinator.pause(sessionId) }
+    }
+
+    private fun resumeMetadataRecovery() {
+        val sessionId = metadataRecoverySessionId ?: return
+        scanControlExecutor.execute {
+            if (metadataRecoveryCoordinator.resume(sessionId)) runMetadataRecoveryLoop(sessionId)
+        }
+    }
+
+    private fun stopMetadataRecovery() {
+        val sessionId = metadataRecoverySessionId ?: return
+        scanControlExecutor.execute {
+            metadataRecoveryCoordinator.cancel(sessionId)
+            val snapshot = runtime.database.metadataRecoveryDao().findSession(sessionId)
+            runOnUiThread {
+                metadataRecoveryStatus = MetadataRecoverySessionStatus.CANCELLED
+                metadataRecoveryProgress = snapshot
+            }
+        }
+    }
+
+    private fun startMetadataApplyDryRun() {
+        if (metadataApplyDryRunRunning) return
+        metadataApplyDryRunRunning = true
+        executor.execute {
+            val result = runCatching {
+                val audit = runtime.database.metadataRecoveryDao().findLatestCompletedSession()
+                    ?: error("Tamamlanmış audit session bulunamadı")
+                RoomMetadataApplyDryRun(runtime.database).evaluate(audit.sessionId)
+            }.getOrNull()
+            runOnUiThread {
+                metadataApplyDryRun = result
+                metadataApplyDryRunRunning = false
+            }
+        }
+    }
+
+    private fun startApprovedMetadataApply() {
+        if (metadataApplyRunning) return
+        metadataApplyRunning = true
+        executor.execute {
+            val status = runCatching {
+                val audit = runtime.database.metadataRecoveryDao().findLatestCompletedSession()
+                    ?: error("Tamamlanmış audit session bulunamadı")
+                val dryRun = RoomMetadataApplyDryRun(runtime.database)
+                val inputs = dryRun.approvedInputs(audit.sessionId)
+                check(inputs.size == 59) { "Onaylı apply kapsamı 59 alan değil" }
+                val store = RoomMetadataApplySessionStore(runtime.database)
+                val applySessionId = store.prepareDryRun(audit.sessionId, inputs)
+                val applyExecutor = RoomMetadataApplyExecutor(
+                    database = runtime.database,
+                    writer = ControlledMetadataRoomWriter(runtime.database),
+                    owner = "ui-approved-apply-${android.os.Process.myPid()}",
+                )
+                var result = applyExecutor.runNextBatch(applySessionId, applyEnabled = true, backupVerified = true)
+                while (result.status == com.theemrock.smoothmedia.metadata.MetadataApplyExecutionStatus.RUNNING) {
+                    result = applyExecutor.runNextBatch(applySessionId, applyEnabled = true, backupVerified = true)
+                }
+                check(result.status == com.theemrock.smoothmedia.metadata.MetadataApplyExecutionStatus.COMPLETED) {
+                    "Metadata apply tamamlanmadı: ${result.status}"
+                }
+                "Apply tamamlandı: 59/59 alan"
+            }.getOrElse { "Apply başarısız: ${it.message ?: "bilinmeyen hata"}" }
+            runOnUiThread {
+                metadataApplyStatus = status
+                metadataApplyRunning = false
+            }
+        }
+    }
+
+    private fun startMetadataPreview() {
+        if (metadataPreviewRunning) return
+        metadataPreviewRunning = true
+        executor.execute {
+            val result = runCatching {
+                val dao = runtime.database.trackMetadataDao()
+                val suspicious = dao.listActiveTrackIdsWithMojibakeMarkers(MetadataRefreshPreviewCoordinator.MAX_ITEMS)
+                val ids = (suspicious + dao.listActiveTrackIds(MetadataRefreshPreviewCoordinator.MAX_ITEMS))
+                    .distinct()
+                    .take(MetadataRefreshPreviewCoordinator.MAX_ITEMS)
+                metadataPreviewCoordinator.preview(ids)
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                metadataPreviewRunning = false
+                result.onSuccess { metadataPreview = it }
+                    .onFailure { statusMessage = "Metadata önizlemesi başarısız: ${it.message ?: "okuma hatası"}" }
+            }
+        }
     }
 
     private fun navigateBackFromLibrary() {
