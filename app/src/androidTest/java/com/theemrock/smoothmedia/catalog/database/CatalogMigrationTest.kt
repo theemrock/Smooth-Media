@@ -237,6 +237,32 @@ class CatalogMigrationTest {
         }
     }
 
+    @Test
+    fun versionNineToTen_addsArtworkTablesWithoutChangingCatalogOrAudit() {
+        migrationHelper.createDatabase(databaseName, 9).apply {
+            insertVersionTwoFixture(this)
+            execSQL("INSERT INTO metadata_recovery_sessions VALUES ('recovery-1','COMPLETED',NULL,1,1,1,0,0,0,0,NULL,NULL,3000,3000,3000)")
+            execSQL("INSERT INTO metadata_recovery_decisions VALUES ('recovery-1','track-1','TITLE','AUTO_REPAIR','verified','Old','New',3000)")
+            close()
+        }
+
+        val migrated = migrationHelper.runMigrationsAndValidate(databaseName, 10, true, *CatalogMigrations.ALL)
+        try {
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM tracks"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM track_locations"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM locator_bindings"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM metadata_recovery_decisions"))
+            migrated.execSQL("INSERT INTO artwork_assets VALUES ('asset-1','hash-1','EMBEDDED_AUDIO','content://provider/document/track','source-1','image/jpeg',100,100,'AVAILABLE',NULL,4000,4000)")
+            migrated.execSQL("INSERT INTO artwork_album_bindings VALUES ('album-source-1','asset-1','source-1',0,4000)")
+            migrated.execSQL("INSERT INTO artwork_overrides VALUES ('album-source-1','asset-1',4000)")
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM artwork_assets"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM artwork_album_bindings"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM artwork_overrides"))
+        } finally {
+            migrated.close()
+        }
+    }
+
     private fun insertVersionOneFixture(database: SupportSQLiteDatabase) {
         database.execSQL("INSERT INTO tracks VALUES ('track-1', 'ACTIVE', 1000, 1000)")
         database.execSQL(

@@ -133,5 +133,17 @@ object CatalogMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(FROM_1_TO_2, FROM_2_TO_3, FROM_3_TO_4, FROM_4_TO_5, FROM_5_TO_6, FROM_6_TO_7, FROM_7_TO_8, FROM_8_TO_9)
+    val FROM_9_TO_10 = object : Migration(9, 10) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS artwork_assets (assetId TEXT NOT NULL, contentHash TEXT, sourceType TEXT NOT NULL, sourceLocator TEXT NOT NULL, sourceId TEXT, format TEXT, width INTEGER, height INTEGER, availability TEXT NOT NULL, invalidatedAtEpochMs INTEGER, createdAtEpochMs INTEGER NOT NULL, updatedAtEpochMs INTEGER NOT NULL, PRIMARY KEY(assetId))")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_artwork_assets_sourceId ON artwork_assets(sourceId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_artwork_assets_availability ON artwork_assets(availability)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS artwork_album_bindings (collectionKey TEXT NOT NULL, assetId TEXT NOT NULL, sourceId TEXT, sourcePriority INTEGER NOT NULL, updatedAtEpochMs INTEGER NOT NULL, PRIMARY KEY(collectionKey), FOREIGN KEY(assetId) REFERENCES artwork_assets(assetId) ON UPDATE NO ACTION ON DELETE NO ACTION)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_artwork_album_bindings_assetId ON artwork_album_bindings(assetId)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_artwork_album_bindings_sourceId ON artwork_album_bindings(sourceId)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS artwork_overrides (collectionKey TEXT NOT NULL, assetId TEXT NOT NULL, updatedAtEpochMs INTEGER NOT NULL, PRIMARY KEY(collectionKey), FOREIGN KEY(assetId) REFERENCES artwork_assets(assetId) ON UPDATE NO ACTION ON DELETE NO ACTION)")
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(FROM_1_TO_2, FROM_2_TO_3, FROM_3_TO_4, FROM_4_TO_5, FROM_5_TO_6, FROM_6_TO_7, FROM_7_TO_8, FROM_8_TO_9, FROM_9_TO_10)
 }

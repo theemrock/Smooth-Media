@@ -30,8 +30,12 @@ import com.theemrock.smoothmedia.catalog.database.entity.MetadataApplySessionEnt
 import com.theemrock.smoothmedia.catalog.database.entity.MetadataApplyItemEntity
 import com.theemrock.smoothmedia.catalog.database.entity.MetadataApplyChangeLogEntity
 import com.theemrock.smoothmedia.catalog.database.entity.MetadataApplyLeaseEntity
+import com.theemrock.smoothmedia.catalog.database.entity.ArtworkAssetEntity
+import com.theemrock.smoothmedia.catalog.database.entity.ArtworkAlbumBindingEntity
+import com.theemrock.smoothmedia.catalog.database.entity.ArtworkOverrideEntity
+import com.theemrock.smoothmedia.catalog.database.dao.ArtworkDao
 
-private const val CATALOG_SCHEMA_VERSION = 9
+private const val CATALOG_SCHEMA_VERSION = 10
 
 @Database(
     entities = [
@@ -57,6 +61,9 @@ private const val CATALOG_SCHEMA_VERSION = 9
         MetadataApplyItemEntity::class,
         MetadataApplyChangeLogEntity::class,
         MetadataApplyLeaseEntity::class,
+        ArtworkAssetEntity::class,
+        ArtworkAlbumBindingEntity::class,
+        ArtworkOverrideEntity::class,
     ],
     version = CATALOG_SCHEMA_VERSION,
     exportSchema = true,
@@ -85,6 +92,8 @@ abstract class CatalogDatabase : RoomDatabase() {
     abstract fun metadataRecoveryDao(): com.theemrock.smoothmedia.catalog.database.dao.MetadataRecoveryDao
 
     abstract fun metadataApplyDao(): com.theemrock.smoothmedia.catalog.database.dao.MetadataApplyDao
+
+    abstract fun artworkDao(): ArtworkDao
 
     companion object {
         const val SCHEMA_VERSION = CATALOG_SCHEMA_VERSION
