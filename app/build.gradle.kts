@@ -22,6 +22,8 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
 
+    testBuildType = "p09test"
+
     signingConfigs {
         create("smoothRelease") {
             val signingKeys = listOf(
@@ -47,6 +49,11 @@ android {
     }
 
     buildTypes {
+        create("p09test") {
+            applicationIdSuffix = ".p09test"
+            isDebuggable = true
+            signingConfig = signingConfigs.getByName("debug")
+        }
         release {
             isMinifyEnabled = false
             signingConfig = signingConfigs.getByName("smoothRelease")
@@ -62,6 +69,11 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+tasks.register("compileDebugAndroidTestKotlin") {
+    description = "Compiles the isolated p09test Android test Kotlin sources."
+    dependsOn("compileP09testAndroidTestKotlin")
 }
 
 kotlin {
