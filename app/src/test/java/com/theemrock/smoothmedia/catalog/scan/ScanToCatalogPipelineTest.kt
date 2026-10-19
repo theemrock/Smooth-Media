@@ -20,10 +20,29 @@ import com.theemrock.smoothmedia.discovery.FullFileHashResult
 import com.theemrock.smoothmedia.discovery.HashCancellation
 import com.theemrock.smoothmedia.metadata.MetadataEnrichmentResult
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ScanToCatalogPipelineTest {
+    @Test
+    fun hashCancellationIsThrottledButPostHashSessionCheckRemainsMandatory() {
+        val state = RunningScanState()
+        val pipeline = ScanToCatalogPipeline(
+            state = state,
+            hash = { _, cancellation ->
+                assertFalse(cancellation.isCancelled())
+                state.status = ScanSessionStatus.CANCELLED
+                repeat(100) { assertFalse(cancellation.isCancelled()) }
+                FullFileHashResult.Success("SHA-256", 1, "digest", 10)
+            },
+            ingest = { _, _ -> error("cancelled session must not ingest") },
+        )
+
+        assertEquals(CandidateProcessingResult.Cancelled, pipeline.process("session", file()))
+        assertEquals(2, state.findSessionCalls)
+    }
+
     @Test
     fun processedCandidate_recordsAnonymousHashIngestionAndMetadataMetrics() {
         val profiler = ScanPerformanceProfiler()
@@ -186,15 +205,17 @@ class ScanToCatalogPipelineTest {
     )
 
     private class RunningScanState(
-        private var status: ScanSessionStatus = ScanSessionStatus.RUNNING,
+        var status: ScanSessionStatus = ScanSessionStatus.RUNNING,
     ) : ScanStateRepository {
+        var findSessionCalls = 0
+
         override fun findSession(sessionId: String) = ScanSessionEntity(
             sessionId = sessionId,
             status = status,
             startedAtEpochMs = 1L,
             updatedAtEpochMs = 1L,
             completedAtEpochMs = null,
-        )
+        ).also { findSessionCalls++ }
 
         override fun startSession(session: ScanSessionEntity, checkpoints: List<SourceScanCheckpointEntity>) = Unit
         override fun recoverStaleLeaseAndStart(session: ScanSessionEntity, checkpoints: List<SourceScanCheckpointEntity>) =

@@ -24,11 +24,11 @@ class ScanToCatalogPipeline(
         file: DiscoveredAudioFile,
     ): CandidateProcessingResult {
         fun status() = state.findSession(sessionId)?.status
-        fun cancellationRequested() = status() != ScanSessionStatus.RUNNING
+        val hashCancellation = PeriodicScanCancellation(statusProvider = { status() })
 
         val hashResult = profiler?.measure(ScanPerformanceStage.FULL_FILE_HASH_INCLUSIVE) {
-            hash(file, HashCancellation { cancellationRequested() })
-        } ?: hash(file, HashCancellation { cancellationRequested() })
+            hash(file, hashCancellation)
+        } ?: hash(file, hashCancellation)
         when (status()) {
             ScanSessionStatus.PAUSED -> return CandidateProcessingResult.Paused
             ScanSessionStatus.CANCELLED -> return CandidateProcessingResult.Cancelled
@@ -131,6 +131,39 @@ class ScanToCatalogPipeline(
         is MetadataEnrichmentResult.Excluded,
         is MetadataEnrichmentResult.TrackNotFound,
         -> ScanMetadataResult.FAILED
+    }
+}
+
+/**
+ * Keeps the first cancellation check immediate while avoiding a Room lookup for every hash chunk.
+ * A blocking stream read can exceed this interval; this is a refresh cadence, not a hard latency
+ * guarantee. The mandatory post-hash session check remains in [ScanToCatalogPipeline.process].
+ */
+internal class PeriodicScanCancellation(
+    private val statusProvider: () -> ScanSessionStatus?,
+    private val nowNanos: () -> Long = System::nanoTime,
+    private val refreshIntervalNanos: Long = DEFAULT_REFRESH_INTERVAL_NANOS,
+) : HashCancellation {
+    init {
+        require(refreshIntervalNanos > 0) { "refreshIntervalNanos must be positive" }
+    }
+
+    private var lastCheckedAtNanos: Long? = null
+    private var cancelled = false
+
+    override fun isCancelled(): Boolean {
+        if (cancelled) return true
+        val now = nowNanos()
+        val lastChecked = lastCheckedAtNanos
+        if (lastChecked == null || now - lastChecked >= refreshIntervalNanos) {
+            lastCheckedAtNanos = now
+            cancelled = statusProvider() != ScanSessionStatus.RUNNING
+        }
+        return cancelled
+    }
+
+    private companion object {
+        const val DEFAULT_REFRESH_INTERVAL_NANOS = 100_000_000L
     }
 }
 
