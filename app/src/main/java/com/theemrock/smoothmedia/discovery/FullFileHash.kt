@@ -95,6 +95,7 @@ class StreamingSha256Hasher(
 class SafFullFileHasher(
     private val contentResolver: ContentResolver,
     private val streamingHasher: StreamingSha256Hasher = StreamingSha256Hasher(),
+    private val onStreamOpenDurationNanos: (Long) -> Unit = {},
 ) {
     fun hash(
         file: DiscoveredAudioFile,
@@ -110,7 +111,9 @@ class SafFullFileHasher(
         }
 
         return try {
+            val openStartedAt = System.nanoTime()
             val input = contentResolver.openInputStream(uri)
+                .also { onStreamOpenDurationNanos(System.nanoTime() - openStartedAt) }
                 ?: return FullFileHashResult.Unreadable
             streamingHasher.hash(input, cancellation)
         } catch (_: SecurityException) {

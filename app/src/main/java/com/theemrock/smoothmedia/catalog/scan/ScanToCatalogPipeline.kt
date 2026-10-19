@@ -17,6 +17,7 @@ class ScanToCatalogPipeline(
     private val ingest: (DiscoveredAudioFile, FullFileHashResult) -> CatalogIngestionResult,
     private val enrichMetadata: ((String) -> MetadataEnrichmentResult)? = null,
     private val enrichExistingLocation: ((String) -> MetadataEnrichmentResult)? = null,
+    private val profiler: ScanPerformanceProfiler? = null,
 ) : ScanCandidateProcessor {
     override fun process(
         sessionId: String,
@@ -25,7 +26,9 @@ class ScanToCatalogPipeline(
         fun status() = state.findSession(sessionId)?.status
         fun cancellationRequested() = status() != ScanSessionStatus.RUNNING
 
-        val hashResult = hash(file, HashCancellation { cancellationRequested() })
+        val hashResult = profiler?.measure(ScanPerformanceStage.FULL_FILE_HASH_INCLUSIVE) {
+            hash(file, HashCancellation { cancellationRequested() })
+        } ?: hash(file, HashCancellation { cancellationRequested() })
         when (status()) {
             ScanSessionStatus.PAUSED -> return CandidateProcessingResult.Paused
             ScanSessionStatus.CANCELLED -> return CandidateProcessingResult.Cancelled
@@ -36,7 +39,9 @@ class ScanToCatalogPipeline(
             return CandidateProcessingResult.Failed(FailureReason.HASH_FAILED)
         }
 
-        val ingestion = ingest(file, hashResult)
+        val ingestion = profiler?.measure(ScanPerformanceStage.IDENTITY_CATALOG_INGESTION_INCLUSIVE) {
+            ingest(file, hashResult)
+        } ?: ingest(file, hashResult)
         return when (ingestion) {
             is CatalogIngestionResult.Written -> completeWithMetadata(
                 sessionId = sessionId,
@@ -77,7 +82,11 @@ class ScanToCatalogPipeline(
         val locationId = candidate.locationId
             ?: return CandidateProcessingResult.Failed(FailureReason.METADATA_LOCATION_MISSING)
         val metadataResult = enrichExistingLocation?.let { enrich ->
-            runCatching { enrich(locationId) }.fold(
+            runCatching {
+                profiler?.measure(ScanPerformanceStage.METADATA_EXTRACTION_INCLUSIVE) {
+                    enrich(locationId)
+                } ?: enrich(locationId)
+            }.fold(
                 onSuccess = { it.toScanMetadataResult() },
                 onFailure = { ScanMetadataResult.FAILED },
             )
@@ -97,7 +106,11 @@ class ScanToCatalogPipeline(
             else -> return CandidateProcessingResult.Failed(FailureReason.SESSION_NOT_RUNNING)
         }
         val metadataResult = enrichMetadata?.let { enrich ->
-            runCatching { enrich(trackId) }.fold(
+            runCatching {
+                profiler?.measure(ScanPerformanceStage.METADATA_EXTRACTION_INCLUSIVE) {
+                    enrich(trackId)
+                } ?: enrich(trackId)
+            }.fold(
                 onSuccess = { it.toScanMetadataResult() },
                 onFailure = { ScanMetadataResult.FAILED },
             )

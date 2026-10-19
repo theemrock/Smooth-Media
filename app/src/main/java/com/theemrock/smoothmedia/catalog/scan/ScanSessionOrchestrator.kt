@@ -27,6 +27,7 @@ class ScanSessionOrchestrator(
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
     private val onPhaseChanged: (ScanPhase) -> Unit = {},
     private val onTiming: (ScanTiming) -> Unit = {},
+    private val profiler: ScanPerformanceProfiler? = null,
 ) {
     private var timing = ScanTiming()
 
@@ -36,7 +37,10 @@ class ScanSessionOrchestrator(
         if (sourceRejection != null) return Result.Rejected(sourceRejection)
 
         val checkpoint = initialCheckpoint(session.sessionId, source.sourceId, session.updatedAtEpochMs)
-        return when (val start = state.recoverStaleLeaseAndStart(session, listOf(checkpoint))) {
+        val start = profiler?.measure(ScanPerformanceStage.SESSION_CHECKPOINT) {
+            state.recoverStaleLeaseAndStart(session, listOf(checkpoint))
+        } ?: state.recoverStaleLeaseAndStart(session, listOf(checkpoint))
+        return when (start) {
             is LeaseRecoveryResult.ResumeRequired -> Result.AlreadyActive(start.sessionId)
             is LeaseRecoveryResult.Started -> execute(session.sessionId, source)
         }
@@ -92,7 +96,9 @@ class ScanSessionOrchestrator(
         val discoveryStartedAt = System.nanoTime()
         state.heartbeat(sessionId, nowEpochMs())
         onPhaseChanged(ScanPhase.DISCOVERING)
-        val discovery = discover(source)
+        val discovery = profiler?.measure(ScanPerformanceStage.SAF_DISCOVERY) {
+            discover(source)
+        } ?: discover(source)
         val discoveryMs = (System.nanoTime() - discoveryStartedAt) / 1_000_000L
         timing = timing.copy(discoveryMs = discoveryMs)
         onTiming(timing)
@@ -170,7 +176,9 @@ class ScanSessionOrchestrator(
                 }
             }
             val checkpointStartedAt = System.nanoTime()
-            state.updateCheckpoint(sessionId, source.sourceId, file.documentId, discovery.files.size, processedCount, ScanCheckpointCoverage.PARTIAL, nowEpochMs())
+            profiler?.measure(ScanPerformanceStage.CHECKPOINT) {
+                state.updateCheckpoint(sessionId, source.sourceId, file.documentId, discovery.files.size, processedCount, ScanCheckpointCoverage.PARTIAL, nowEpochMs())
+            } ?: state.updateCheckpoint(sessionId, source.sourceId, file.documentId, discovery.files.size, processedCount, ScanCheckpointCoverage.PARTIAL, nowEpochMs())
             val checkpointMs = (System.nanoTime() - checkpointStartedAt) / 1_000_000L
             timing = timing.copy(
                 processingMs = timing.processingMs + (System.nanoTime() - candidateStartedAt) / 1_000_000L,
@@ -191,7 +199,9 @@ class ScanSessionOrchestrator(
             ScanSessionStatus.RUNNING -> Unit
             else -> return Result.Rejected(RejectionReason.SESSION_NOT_RUNNING)
         }
-        state.updateCheckpoint(sessionId, source.sourceId, null, discovery.files.size, processedCount, if (discovery.skippedUnreadableCount == 0) ScanCheckpointCoverage.COMPLETE else ScanCheckpointCoverage.PARTIAL, nowEpochMs())
+        profiler?.measure(ScanPerformanceStage.CHECKPOINT) {
+            state.updateCheckpoint(sessionId, source.sourceId, null, discovery.files.size, processedCount, if (discovery.skippedUnreadableCount == 0) ScanCheckpointCoverage.COMPLETE else ScanCheckpointCoverage.PARTIAL, nowEpochMs())
+        } ?: state.updateCheckpoint(sessionId, source.sourceId, null, discovery.files.size, processedCount, if (discovery.skippedUnreadableCount == 0) ScanCheckpointCoverage.COMPLETE else ScanCheckpointCoverage.PARTIAL, nowEpochMs())
         state.completeSession(sessionId, nowEpochMs())
         return when (state.findSession(sessionId)?.status) {
             ScanSessionStatus.COMPLETED -> {

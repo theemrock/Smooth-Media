@@ -1,5 +1,7 @@
 package com.theemrock.smoothmedia.catalog.scan
 
+import android.os.SystemClock
+import android.util.Log
 import android.content.ContentResolver
 import com.theemrock.smoothmedia.catalog.database.CatalogDatabase
 import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
@@ -27,7 +29,7 @@ import java.util.UUID
 /** Wires an explicit user-triggered scan to the existing discovery/hash/ingestion pipeline. */
 class ManualScanController(
     private val database: CatalogDatabase,
-    contentResolver: ContentResolver,
+    private val contentResolver: ContentResolver,
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
     private val newSessionId: () -> String = { UUID.randomUUID().toString() },
     private val enrichMetadata: ((String) -> MetadataEnrichmentResult)? = null,
@@ -51,21 +53,12 @@ class ManualScanController(
             )
         },
     )
-    private val hasher = SafFullFileHasher(contentResolver)
-    private val ingestion = CatalogIngestionUseCase(
-        catalog = RoomCatalogRepository(database.trackDao(), database.locatorBindingDao()),
-        writer = CatalogIdentityTransaction(database),
-        hashIdentityAdapter = HashIdentityAdapter(),
-        idFactory = UuidCatalogIdFactory,
-        nowEpochMs = nowEpochMs,
-        resolver = TrackIdentityResolver(LogicalMatchPolicy { _, _ -> LogicalMatchAssessment.NoMatch }),
-    )
-
     fun start(
         source: LibrarySourceEntity,
         onProgress: (ManualScanProgress) -> Unit = {},
         onSessionStarted: (String) -> Unit = {},
     ): ManualScanResult {
+        val scanStartElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
         val session = ScanSessionEntity(
             sessionId = newSessionId(),
             status = ScanSessionStatus.RUNNING,
@@ -73,13 +66,24 @@ class ManualScanController(
             updatedAtEpochMs = nowEpochMs(),
             completedAtEpochMs = null,
         )
+        Log.i(P10_TAG, "SCAN_START|elapsedRealtimeNanos=$scanStartElapsedRealtimeNanos")
         onSessionStarted(session.sessionId)
-        return execute(
+        val profiler = ScanPerformanceProfiler()
+        val result = execute(
             session = session,
             source = source,
             resume = false,
             onProgress = onProgress,
+            profiler = profiler,
+            totalStartedAtElapsedRealtimeNanos = scanStartElapsedRealtimeNanos,
         )
+        val checkpoint = state.findCheckpoint(session.sessionId, source.sourceId)
+        val completedAtElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos()
+        Log.i(
+            P10_TAG,
+            "SCAN_COMPLETE|elapsedRealtimeNanos=$completedAtElapsedRealtimeNanos|elapsedNanos=${completedAtElapsedRealtimeNanos - scanStartElapsedRealtimeNanos}|discovered=${checkpoint?.discoveredCount ?: 0}|processed=${checkpoint?.processedCount ?: 0}|result=${result::class.simpleName}",
+        )
+        return result
     }
 
     fun resume(
@@ -91,7 +95,14 @@ class ManualScanController(
         val session = state.findSession(sessionId)
             ?: return ManualScanResult.Rejected(sessionId, ScanSessionOrchestrator.RejectionReason.RECOVERY_REJECTED)
         onSessionStarted(session.sessionId)
-        return execute(session, source, resume = true, onProgress = onProgress)
+        return execute(
+            session,
+            source,
+            resume = true,
+            onProgress = onProgress,
+            profiler = ScanPerformanceProfiler(),
+            totalStartedAtElapsedRealtimeNanos = SystemClock.elapsedRealtimeNanos(),
+        )
     }
 
     fun pause(sessionId: String): Boolean =
@@ -105,7 +116,11 @@ class ManualScanController(
         source: LibrarySourceEntity,
         resume: Boolean,
         onProgress: (ManualScanProgress) -> Unit,
+        profiler: ScanPerformanceProfiler,
+        totalStartedAtElapsedRealtimeNanos: Long,
     ): ManualScanResult {
+        var firstDiscoveryLogged = false
+        var firstCatalogRecordLogged = false
         var enrichedCount = 0
         var metadataFailedCount = 0
         var phase = if (resume) ScanPhase.RESUMING else ScanPhase.STARTING
@@ -126,10 +141,29 @@ class ManualScanController(
                 ),
             )
         }
+        val hasher = SafFullFileHasher(
+            contentResolver,
+            onStreamOpenDurationNanos = { profiler.record(ScanPerformanceStage.FILE_OPEN, it) },
+        )
+        val ingestion = CatalogIngestionUseCase(
+            catalog = RoomCatalogRepository(database.trackDao(), database.locatorBindingDao()),
+            writer = CatalogIdentityTransaction(
+                database,
+                onTransactionDurationNanos = { profiler.record(ScanPerformanceStage.ROOM_TRANSACTION, it) },
+            ),
+            hashIdentityAdapter = HashIdentityAdapter(),
+            idFactory = UuidCatalogIdFactory,
+            nowEpochMs = nowEpochMs,
+            resolver = TrackIdentityResolver(LogicalMatchPolicy { _, _ -> LogicalMatchAssessment.NoMatch }),
+        )
         val orchestrator = ScanSessionOrchestrator(
             state = state,
             discover = discovery::discover,
             beforeCandidate = { sessionId, _ ->
+                if (!firstDiscoveryLogged) {
+                    firstDiscoveryLogged = true
+                    Log.i(P10_TAG, "FIRST_DISCOVERY|elapsedRealtimeNanos=${SystemClock.elapsedRealtimeNanos()}")
+                }
                 val checkpoint = state.findCheckpoint(sessionId, source.sourceId)
                 onProgress(
                     ManualScanProgress(
@@ -162,6 +196,10 @@ class ManualScanController(
                 },
             ),
             afterCandidate = { sessionId, _, result ->
+                if (!firstCatalogRecordLogged) {
+                    firstCatalogRecordLogged = true
+                    Log.i(P10_TAG, "FIRST_CATALOG_RECORD|elapsedRealtimeNanos=${SystemClock.elapsedRealtimeNanos()}")
+                }
                 when (result.metadataResult) {
                     ScanMetadataResult.ENRICHED -> enrichedCount++
                     ScanMetadataResult.FAILED -> metadataFailedCount++
@@ -190,12 +228,21 @@ class ManualScanController(
                 timing = next
             },
             nowEpochMs = nowEpochMs,
+            profiler = profiler,
         )
         emitProgress()
-        val result = if (resume) {
-            orchestrator.resume(session.sessionId, source, nowEpochMs())
-        } else {
-            orchestrator.start(session, source)
+        val result = try {
+            if (resume) {
+                orchestrator.resume(session.sessionId, source, nowEpochMs())
+            } else {
+                orchestrator.start(session, source)
+            }
+        } finally {
+            profiler.record(
+                ScanPerformanceStage.TOTAL_SCAN,
+                SystemClock.elapsedRealtimeNanos() - totalStartedAtElapsedRealtimeNanos,
+            )
+            Log.i(PERF_TAG, profiler.summaryLogLine())
         }
         val storedSession = state.findSession(session.sessionId)
         val checkpoint = state.findCheckpoint(session.sessionId, source.sourceId)
@@ -262,6 +309,11 @@ class ManualScanController(
         override fun newTrackId() = TrackId("track-${UUID.randomUUID()}")
 
         override fun newLocationId() = TrackLocationId("location-${UUID.randomUUID()}")
+    }
+
+    private companion object {
+        const val P10_TAG = "P10Baseline"
+        const val PERF_TAG = "SMOOTH_SCAN_PERF"
     }
 }
 

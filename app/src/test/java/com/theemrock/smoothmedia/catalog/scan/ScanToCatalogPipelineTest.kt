@@ -25,6 +25,24 @@ import org.junit.Test
 
 class ScanToCatalogPipelineTest {
     @Test
+    fun processedCandidate_recordsAnonymousHashIngestionAndMetadataMetrics() {
+        val profiler = ScanPerformanceProfiler()
+        val pipeline = ScanToCatalogPipeline(
+            state = RunningScanState(),
+            hash = { _, _ -> FullFileHashResult.Success("SHA-256", 1, "digest", 10) },
+            ingest = { _, _ -> written("track", "location") },
+            enrichMetadata = { MetadataEnrichmentResult.Updated(it, "location") },
+            profiler = profiler,
+        )
+
+        assertTrue(pipeline.process("session", file()) is CandidateProcessingResult.Completed)
+
+        assertEquals(1, profiler.snapshot().single { it.stage == ScanPerformanceStage.FULL_FILE_HASH_INCLUSIVE }.count)
+        assertEquals(1, profiler.snapshot().single { it.stage == ScanPerformanceStage.IDENTITY_CATALOG_INGESTION_INCLUSIVE }.count)
+        assertEquals(1, profiler.snapshot().single { it.stage == ScanPerformanceStage.METADATA_EXTRACTION_INCLUSIVE }.count)
+    }
+
+    @Test
     fun writtenCandidate_enrichesItsTrack_andKeepsCatalogSuccessWhenMetadataFails() {
         val state = RunningScanState()
         val metadataCalls = mutableListOf<String>()

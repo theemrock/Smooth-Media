@@ -21,13 +21,14 @@ interface CatalogIdentityWriter {
 
 class CatalogIdentityTransaction(
     private val database: CatalogDatabase,
+    private val onTransactionDurationNanos: (Long) -> Unit = {},
 ) : CatalogIdentityWriter {
     override fun createTrackWithLocation(
         track: TrackEntity,
         location: TrackLocationEntity,
         binding: LocatorBindingEntity,
     ) {
-        database.runInTransaction {
+        measureTransaction {
             database.trackDao().insertTrack(track)
             database.trackDao().insertLocation(location)
             database.locatorBindingDao().insert(binding)
@@ -38,7 +39,7 @@ class CatalogIdentityTransaction(
         location: TrackLocationEntity,
         binding: LocatorBindingEntity,
     ) {
-        database.runInTransaction {
+        measureTransaction {
             database.trackDao().insertLocation(location)
             database.locatorBindingDao().insert(binding)
         }
@@ -67,6 +68,15 @@ class CatalogIdentityTransaction(
                     updatedAtEpochMs = completedAtEpochMs,
                 ) == 1,
             )
+        }
+    }
+
+    private fun measureTransaction(block: () -> Unit) {
+        val startedAt = System.nanoTime()
+        try {
+            database.runInTransaction(block)
+        } finally {
+            onTransactionDurationNanos(System.nanoTime() - startedAt)
         }
     }
 }
