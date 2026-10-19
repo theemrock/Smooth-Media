@@ -145,8 +145,10 @@ class ManualScanController(
             contentResolver,
             onStreamOpenDurationNanos = { profiler.record(ScanPerformanceStage.FILE_OPEN, it) },
         )
+        val catalog = RoomCatalogRepository(database.trackDao(), database.locatorBindingDao())
+        val knownLocationsCache = catalog.listKnownTrackLocations().toMutableList()
         val ingestion = CatalogIngestionUseCase(
-            catalog = RoomCatalogRepository(database.trackDao(), database.locatorBindingDao()),
+            catalog = catalog,
             writer = CatalogIdentityTransaction(
                 database,
                 onTransactionDurationNanos = { profiler.record(ScanPerformanceStage.ROOM_TRANSACTION, it) },
@@ -155,6 +157,7 @@ class ManualScanController(
             idFactory = UuidCatalogIdFactory,
             nowEpochMs = nowEpochMs,
             resolver = TrackIdentityResolver(LogicalMatchPolicy { _, _ -> LogicalMatchAssessment.NoMatch }),
+            knownLocationsCache = knownLocationsCache,
         )
         val orchestrator = ScanSessionOrchestrator(
             state = state,
@@ -194,6 +197,7 @@ class ManualScanController(
                         }
                     }
                 },
+                profiler = profiler,
             ),
             afterCandidate = { sessionId, _, result ->
                 if (!firstCatalogRecordLogged) {

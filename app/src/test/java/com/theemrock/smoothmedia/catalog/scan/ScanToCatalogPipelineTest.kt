@@ -40,6 +40,28 @@ class ScanToCatalogPipelineTest {
         assertEquals(1, profiler.snapshot().single { it.stage == ScanPerformanceStage.FULL_FILE_HASH_INCLUSIVE }.count)
         assertEquals(1, profiler.snapshot().single { it.stage == ScanPerformanceStage.IDENTITY_CATALOG_INGESTION_INCLUSIVE }.count)
         assertEquals(1, profiler.snapshot().single { it.stage == ScanPerformanceStage.METADATA_EXTRACTION_INCLUSIVE }.count)
+        assertTrue(profiler.summaryLogLine().contains("stage=FULL_FILE_HASH_INCLUSIVE,status=MEASURED,count=1"))
+        assertTrue(profiler.summaryLogLine().contains("stage=IDENTITY_CATALOG_INGESTION_INCLUSIVE,status=MEASURED,count=1"))
+        assertTrue(profiler.summaryLogLine().contains("stage=METADATA_EXTRACTION_INCLUSIVE,status=MEASURED,count=1"))
+    }
+
+    @Test
+    fun missingMetadataEnricher_isReportedAsSkipped() {
+        val profiler = ScanPerformanceProfiler()
+        val pipeline = ScanToCatalogPipeline(
+            state = RunningScanState(),
+            hash = { _, _ -> FullFileHashResult.Success("SHA-256", 1, "digest", 10) },
+            ingest = { _, _ -> written("track", "location") },
+            profiler = profiler,
+        )
+
+        assertTrue(pipeline.process("session", file()) is CandidateProcessingResult.Completed)
+
+        assertTrue(
+            profiler.summaryLogLine().contains(
+                "stage=METADATA_EXTRACTION_INCLUSIVE,status=SKIPPED",
+            ),
+        )
     }
 
     @Test

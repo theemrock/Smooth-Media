@@ -54,7 +54,7 @@ class CatalogIdentityTransaction(
         candidateKey: String,
         completedAtEpochMs: Long,
     ) {
-        database.runInTransaction {
+        measureTransaction {
             database.trackDao().insertTrack(track)
             database.trackDao().insertLocation(location)
             database.locatorBindingDao().insert(binding)

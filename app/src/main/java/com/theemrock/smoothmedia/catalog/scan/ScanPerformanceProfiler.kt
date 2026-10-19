@@ -5,9 +5,19 @@ import kotlin.math.ceil
 /** Session-scoped, anonymous scan timing collector. It never stores file or metadata identifiers. */
 class ScanPerformanceProfiler {
     private val samples = linkedMapOf<ScanPerformanceStage, MutableList<Long>>()
+    private val statuses = linkedMapOf<ScanPerformanceStage, ScanPerformanceStatus>()
 
     fun record(stage: ScanPerformanceStage, durationNanos: Long) {
-        if (durationNanos >= 0L) samples.getOrPut(stage) { mutableListOf() } += durationNanos
+        if (durationNanos >= 0L) {
+            samples.getOrPut(stage) { mutableListOf() } += durationNanos
+            statuses[stage] = ScanPerformanceStatus.MEASURED
+        }
+    }
+
+    fun markSkipped(stage: ScanPerformanceStage) {
+        if (statuses[stage] != ScanPerformanceStatus.MEASURED) {
+            statuses[stage] = ScanPerformanceStatus.SKIPPED
+        }
     }
 
     fun <T> measure(stage: ScanPerformanceStage, block: () -> T): T {
@@ -33,8 +43,10 @@ class ScanPerformanceProfiler {
 
     fun summaryLogLine(): String = buildString {
         append("SMOOTH_SCAN_PERF|")
-        append(snapshot().joinToString(";") { metric ->
-            "stage=${metric.stage.name},count=${metric.count},totalMs=${metric.totalNanos / NANOS_PER_MILLISECOND},avgMs=${metric.averageNanos / NANOS_PER_MILLISECOND},p50Ms=${metric.p50Nanos / NANOS_PER_MILLISECOND},p95Ms=${metric.p95Nanos / NANOS_PER_MILLISECOND}"
+        append(ScanPerformanceStage.entries.joinToString(";") { stage ->
+            val metric = snapshot().firstOrNull { it.stage == stage }
+            val status = statuses[stage] ?: ScanPerformanceStatus.NOT_EXECUTED
+            "stage=${stage.name},status=${status.name},count=${metric?.count ?: 0},totalMs=${metric?.totalNanos?.div(NANOS_PER_MILLISECOND) ?: 0},avgMs=${metric?.averageNanos?.div(NANOS_PER_MILLISECOND) ?: 0},p50Ms=${metric?.p50Nanos?.div(NANOS_PER_MILLISECOND) ?: 0},p95Ms=${metric?.p95Nanos?.div(NANOS_PER_MILLISECOND) ?: 0}"
         })
     }
 
@@ -68,4 +80,11 @@ enum class ScanPerformanceStage {
     CHECKPOINT,
     SESSION_CHECKPOINT,
     TOTAL_SCAN,
+}
+
+enum class ScanPerformanceStatus {
+    MEASURED,
+    SKIPPED,
+    NOT_EXECUTED,
+    UNKNOWN,
 }

@@ -113,6 +113,31 @@ class CatalogIngestionTest {
         assertEquals(0, writer.writes)
     }
 
+    @Test
+    fun scanKnownLocationCache_isReusedAndUpdatedAfterWrite() {
+        val catalog = FakeCatalogRepository(emptyList())
+        val writer = RecordingWriter()
+        val cachedLocations = mutableListOf<KnownTrackLocation>()
+        val useCase = CatalogIngestionUseCase(
+            catalog = catalog,
+            writer = writer,
+            hashIdentityAdapter = HashIdentityAdapter(),
+            idFactory = FixedIdFactory,
+            nowEpochMs = { 1_000L },
+            knownLocationsCache = cachedLocations,
+        )
+
+        val first = useCase.ingest(file(uri = "content://track/new-1"), hash("hash-new"))
+        val second = useCase.ingest(file(uri = "content://track/new-2"), hash("hash-new"))
+
+        assertTrue(first is CatalogIngestionResult.Written)
+        assertTrue(second is CatalogIngestionResult.Written)
+        assertEquals(2, writer.writes)
+        assertEquals(0, catalog.listKnownTrackLocationsCalls)
+        assertEquals("track-created", writer.createdLocation?.trackId)
+        assertEquals(2, cachedLocations.size)
+    }
+
     private fun useCase(
         knownLocations: List<KnownTrackLocation>,
         writer: RecordingWriter,
@@ -163,7 +188,12 @@ class CatalogIngestionTest {
     private class FakeCatalogRepository(
         private val knownLocations: List<KnownTrackLocation>,
     ) : CatalogRepository {
-        override fun listKnownTrackLocations() = knownLocations
+        var listKnownTrackLocationsCalls = 0
+
+        override fun listKnownTrackLocations(): List<KnownTrackLocation> {
+            listKnownTrackLocationsCalls++
+            return knownLocations
+        }
         override fun insertTrack(track: TrackEntity) = Unit
         override fun findTrack(trackId: String): TrackEntity? = null
         override fun insertLocation(location: TrackLocationEntity) = Unit

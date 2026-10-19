@@ -8,6 +8,7 @@ import com.theemrock.smoothmedia.catalog.database.entity.TrackLocationEntity
 import com.theemrock.smoothmedia.catalog.identity.IdentityDecision
 import com.theemrock.smoothmedia.catalog.identity.LogicalMatchAssessment
 import com.theemrock.smoothmedia.catalog.identity.LogicalMatchPolicy
+import com.theemrock.smoothmedia.catalog.identity.KnownTrackLocation
 import com.theemrock.smoothmedia.catalog.identity.TrackIdentityResolver
 import com.theemrock.smoothmedia.catalog.model.TrackId
 import com.theemrock.smoothmedia.catalog.model.TrackLocationId
@@ -55,6 +56,7 @@ class CatalogIngestionUseCase(
     private val resolver: TrackIdentityResolver = TrackIdentityResolver(
         LogicalMatchPolicy { _, _ -> LogicalMatchAssessment.NoMatch },
     ),
+    private val knownLocationsCache: MutableList<KnownTrackLocation>? = null,
 ) {
     fun ingest(
         file: DiscoveredAudioFile,
@@ -64,7 +66,7 @@ class CatalogIngestionUseCase(
         if (file.modifiedAtEpochMs == null) return CatalogIngestionResult.InvalidInput("modifiedAtEpochMs")
 
         val knownLocations = try {
-            catalog.listKnownTrackLocations()
+            knownLocationsCache ?: catalog.listKnownTrackLocations()
         } catch (_: Exception) {
             return CatalogIngestionResult.StorageFailed
         }
@@ -91,12 +93,14 @@ class CatalogIngestionUseCase(
                 hash = input.candidate.fileHash,
                 decision = decision,
                 trackId = decision.trackId,
+                knownLocations = knownLocations,
             )
             is IdentityDecision.CreateNewTrack -> writeLocation(
                 file = file,
                 hash = input.candidate.fileHash,
                 decision = decision,
                 trackId = idFactory.newTrackId(),
+                knownLocations = knownLocations,
             )
             is IdentityDecision.PreserveLocation -> CatalogIngestionResult.WriteBlocked("unsupported-decision")
         }
@@ -107,11 +111,16 @@ class CatalogIngestionUseCase(
         hash: com.theemrock.smoothmedia.catalog.model.FileHash,
         decision: IdentityDecision,
         trackId: TrackId,
+        knownLocations: List<KnownTrackLocation>,
     ): CatalogIngestionResult {
-        val locatorAlreadyBound = try {
-            catalog.findBindingByLocator(file.uri) != null
-        } catch (_: Exception) {
-            return CatalogIngestionResult.StorageFailed
+        val locatorAlreadyBound = if (knownLocationsCache != null) {
+            knownLocations.any { it.locator.value == file.uri }
+        } else {
+            try {
+                catalog.findBindingByLocator(file.uri) != null
+            } catch (_: Exception) {
+                return CatalogIngestionResult.StorageFailed
+            }
         }
         if (locatorAlreadyBound) {
             return CatalogIngestionResult.WriteBlocked("locator-already-bound")
@@ -160,6 +169,15 @@ class CatalogIngestionUseCase(
             } else {
                 writer.attachLocation(location, binding)
             }
+            knownLocationsCache?.add(
+                KnownTrackLocation(
+                    trackId = trackId,
+                    locationId = locationId,
+                    locator = com.theemrock.smoothmedia.catalog.model.FileLocator(file.uri),
+                    originalFileHash = hash,
+                    currentFileHash = hash,
+                ),
+            )
             CatalogIngestionResult.Written(decision, trackId, locationId)
         } catch (_: Exception) {
             CatalogIngestionResult.StorageFailed

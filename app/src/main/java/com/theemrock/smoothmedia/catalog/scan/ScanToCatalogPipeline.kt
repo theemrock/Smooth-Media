@@ -90,7 +90,10 @@ class ScanToCatalogPipeline(
                 onSuccess = { it.toScanMetadataResult() },
                 onFailure = { ScanMetadataResult.FAILED },
             )
-        } ?: ScanMetadataResult.SKIPPED
+        } ?: run {
+            profiler?.markSkipped(ScanPerformanceStage.METADATA_EXTRACTION_INCLUSIVE)
+            ScanMetadataResult.SKIPPED
+        }
         return CandidateProcessingResult.Completed(locationId, metadataResult)
     }
 
@@ -114,7 +117,10 @@ class ScanToCatalogPipeline(
                 onSuccess = { it.toScanMetadataResult() },
                 onFailure = { ScanMetadataResult.FAILED },
             )
-        } ?: ScanMetadataResult.SKIPPED
+        } ?: run {
+            profiler?.markSkipped(ScanPerformanceStage.METADATA_EXTRACTION_INCLUSIVE)
+            ScanMetadataResult.SKIPPED
+        }
         return CandidateProcessingResult.Completed(locationId, metadataResult)
     }
 

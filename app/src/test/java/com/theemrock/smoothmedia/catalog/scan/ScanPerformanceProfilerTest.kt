@@ -33,8 +33,28 @@ class ScanPerformanceProfilerTest {
         val line = profiler.summaryLogLine()
 
         assertTrue(line.startsWith("SMOOTH_SCAN_PERF|"))
-        assertTrue(line.contains("stage=SAF_DISCOVERY,count=1,totalMs=2"))
+        assertTrue(line.contains("stage=SAF_DISCOVERY,status=MEASURED,count=1,totalMs=2"))
         assertFalse(line.contains("content://"))
         assertFalse(line.contains(".mp3"))
+    }
+
+    @Test
+    fun summaryLog_reportsStagesThatWereNotExecuted() {
+        val line = ScanPerformanceProfiler().summaryLogLine()
+
+        assertTrue(line.contains("stage=FULL_FILE_HASH_INCLUSIVE,status=NOT_EXECUTED"))
+        assertTrue(line.contains("stage=METADATA_EXTRACTION_INCLUSIVE,status=NOT_EXECUTED"))
+    }
+
+    @Test
+    fun summaryLog_reportsExplicitlySkippedStages() {
+        val profiler = ScanPerformanceProfiler()
+        profiler.markSkipped(ScanPerformanceStage.METADATA_EXTRACTION_INCLUSIVE)
+
+        assertTrue(
+            profiler.summaryLogLine().contains(
+                "stage=METADATA_EXTRACTION_INCLUSIVE,status=SKIPPED",
+            ),
+        )
     }
 }
