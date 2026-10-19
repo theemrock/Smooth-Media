@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompile
 
 plugins {
     alias(libs.plugins.android.application)
@@ -74,6 +75,17 @@ android {
 tasks.register("compileDebugAndroidTestKotlin") {
     description = "Compiles the isolated p09test Android test Kotlin sources."
     dependsOn("compileP09testAndroidTestKotlin")
+}
+
+tasks.withType<KotlinCompile>().configureEach {
+    if (name == "compileP09testAndroidTestKotlin") {
+        doFirst {
+            setSource(fileTree("src/androidTest") {
+                include("**/*.kt")
+                exclude("**/p01x/**")
+            })
+        }
+    }
 }
 
 kotlin {
