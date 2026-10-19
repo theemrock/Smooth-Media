@@ -49,6 +49,17 @@ data class LibrarySong(
         }
 }
 
+data class LibraryGenreAssignmentUi(
+    val primary: String?,
+    val secondary: List<String>,
+)
+
+fun <T> chooseCanonicalGenresOrLegacy(
+    canonical: List<T>,
+    legacy: List<T>,
+    canonicalAvailable: Boolean = canonical.isNotEmpty(),
+): List<T> = canonical.takeIf { canonicalAvailable } ?: legacy
+
 data class LibraryPage(
     val songs: List<LibrarySong>,
     val hasMore: Boolean,
@@ -507,10 +518,13 @@ class RoomLibraryRepository(
         val rows = when (type) {
             LibraryCollectionType.ALBUMS -> dao.loadAlbums(offset, limit + 1)
             LibraryCollectionType.ARTISTS -> dao.loadArtists(offset, limit + 1)
-            LibraryCollectionType.GENRES -> if (dao.countCanonicalGenres() > 0) {
-                dao.loadCanonicalGenres(offset, limit + 1)
-            } else {
-                dao.loadGenres(offset, limit + 1)
+            LibraryCollectionType.GENRES -> {
+                val canonicalAvailable = dao.countCanonicalGenres() > 0
+                chooseCanonicalGenresOrLegacy(
+                canonical = if (canonicalAvailable) dao.loadCanonicalGenres(offset, limit + 1) else emptyList(),
+                legacy = dao.loadGenres(offset, limit + 1),
+                canonicalAvailable = canonicalAvailable,
+                )
             }
             LibraryCollectionType.FOLDERS -> {
                 val graphRows = safDocumentDao?.loadDirectoryRows(offset, limit + 1).orEmpty()

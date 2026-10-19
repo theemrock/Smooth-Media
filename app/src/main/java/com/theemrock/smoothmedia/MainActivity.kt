@@ -33,6 +33,7 @@ import com.theemrock.smoothmedia.catalog.scan.ScanSessionOrchestrator
 import com.theemrock.smoothmedia.catalog.scan.ScanPhase
 import com.theemrock.smoothmedia.library.LibraryViewModel
 import com.theemrock.smoothmedia.library.LibraryCollectionType
+import com.theemrock.smoothmedia.library.LibraryGenreAssignmentUi
 import com.theemrock.smoothmedia.library.LibraryCollectionViewModel
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryTrackFilter
@@ -220,6 +221,7 @@ class MainActivity : ComponentActivity() {
     private var libraryDetailAlbums by mutableStateOf<List<LibraryCollectionRow>>(emptyList())
     private var libraryDetailFolderChildren by mutableStateOf<List<LibraryCollectionRow>>(emptyList())
     private var libraryDetailGenreChildren by mutableStateOf<List<LibraryCollectionRow>>(emptyList())
+    private var libraryDetailGenreAssignments by mutableStateOf<Map<String, LibraryGenreAssignmentUi>>(emptyMap())
     private var artistAlbumPreviews by mutableStateOf<Map<String, List<LibraryArtistAlbumPreview>>>(emptyMap())
     private var genreArtworkPreviews by mutableStateOf<Map<String, List<LibraryGenreArtworkPreview>>>(emptyMap())
     private var libraryBackTarget by mutableStateOf(LibraryBackTarget.DASHBOARD)
@@ -573,6 +575,7 @@ class MainActivity : ComponentActivity() {
                             artistAlbums = libraryDetailAlbums,
                             folderChildren = libraryDetailFolderChildren,
                             genreChildren = libraryDetailGenreChildren,
+                            genreAssignments = libraryDetailGenreAssignments,
                             onMenu = {},
                             onSearch = { showSearch = true },
                             onDashboard = ::openDashboard,
@@ -1405,6 +1408,7 @@ class MainActivity : ComponentActivity() {
         libraryDetailAlbums = emptyList()
         libraryDetailFolderChildren = emptyList()
         libraryDetailGenreChildren = emptyList()
+        libraryDetailGenreAssignments = emptyMap()
         updateLibraryBackCallback()
         executor.execute {
             val folderParts = row.key.split('\u001E')
@@ -1444,12 +1448,18 @@ class MainActivity : ComponentActivity() {
                     LibraryCollectionRow(child.id, child.displayName, null, child.directTrackCount)
                 }
             } else emptyList()
+            val genreAssignments = if (type == LibraryCollectionType.GENRES) {
+                RoomGenreRepository(runtime.database).assignmentDisplayForTracks(songs.map { it.trackId }).mapValues { (_, value) ->
+                    LibraryGenreAssignmentUi(value.primary, value.secondary)
+                }
+            } else emptyMap()
             runOnUiThread {
                 if (!isDestroyed) {
                     libraryDetailSongs = songs
                     libraryDetailAlbums = albums
                     libraryDetailFolderChildren = folderChildren
                     libraryDetailGenreChildren = genreChildren
+                    libraryDetailGenreAssignments = genreAssignments
                 }
             }
         }

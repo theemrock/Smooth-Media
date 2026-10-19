@@ -20,6 +20,10 @@ class RoomGenreRepository(private val database: CatalogDatabase) {
         val displayName: String,
         val directTrackCount: Int,
     )
+    data class AssignmentDisplay(
+        val primary: String?,
+        val secondary: List<String>,
+    )
 
     fun saveHierarchy(nodes: List<GenreNode>): GenreBuildResult {
         return saveFullHierarchySnapshot(nodes)
@@ -110,6 +114,17 @@ class RoomGenreRepository(private val database: CatalogDatabase) {
     }
     fun parentsOf(childId: String): List<String> = dao.parentsOf(childId).map { it.parentGenreId }
     fun trackIdsForGenre(genreId: String): List<String> = dao.trackIdsForGenre(genreId)
+
+    fun assignmentDisplayForTracks(trackIds: Collection<String>): Map<String, AssignmentDisplay> {
+        val names = dao.allNodes().associate { it.genreId to it.displayName }
+        return trackIds.associateWith { trackId ->
+            val assignments = dao.assignmentsForTrack(trackId)
+            AssignmentDisplay(
+                primary = assignments.firstOrNull { it.isPrimary }?.genreId?.let(names::get),
+                secondary = assignments.filterNot { it.isPrimary }.mapNotNull { names[it.genreId] },
+            )
+        }
+    }
 
     fun queryTrackIds(query: GenreQuery, limit: Int, offset: Int): List<String> {
         val compiled = GenreQueryCompiler.compile(query, limit, offset)

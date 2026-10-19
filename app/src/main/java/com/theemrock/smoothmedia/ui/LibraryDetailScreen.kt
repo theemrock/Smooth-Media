@@ -37,6 +37,7 @@ import com.theemrock.smoothmedia.artwork.AndroidArtworkResolver
 import com.theemrock.smoothmedia.artwork.ArtworkRequest
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryCollectionType
+import com.theemrock.smoothmedia.library.LibraryGenreAssignmentUi
 import com.theemrock.smoothmedia.library.LibrarySong
 import com.theemrock.smoothmedia.playback.PlaybackEngineState
 
@@ -51,6 +52,7 @@ fun LibraryDetailScreen(
     artistAlbums: List<LibraryCollectionRow> = emptyList(),
     folderChildren: List<LibraryCollectionRow> = emptyList(),
     genreChildren: List<LibraryCollectionRow> = emptyList(),
+    genreAssignments: Map<String, LibraryGenreAssignmentUi> = emptyMap(),
     onMenu: () -> Unit,
     onSearch: () -> Unit,
     onDashboard: () -> Unit,
@@ -186,7 +188,7 @@ fun LibraryDetailScreen(
             Row(modifier = Modifier.weight(1f)) {
               LazyColumn(state = songListState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 items(detailSongsStableOrder(songs), key = { it.trackId }) { song ->
-                    DetailSongRow(song, artworkResolver, onSong, onAddToQueue, onPlayNext)
+                    DetailSongRow(song, artworkResolver, genreAssignments[song.trackId], onSong, onAddToQueue, onPlayNext)
                 }
               }
               LibraryListScrollbar(songListState, Modifier.padding(vertical = 4.dp))
@@ -202,13 +204,21 @@ private fun DetailSectionTitle(title: String) {
 }
 
 @Composable
-private fun DetailSongRow(song: LibrarySong, resolver: AndroidArtworkResolver?, onSong: (LibrarySong) -> Unit, onAdd: (LibrarySong) -> Unit, onNext: (LibrarySong) -> Unit) {
+private fun DetailSongRow(song: LibrarySong, resolver: AndroidArtworkResolver?, genreAssignment: LibraryGenreAssignmentUi?, onSong: (LibrarySong) -> Unit, onAdd: (LibrarySong) -> Unit, onNext: (LibrarySong) -> Unit) {
     var expanded by remember { mutableStateOf(false) }
     Row(modifier = Modifier.fillMaxWidth().clickable(enabled = song.isAccessible) { onSong(song) }.padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
         if (resolver != null) LibraryArtwork(ArtworkRequest.Track(song.trackId), resolver, Modifier.size(46.dp), "Artwork", 96)
         Column(modifier = Modifier.weight(1f).padding(horizontal = 10.dp)) {
             Text(song.title, color = Color.White, maxLines = 1, overflow = TextOverflow.Ellipsis)
             Text(song.artist + " · " + song.album, color = Color(0xFFAAB9C2), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+        genreAssignment?.let { assignment ->
+            Column {
+                assignment.primary?.let { Text("Primary: $it", color = Color(0xFF19C3E6), fontSize = 11.sp) }
+                assignment.secondary.takeIf { it.isNotEmpty() }?.let { secondary ->
+                    Text("Secondary: ${secondary.joinToString(", ")}", color = Color(0xFFAAB9C2), fontSize = 11.sp)
+                }
+            }
         }
         Text(formatDetailDuration(song.durationMs ?: 0L), color = Color(0xFFAAB9C2), fontSize = 12.sp)
         IconButton(onClick = { expanded = true }) { Text("⋮", color = Color.White) }
