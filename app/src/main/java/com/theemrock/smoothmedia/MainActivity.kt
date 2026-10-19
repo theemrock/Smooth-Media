@@ -46,6 +46,7 @@ import com.theemrock.smoothmedia.library.LibraryLocationState
 import com.theemrock.smoothmedia.library.LibraryDashboardData
 import com.theemrock.smoothmedia.library.LibraryArtistAlbumPreview
 import com.theemrock.smoothmedia.library.LibraryGenreArtworkPreview
+import com.theemrock.smoothmedia.library.SourceTrackCountSnapshot
 import com.theemrock.smoothmedia.genre.RoomGenreRepository
 import com.theemrock.smoothmedia.playback.CatalogPlaybackLocationResolver
 import com.theemrock.smoothmedia.playback.PlaybackEngineState
@@ -81,6 +82,7 @@ import com.theemrock.smoothmedia.metadata.MetadataRefreshPreviewCoordinator
 import com.theemrock.smoothmedia.metadata.MetadataRefreshPreviewResult
 import com.theemrock.smoothmedia.metadata.MetadataRecoveryEngine
 import com.theemrock.smoothmedia.metadata.MetadataRecoverySessionCoordinator
+import com.theemrock.smoothmedia.metadata.resolveMetadataMissingCount
 import com.theemrock.smoothmedia.metadata.RoomMetadataApplyDryRun
 import com.theemrock.smoothmedia.metadata.RoomMetadataApplyDryRunSummary
 import com.theemrock.smoothmedia.metadata.RoomMetadataApplySessionStore
@@ -93,6 +95,7 @@ import com.theemrock.smoothmedia.metadata.SharedPreferencesMetadataAutonomousSet
 import com.theemrock.smoothmedia.metadata.RoomTrackMetadataRepository
 import com.theemrock.smoothmedia.metadata.TrackMetadataRepository
 import com.theemrock.smoothmedia.metadata.TrackMetadataEnrichmentUseCase
+import com.theemrock.smoothmedia.metadata.GenreMetadataBackfill
 import com.theemrock.smoothmedia.source.AndroidSelectedTreeParser
 import com.theemrock.smoothmedia.source.SourceRegistryFactory
 import com.theemrock.smoothmedia.source.SourceRegistryRuntime
@@ -180,6 +183,9 @@ class MainActivity : ComponentActivity() {
     private var metadataAutonomousEnabled by mutableStateOf(false)
     private var metadataAutonomousToggleEnabled by mutableStateOf(false)
     private var metadataAutonomousStatus by mutableStateOf<String?>(null)
+    private var genreBackfillRunning by mutableStateOf(false)
+    private var genreBackfillStatus by mutableStateOf<String?>(null)
+    private lateinit var genreMetadataBackfill: GenreMetadataBackfill
     private val metadataAutonomousTriggerRunning = AtomicBoolean(false)
     private var dashboardData by mutableStateOf<LibraryDashboardData?>(null)
     private var showDashboard by mutableStateOf(true)
@@ -359,12 +365,17 @@ class MainActivity : ComponentActivity() {
         }
         onBackPressedDispatcher.addCallback(this, libraryBackCallback)
         metadataRepository = RoomTrackMetadataRepository(runtime.database.trackMetadataDao())
+        genreMetadataBackfill = GenreMetadataBackfill(
+            metadataDao = runtime.database.trackMetadataDao(),
+            genreRepository = RoomGenreRepository(runtime.database),
+        )
         metadataEnrichment = TrackMetadataEnrichmentUseCase(
             trackDao = runtime.database.trackDao(),
             bindingDao = runtime.database.locatorBindingDao(),
             exclusionDao = runtime.database.catalogExclusionDao(),
             metadata = metadataRepository,
             reader = AndroidAudioMetadataReader(this),
+            genreRepository = RoomGenreRepository(runtime.database),
         )
         metadataPreviewCoordinator = MetadataRefreshPreviewCoordinator(
             read = metadataEnrichment::readTrack,
@@ -734,6 +745,9 @@ class MainActivity : ComponentActivity() {
                             metadataApplyStatus = metadataApplyStatus,
                             metadataApplyRunning = metadataApplyRunning,
                             onMetadataApply = ::startApprovedMetadataApply,
+                            genreBackfillRunning = genreBackfillRunning,
+                            genreBackfillStatus = genreBackfillStatus,
+                            onGenreBackfill = ::startGenreBackfill,
                             autonomousApplyEnabled = metadataAutonomousEnabled,
                             autonomousApplyToggleEnabled = metadataAutonomousToggleEnabled,
                             autonomousApplyStatus = metadataAutonomousStatus,
@@ -808,6 +822,11 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshSourceTrackCounts()
     }
 
     private fun addToQueue(song: LibrarySong) = enqueueSong(song, playNext = false)
@@ -969,6 +988,7 @@ class MainActivity : ComponentActivity() {
                 }
                 scanMessage = scanResultMessage(result)
             }
+            refreshSourceTrackCounts()
         }
     }
 
@@ -1525,6 +1545,7 @@ class MainActivity : ComponentActivity() {
         showLibraryManagement = false
         showSourceManagement = true
         updateLibraryBackCallback()
+        loadMetadataMissingCount()
     }
 
     private fun openSettings() {
@@ -1603,10 +1624,34 @@ class MainActivity : ComponentActivity() {
     private fun loadMetadataMissingCount() {
         if (!::executor.isInitialized || !::runtime.isInitialized) return
         executor.execute {
-            val count = runCatching { runtime.database.trackMetadataDao().countTracksMissingMetadata() }
-                .getOrDefault(0)
+            val count = resolveMetadataMissingCount(metadataMissingCount) {
+                runtime.database.trackMetadataDao().countTracksMissingMetadata()
+            }
             runOnUiThread {
                 if (!isDestroyed) metadataMissingCount = count
+            }
+        }
+    }
+
+    private fun startGenreBackfill() {
+        if (genreBackfillRunning) return
+        genreBackfillRunning = true
+        genreBackfillStatus = null
+        executor.execute {
+            val result = runCatching { genreMetadataBackfill.run() }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                genreBackfillRunning = false
+                genreBackfillStatus = result.fold(
+                    onSuccess = { "${it.processedTracks} track için ${it.createdAssignments} genre ilişkisi işlendi." },
+                    onFailure = { "Genre verisi oluşturulamadı: ${it.message ?: "bilinmeyen hata"}" },
+                )
+                if (result.isSuccess) {
+                    loadDashboard()
+                    if (showCollections && collectionViewModel.state.value.type == LibraryCollectionType.GENRES) {
+                        collectionViewModel.loadInitial(LibraryCollectionType.GENRES)
+                    }
+                }
             }
         }
     }
@@ -1665,11 +1710,28 @@ class MainActivity : ComponentActivity() {
     private fun loadSourceTrackCounts(sourceSnapshot: List<LibrarySourceEntity> = sources) {
         if (!::executor.isInitialized || !::runtime.isInitialized) return
         executor.execute {
-            val counts = sourceSnapshot.associate { source ->
-                source.sourceId to runtime.database.libraryDao().countActiveTracksForSource(source.sourceId)
-            }
+            val counts = SourceTrackCountSnapshot.load(
+                sources = sourceSnapshot,
+                countTracksForSource = runtime.database.libraryDao()::countActiveTracksForSource,
+            ).bySource
             runOnUiThread {
                 if (!isDestroyed) sourceTrackCounts = counts
+            }
+        }
+    }
+
+    private fun refreshSourceTrackCounts() {
+        if (!::executor.isInitialized || !::runtime.isInitialized) return
+        executor.execute {
+            val refreshedSources = runCatching { runtime.repository.listAll() }.getOrNull() ?: return@execute
+            val counts = SourceTrackCountSnapshot.load(
+                sources = refreshedSources,
+                countTracksForSource = runtime.database.libraryDao()::countActiveTracksForSource,
+            ).bySource
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                sources = refreshedSources
+                sourceTrackCounts = counts
             }
         }
     }

@@ -18,10 +18,13 @@ import com.theemrock.smoothmedia.metadata.AudioMetadataReader
 import com.theemrock.smoothmedia.metadata.MetadataEnrichmentResult
 import com.theemrock.smoothmedia.metadata.MetadataReadFailure
 import com.theemrock.smoothmedia.metadata.MetadataReadResult
+import com.theemrock.smoothmedia.metadata.MetadataField
+import com.theemrock.smoothmedia.metadata.MetadataFieldStatus
 import com.theemrock.smoothmedia.metadata.MetadataNormalizer
 import com.theemrock.smoothmedia.metadata.RawAudioMetadata
 import com.theemrock.smoothmedia.metadata.RoomTrackMetadataRepository
 import com.theemrock.smoothmedia.metadata.TrackMetadataEnrichmentUseCase
+import com.theemrock.smoothmedia.genre.RoomGenreRepository
 import android.net.Uri
 import org.junit.After
 import org.junit.Assert.assertEquals
@@ -96,6 +99,23 @@ class MetadataEnrichmentRoomTest {
     }
 
     @Test
+    fun enrichmentMaterializesCanonicalPrimaryAndSecondaryGenres() {
+        val normalized = MetadataNormalizer().normalize(raw(genre = "Rock")).copy(
+            genres = MetadataField(listOf("Rock", "Metal"), MetadataFieldStatus.AVAILABLE),
+        )
+        val useCase = useCase(
+            reader = { MetadataReadResult.Success(raw(genre = "Rock"), normalized) },
+            genreRepository = RoomGenreRepository(database),
+        )
+
+        useCase.enrichTrack("track-1")
+
+        assertEquals(listOf("rock", "metal"), database.genreDao().assignmentsForTrack("track-1").map { it.genreId })
+        assertTrue(database.genreDao().assignmentsForTrack("track-1").first().isPrimary)
+        assertTrue(database.genreDao().assignmentsForTrack("track-1").last().isPrimary.not())
+    }
+
+    @Test
     fun excludedLocation_isSkippedWithoutWritingMetadata() {
         database.catalogExclusionDao().insert(
             CatalogExclusionEntity(
@@ -114,19 +134,24 @@ class MetadataEnrichmentRoomTest {
         assertEquals(null, repository.find("track-1"))
     }
 
-    private fun useCase(reader: () -> MetadataReadResult) = TrackMetadataEnrichmentUseCase(
+    private fun useCase(
+        genreRepository: RoomGenreRepository? = null,
+        reader: () -> MetadataReadResult,
+    ) = TrackMetadataEnrichmentUseCase(
         trackDao = database.trackDao(),
         bindingDao = database.locatorBindingDao(),
         exclusionDao = database.catalogExclusionDao(),
         metadata = repository,
         reader = AudioMetadataReader { _: Uri -> reader() },
         nowEpochMs = { 3_000L },
+        genreRepository = genreRepository,
     )
 
-    private fun raw(title: String = "Song") = RawAudioMetadata(
+    private fun raw(title: String = "Song", genre: String? = null) = RawAudioMetadata(
         title = title,
         artist = "Artist",
         album = "Album",
+        genre = genre,
         year = "2024",
         durationMs = "1000",
     )

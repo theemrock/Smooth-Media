@@ -108,6 +108,46 @@ class RoomGenreRepository(private val database: CatalogDatabase) {
         AssignmentResult(true)
     }
 
+    /** Materializes embedded metadata genres without removing user-owned assignments. */
+    fun syncMetadataGenres(trackId: String, genres: List<String>) = inTransaction {
+        val normalized = genres.mapNotNull { raw ->
+            val displayName = raw.trim().takeIf { it.isNotEmpty() } ?: return@mapNotNull null
+            displayName.lowercase() to displayName
+        }.distinctBy { it.first }
+        if (normalized.isEmpty()) return@inTransaction
+
+        val existing = dao.assignmentsForTrack(trackId)
+        val hasPrimary = existing.any { it.isPrimary }
+        normalized.forEachIndexed { index, (genreId, displayName) ->
+            val node = dao.findNode(genreId)
+            if (node == null) {
+                dao.upsertNode(
+                    GenreNodeEntity(
+                        genreId = genreId,
+                        displayName = displayName,
+                        normalizedName = genreId,
+                        provenance = "LOCAL_METADATA",
+                        confidence = null,
+                        userOverride = false,
+                    ),
+                )
+            }
+            val current = existing.firstOrNull { it.genreId == genreId }
+            if (current?.userOverride != true) {
+                dao.upsertAssignment(
+                    TrackGenreAssignmentEntity(
+                        trackId = trackId,
+                        genreId = genreId,
+                        isPrimary = index == 0 && !hasPrimary,
+                        provenance = "LOCAL_METADATA",
+                        confidence = null,
+                        userOverride = false,
+                    ),
+                )
+            }
+        }
+    }
+
     fun childrenOf(parentId: String): List<String> = dao.childrenOf(parentId).map { it.childGenreId }
     fun childGenresOf(parentId: String): List<ChildGenre> = dao.childNodesOf(parentId).map { node ->
         ChildGenre(node.genreId, node.displayName, dao.trackIdsForGenre(node.genreId).size)

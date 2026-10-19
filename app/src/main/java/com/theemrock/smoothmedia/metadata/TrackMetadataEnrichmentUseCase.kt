@@ -4,6 +4,7 @@ import android.net.Uri
 import com.theemrock.smoothmedia.catalog.database.dao.CatalogExclusionDao
 import com.theemrock.smoothmedia.catalog.database.dao.LocatorBindingDao
 import com.theemrock.smoothmedia.catalog.database.dao.TrackDao
+import com.theemrock.smoothmedia.genre.RoomGenreRepository
 import com.theemrock.smoothmedia.catalog.model.LocationAvailability
 
 sealed interface MetadataEnrichmentResult {
@@ -22,11 +23,13 @@ class TrackMetadataEnrichmentUseCase(
     private val metadata: TrackMetadataRepository,
     private val reader: AudioMetadataReader,
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
+    private val genreRepository: RoomGenreRepository? = null,
 ) {
     fun enrichTrack(trackId: String): MetadataEnrichmentResult {
         return when (val result = readTrack(trackId)) {
             is MetadataReadOnlyResult.Success -> {
                 metadata.replaceFileMetadata(trackId, result.raw, result.metadata, nowEpochMs())
+                genreRepository?.syncMetadataGenres(trackId, result.metadata.genres.value.orEmpty())
                 MetadataEnrichmentResult.Updated(trackId, result.locationId)
             }
             is MetadataReadOnlyResult.Failed -> MetadataEnrichmentResult.ReadFailed(trackId, result.failures)

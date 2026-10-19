@@ -92,6 +92,9 @@ fun SourceManagementScreen(
     metadataApplyStatus: String? = null,
     metadataApplyRunning: Boolean = false,
     onMetadataApply: () -> Unit = {},
+    genreBackfillRunning: Boolean = false,
+    genreBackfillStatus: String? = null,
+    onGenreBackfill: () -> Unit = {},
     autonomousApplyEnabled: Boolean = false,
     autonomousApplyToggleEnabled: Boolean = false,
     autonomousApplyStatus: String? = null,
@@ -153,6 +156,9 @@ fun SourceManagementScreen(
                             applyStatus = metadataApplyStatus,
                             applyRunning = metadataApplyRunning,
                             onApply = onMetadataApply,
+                            genreBackfillRunning = genreBackfillRunning,
+                            genreBackfillStatus = genreBackfillStatus,
+                            onGenreBackfill = onGenreBackfill,
                             autonomousApplyEnabled = autonomousApplyEnabled,
                             autonomousApplyToggleEnabled = autonomousApplyToggleEnabled,
                             autonomousApplyStatus = autonomousApplyStatus,
@@ -214,6 +220,9 @@ private fun MetadataSection(
     applyStatus: String?,
     applyRunning: Boolean,
     onApply: () -> Unit,
+    genreBackfillRunning: Boolean,
+    genreBackfillStatus: String?,
+    onGenreBackfill: () -> Unit,
     autonomousApplyEnabled: Boolean,
     autonomousApplyToggleEnabled: Boolean,
     autonomousApplyStatus: String?,
@@ -223,6 +232,10 @@ private fun MetadataSection(
         Column(modifier = Modifier.padding(16.dp)) {
             Text(stringResource(R.string.metadata_title), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.metadata_missing_count, missingCount))
+            OutlinedButton(onClick = onGenreBackfill, enabled = !genreBackfillRunning) {
+                Text(if (genreBackfillRunning) "Genre verisi oluşturuluyor..." else "Genres verisini oluştur")
+            }
+            genreBackfillStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             Text("Salt-okunur metadata audit", style = MaterialTheme.typography.titleSmall)
             Text("Otonom onarım: devre dışı (yalnız dry-run)", style = MaterialTheme.typography.bodySmall)
             Text("Apply durumu: DEVRE DIŞI", style = MaterialTheme.typography.bodySmall)

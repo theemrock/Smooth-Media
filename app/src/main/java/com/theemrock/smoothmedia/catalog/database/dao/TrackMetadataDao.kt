@@ -150,6 +150,17 @@ interface TrackMetadataDao {
     fun listAll(): List<TrackMetadataEntity>
 
     @Query(
+        """
+        SELECT m.*
+        FROM track_metadata AS m
+        INNER JOIN tracks AS t ON t.track_id = m.trackId
+        WHERE t.catalog_lifecycle = 'ACTIVE'
+        ORDER BY m.trackId
+        """,
+    )
+    fun listActiveMetadata(): List<TrackMetadataEntity>
+
+    @Query(
         "SELECT track_id FROM tracks WHERE catalog_lifecycle = 'ACTIVE' ORDER BY track_id LIMIT :limit",
     )
     fun listActiveTrackIds(limit: Int): List<String>
@@ -238,7 +249,8 @@ interface TrackMetadataDao {
         SELECT COUNT(*)
         FROM tracks AS t
         LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
-        WHERE m.trackId IS NULL
+        WHERE t.catalog_lifecycle = 'ACTIVE'
+          AND m.trackId IS NULL
         """,
     )
     fun countTracksMissingMetadata(): Int

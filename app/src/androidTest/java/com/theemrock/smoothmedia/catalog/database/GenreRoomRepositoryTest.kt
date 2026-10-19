@@ -111,6 +111,19 @@ class GenreRoomRepositoryTest {
     }
 
     @Test
+    fun metadataGenresCreateCanonicalNodesAndPrimarySecondaryAssignments() {
+        repository.syncMetadataGenres("track-1", listOf("Rock", "Metal"))
+
+        assertEquals(listOf("Metal", "Rock"), database.genreDao().allNodes().map { it.displayName })
+        assertEquals(
+            listOf("rock:primary", "metal:secondary"),
+            database.genreDao().assignmentsForTrack("track-1").map { assignment ->
+                assignment.genreId to assignment.isPrimary
+            }.map { (genreId, primary) -> "${genreId}:${if (primary) "primary" else "secondary"}" },
+        )
+    }
+
+    @Test
     fun batchWithSecondPrimaryRollsBackAllAssignments() {
         repository.saveFullHierarchySnapshot(listOf(GenreNode("rock"), GenreNode("metal")))
 
