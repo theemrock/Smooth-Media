@@ -3,10 +3,11 @@ package com.theemrock.smoothmedia.ui
 import androidx.activity.compose.setContent
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.ui.test.assertIsDisplayed
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import com.theemrock.smoothmedia.MainActivity
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryCollectionType
 import com.theemrock.smoothmedia.library.LibraryCollectionUiState
@@ -21,12 +22,12 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class GenreRuntimeVerificationTest {
     @get:Rule
-    val composeRule = createComposeRule()
+    val composeRule = createAndroidComposeRule<MainActivity>()
 
     @Test
     fun genreListAndDetailRenderSyntheticParentChildAndCounts() {
         var selectedGenre: LibraryCollectionRow? = null
-        composeRule.setContent {
+        composeRule.activity.setContent {
             MaterialTheme {
                 LibraryCollectionScreen(
                     state = LibraryCollectionUiState(
@@ -53,7 +54,7 @@ class GenreRuntimeVerificationTest {
         composeRule.onNodeWithText("2 şarkı").assertIsDisplayed()
 
         var selectedChild: LibraryCollectionRow? = null
-        composeRule.setContent {
+        composeRule.activity.setContent {
             MaterialTheme {
                 LibraryDetailScreen(
                     type = LibraryCollectionType.GENRES,
