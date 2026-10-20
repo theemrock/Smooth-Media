@@ -21,6 +21,7 @@ import com.theemrock.smoothmedia.catalog.repository.RoomScanStateRepository
 import com.theemrock.smoothmedia.discovery.AndroidSafDocumentTreeReader
 import com.theemrock.smoothmedia.discovery.HashIdentityAdapter
 import com.theemrock.smoothmedia.discovery.SafFullFileHasher
+import com.theemrock.smoothmedia.discovery.SafDiscoveryTimingCollector
 import com.theemrock.smoothmedia.discovery.SelectedAudioDiscovery
 import com.theemrock.smoothmedia.metadata.MetadataEnrichmentResult
 import com.theemrock.smoothmedia.source.AndroidTreePermissionGateway
@@ -35,24 +36,6 @@ class ManualScanController(
     private val enrichMetadata: ((String) -> MetadataEnrichmentResult)? = null,
 ) {
     private val state = RoomScanStateRepository(database)
-    private val discovery = SelectedAudioDiscovery(
-        permissions = AndroidTreePermissionGateway(contentResolver),
-        treeReader = AndroidSafDocumentTreeReader(contentResolver),
-        onDocument = { sourceId, document ->
-            database.safDocumentDao().upsert(
-                SafDocumentEntity(
-                    sourceId = sourceId,
-                    documentId = document.documentId,
-                    uri = document.uri,
-                    parentDocumentId = document.parentDocumentId,
-                    displayName = document.displayName,
-                    isDirectory = document.isDirectory,
-                    available = true,
-                    updatedAtEpochMs = nowEpochMs(),
-                ),
-            )
-        },
-    )
     fun start(
         source: LibrarySourceEntity,
         onProgress: (ManualScanProgress) -> Unit = {},
@@ -119,6 +102,25 @@ class ManualScanController(
         profiler: ScanPerformanceProfiler,
         totalStartedAtElapsedRealtimeNanos: Long,
     ): ManualScanResult {
+        val discoveryTiming = SafDiscoveryTimingCollector()
+        val discovery = SelectedAudioDiscovery(
+            permissions = AndroidTreePermissionGateway(contentResolver),
+            treeReader = AndroidSafDocumentTreeReader(contentResolver, discoveryTiming),
+            onDocument = { sourceId, document ->
+                database.safDocumentDao().upsert(
+                    SafDocumentEntity(
+                        sourceId = sourceId,
+                        documentId = document.documentId,
+                        uri = document.uri,
+                        parentDocumentId = document.parentDocumentId,
+                        displayName = document.displayName,
+                        isDirectory = document.isDirectory,
+                        available = true,
+                        updatedAtEpochMs = nowEpochMs(),
+                    ),
+                )
+            },
+        )
         var firstDiscoveryLogged = false
         var firstCatalogRecordLogged = false
         var enrichedCount = 0
@@ -242,6 +244,13 @@ class ManualScanController(
                 orchestrator.start(session, source)
             }
         } finally {
+            val discoveryWallClockNanos = profiler.snapshot()
+                .firstOrNull { it.stage == ScanPerformanceStage.SAF_DISCOVERY }
+                ?.totalNanos ?: 0L
+            Log.i(
+                PERF_TAG,
+                discoveryTiming.snapshot(discoveryWallClockNanos).summaryLogLine(discoveryWallClockNanos),
+            )
             profiler.record(
                 ScanPerformanceStage.TOTAL_SCAN,
                 SystemClock.elapsedRealtimeNanos() - totalStartedAtElapsedRealtimeNanos,

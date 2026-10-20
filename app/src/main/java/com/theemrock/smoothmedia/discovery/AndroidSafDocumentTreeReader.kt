@@ -8,22 +8,25 @@ import android.provider.DocumentsContract
 /** Reads names and file facts from a previously granted SAF tree without reading file contents. */
 class AndroidSafDocumentTreeReader(
     private val contentResolver: ContentResolver,
+    private val timing: SafDiscoveryTimingCollector = SafDiscoveryTimingCollector(),
 ) : SafDocumentTreeReader {
     override fun listChildren(directoryUri: String): DirectoryReadResult {
         val parent = try {
-            Uri.parse(directoryUri)
+            measureUriCreation { Uri.parse(directoryUri) }
         } catch (_: Exception) {
             return DirectoryReadResult.Failed
         }
         val documentId = directoryDocumentId(parent) ?: return DirectoryReadResult.Failed
         val childrenUri = try {
-            DocumentsContract.buildChildDocumentsUriUsingTree(parent, documentId)
+            measureUriCreation { DocumentsContract.buildChildDocumentsUriUsingTree(parent, documentId) }
         } catch (_: IllegalArgumentException) {
             return DirectoryReadResult.Failed
         }
 
         return try {
-            val cursor = contentResolver.query(childrenUri, PROJECTION, null, null, null)
+            val cursor = measureQuery {
+                contentResolver.query(childrenUri, PROJECTION, null, null, null)
+            }
                 ?: return DirectoryReadResult.Unavailable
             cursor.use { readDocuments(it, parent) }
         } catch (_: SecurityException) {
@@ -34,7 +37,10 @@ class AndroidSafDocumentTreeReader(
     }
 
     override fun checkReadable(fileUri: String): DocumentReadability = try {
-        val descriptor = contentResolver.openFileDescriptor(Uri.parse(fileUri), "r")
+        val file = measureUriCreation { Uri.parse(fileUri) }
+        val descriptor = measureOpenFileDescriptor {
+            contentResolver.openFileDescriptor(file, "r")
+        }
             ?: return DocumentReadability.UNREADABLE
         descriptor.use { DocumentReadability.READABLE }
     } catch (_: SecurityException) {
@@ -63,7 +69,9 @@ class AndroidSafDocumentTreeReader(
                     null
                 } else {
                     val mimeType = cursor.getString(mimeColumn)
-                    val uri = DocumentsContract.buildDocumentUriUsingTree(parentUri, documentId)
+                    val uri = measureUriCreation {
+                        DocumentsContract.buildDocumentUriUsingTree(parentUri, documentId)
+                    }
                     TreeDocument(
                         documentId = documentId,
                         parentDocumentId = directoryDocumentId(parentUri),
@@ -87,6 +95,33 @@ class AndroidSafDocumentTreeReader(
         if (columnIndex < 0 || isNull(columnIndex)) null else getLong(columnIndex)
     } catch (_: Exception) {
         null
+    }
+
+    private inline fun <T> measureQuery(block: () -> T): T {
+        val startedAt = System.nanoTime()
+        return try {
+            block()
+        } finally {
+            timing.recordQuery(System.nanoTime() - startedAt)
+        }
+    }
+
+    private inline fun <T> measureOpenFileDescriptor(block: () -> T): T {
+        val startedAt = System.nanoTime()
+        return try {
+            block()
+        } finally {
+            timing.recordOpenFileDescriptor(System.nanoTime() - startedAt)
+        }
+    }
+
+    private inline fun <T> measureUriCreation(block: () -> T): T {
+        val startedAt = System.nanoTime()
+        return try {
+            block()
+        } finally {
+            timing.recordUriCreation(System.nanoTime() - startedAt)
+        }
     }
 
     private companion object {
