@@ -11,6 +11,10 @@ import java.util.concurrent.CancellationException
 /** Cancellation boundary for a hash operation; it does not mutate the source. */
 fun interface HashCancellation {
     fun isCancelled(): Boolean
+
+    /** Optional lifecycle hooks used by bounded worker cancellation to close an active stream. */
+    fun onStreamOpened(stream: InputStream) = Unit
+    fun onStreamClosed(stream: InputStream) = Unit
 }
 
 sealed interface FullFileHashResult {
@@ -115,7 +119,12 @@ class SafFullFileHasher(
             val input = contentResolver.openInputStream(uri)
                 .also { onStreamOpenDurationNanos(System.nanoTime() - openStartedAt) }
                 ?: return FullFileHashResult.Unreadable
-            streamingHasher.hash(input, cancellation)
+            cancellation.onStreamOpened(input)
+            try {
+                streamingHasher.hash(input, cancellation)
+            } finally {
+                cancellation.onStreamClosed(input)
+            }
         } catch (_: SecurityException) {
             FullFileHashResult.PermissionLost
         } catch (_: FileNotFoundException) {

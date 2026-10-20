@@ -18,18 +18,33 @@ class ScanToCatalogPipeline(
     private val enrichMetadata: ((String) -> MetadataEnrichmentResult)? = null,
     private val enrichExistingLocation: ((String) -> MetadataEnrichmentResult)? = null,
     private val profiler: ScanPerformanceProfiler? = null,
-) : ScanCandidateProcessor {
+) : OrderedHashScanCandidateProcessor {
     override fun process(
         sessionId: String,
         file: DiscoveredAudioFile,
     ): CandidateProcessingResult {
-        fun status() = state.findSession(sessionId)?.status
-        val hashCancellation = PeriodicScanCancellation(statusProvider = { status() })
+        val cancellation = PeriodicScanCancellation(
+            statusProvider = { state.findSession(sessionId)?.status },
+        )
+        return processHashed(sessionId, file, hashFile(sessionId, file, cancellation))
+    }
 
-        val hashResult = profiler?.measure(ScanPerformanceStage.FULL_FILE_HASH_INCLUSIVE) {
-            hash(file, hashCancellation)
-        } ?: hash(file, hashCancellation)
-        when (status()) {
+    override fun hashFile(
+        sessionId: String,
+        file: DiscoveredAudioFile,
+        cancellation: HashCancellation,
+    ): FullFileHashResult {
+        return profiler?.measure(ScanPerformanceStage.FULL_FILE_HASH_INCLUSIVE) {
+            hash(file, cancellation)
+        } ?: hash(file, cancellation)
+    }
+
+    override fun processHashed(
+        sessionId: String,
+        file: DiscoveredAudioFile,
+        hashResult: FullFileHashResult,
+    ): CandidateProcessingResult {
+        when (status(sessionId)) {
             ScanSessionStatus.PAUSED -> return CandidateProcessingResult.Paused
             ScanSessionStatus.CANCELLED -> return CandidateProcessingResult.Cancelled
             ScanSessionStatus.RUNNING -> Unit
@@ -65,6 +80,8 @@ class ScanToCatalogPipeline(
                 CandidateProcessingResult.Failed(FailureReason.INGESTION_REJECTED)
         }
     }
+
+    private fun status(sessionId: String) = state.findSession(sessionId)?.status
 
     override fun reprocessCompletedCandidates(): Boolean = enrichExistingLocation != null
 
@@ -132,6 +149,16 @@ class ScanToCatalogPipeline(
         is MetadataEnrichmentResult.TrackNotFound,
         -> ScanMetadataResult.FAILED
     }
+}
+
+interface OrderedHashScanCandidateProcessor : ScanCandidateProcessor {
+    fun hashFile(sessionId: String, file: DiscoveredAudioFile, cancellation: HashCancellation): FullFileHashResult
+
+    fun processHashed(
+        sessionId: String,
+        file: DiscoveredAudioFile,
+        hashResult: FullFileHashResult,
+    ): CandidateProcessingResult
 }
 
 /**

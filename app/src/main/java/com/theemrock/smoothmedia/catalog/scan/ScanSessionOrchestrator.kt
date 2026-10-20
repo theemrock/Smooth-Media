@@ -112,7 +112,22 @@ class ScanSessionOrchestrator(
         var processedCount = checkpoint?.processedCount ?: 0
         var newlyRecorded = 0
         var alreadyRecorded = 0
-        discovery.files.forEach { file ->
+        val orderedProcessor = processor as? OrderedHashScanCandidateProcessor
+        val hashStage = orderedProcessor?.let { candidateProcessor ->
+            ParallelHashStage(
+                files = discovery.files,
+                shouldHash = { file ->
+                    val candidate = state.findCandidate(sessionId, source.sourceId, file.documentId)
+                    candidate?.state != ScanCandidateState.COMPLETED
+                },
+                status = { state.findSession(sessionId)?.status },
+                hash = { file, cancellation ->
+                    candidateProcessor.hashFile(sessionId, file, cancellation)
+                },
+            )
+        }
+        try {
+            discovery.files.forEach { file ->
             state.heartbeat(sessionId, nowEpochMs())
             beforeCandidate(sessionId, file)
             when (state.findSession(sessionId)?.status) {
@@ -147,12 +162,28 @@ class ScanSessionOrchestrator(
                 alreadyRecorded++
             }
             var completedResult: CandidateProcessingResult.Completed? = null
+            val stagedHash = hashStage?.next()
+            if (stagedHash != null && stagedHash.first.documentId != file.documentId) {
+                throw IllegalStateException("parallel hash stage lost discovery order")
+            }
             if (processor != null && (existing?.state != ScanCandidateState.COMPLETED || processor.reprocessCompletedCandidates())) {
                 val reprocessingCompleted = existing?.state == ScanCandidateState.COMPLETED
                 if (!reprocessingCompleted) {
                     state.updateCandidateState(sessionId, source.sourceId, file.documentId, ScanCandidateState.PROCESSING, null, nowEpochMs())
                 }
-                when (val processed = if (reprocessingCompleted) processor.processCompletedCandidate(sessionId, file, existing!!) else processor.process(sessionId, file)) {
+                val processedCandidate = if (reprocessingCompleted) {
+                    processor.processCompletedCandidate(sessionId, file, existing!!)
+                } else if (orderedProcessor != null) {
+                    when (val staged = stagedHash?.second) {
+                        is ParallelHashStage.Result.Hashed -> orderedProcessor.processHashed(sessionId, file, staged.hashResult)
+                        ParallelHashStage.Result.Cancelled -> CandidateProcessingResult.Cancelled
+                        ParallelHashStage.Result.Skipped,
+                        null -> CandidateProcessingResult.Failed(FailureReason.HASH_FAILED)
+                    }
+                } else {
+                    processor.process(sessionId, file)
+                }
+                when (val processed = processedCandidate) {
                     is CandidateProcessingResult.Completed -> {
                         if (!reprocessingCompleted) state.updateCandidateState(sessionId, source.sourceId, file.documentId, ScanCandidateState.COMPLETED, processed.locationId, nowEpochMs())
                         completedResult = processed
@@ -186,6 +217,14 @@ class ScanSessionOrchestrator(
             )
             onTiming(timing)
             completedResult?.let { afterCandidate(sessionId, file, it) }
+            }
+        } finally {
+            hashStage?.close()
+            hashStage?.let { stage ->
+                if (stage.wallClockNanos > 0L) {
+                    profiler?.record(ScanPerformanceStage.FULL_FILE_HASH_WALL_CLOCK, stage.wallClockNanos)
+                }
+            }
         }
         when (state.findSession(sessionId)?.status) {
             ScanSessionStatus.PAUSED -> {
