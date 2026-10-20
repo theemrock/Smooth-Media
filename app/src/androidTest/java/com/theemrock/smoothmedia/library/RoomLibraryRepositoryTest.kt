@@ -114,8 +114,10 @@ class RoomLibraryRepositoryTest {
         seedTrack("track-2")
         seedLocation("location-1", "track-1", LocationAvailability.AVAILABLE, "content://song/1")
         seedLocation("location-2", "track-1", LocationAvailability.MISSING, "content://song/2")
+        seedLocation("location-3", "track-2", LocationAvailability.AVAILABLE, "content://song/3")
         database.locatorBindingDao().insert(LocatorBindingEntity("content://song/1", "location-1", "source-1", 1))
         database.locatorBindingDao().insert(LocatorBindingEntity("content://song/2", "location-2", "source-1", 1))
+        database.locatorBindingDao().insert(LocatorBindingEntity("content://song/3", "location-3", "source-1", 1))
         database.trackMetadataDao().upsert(metadata("track-1"))
         database.trackMetadataDao().upsert(metadata("track-2"))
 

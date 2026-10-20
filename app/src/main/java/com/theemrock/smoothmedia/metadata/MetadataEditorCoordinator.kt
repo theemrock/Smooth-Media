@@ -20,6 +20,7 @@ class MetadataEditorCoordinator(
     private val contentResolver: ContentResolver,
     private val adapter: FileTagAdapter = KyantTagLibAdapter(),
     private val hashProvider: SafMetadataHashProvider = SafMetadataHashProvider(contentResolver),
+    private val writeGate: MetadataEditorWriteGate = MetadataEditorWriteGate(),
 ) {
     fun load(trackIds: List<String>): MetadataEditorLoadResult {
         val items = mutableListOf<MetadataEditorBatchItem>()
@@ -69,6 +70,13 @@ class MetadataEditorCoordinator(
         cancelled: AtomicBoolean,
         onProgress: (completed: Int, total: Int) -> Unit = { _, _ -> },
     ): MetadataEditorBatchResult {
+        if (writeGate.decision() == MetadataEditorWriteDecision.BLOCKED) {
+            return MetadataEditorBatchResult(
+                completed = 0,
+                failed = items.take(100).size,
+                cancelled = cancelled.get(),
+            )
+        }
         val session = MetadataFileWriteSession(contentResolver, adapter) { locator -> hashProvider(locator) }
         val reconciler = MetadataFileWriteReconciler(database)
         var processed = 0
