@@ -567,7 +567,7 @@ class RoomLibraryRepository(
 
     fun loadArtistAlbumRows(artist: String, limit: Int = 2000): List<LibraryCollectionRow> {
         require(limit > 0) { "limit must be positive" }
-        val args = arrayOf<Any?>(artist, artist, limit)
+        val args = arrayOf<Any?>(artist, limit)
         return dao.searchCollectionsRaw(SimpleSQLiteQuery(ARTIST_ALBUM_ROWS_SQL, args))
     }
 

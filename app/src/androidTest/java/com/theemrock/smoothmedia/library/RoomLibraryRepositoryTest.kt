@@ -178,6 +178,17 @@ class RoomLibraryRepositoryTest {
         assertEquals(1, artist.flacCount)
     }
 
+    @Test
+    fun artistDetailLoadsAlbumRowsWithMatchingSqlArguments() {
+        seedTrack("artist-track")
+        database.trackMetadataDao().upsert(metadata("artist-track", album = "Artist Album"))
+
+        val rows = RoomLibraryRepository(database.libraryDao()).loadArtistAlbumRows("Artist", limit = 10)
+
+        assertEquals(1, rows.size)
+        assertEquals("Artist Album", rows.single().title)
+    }
+
     private fun seedSource() = database.librarySourceDao().insert(
         LibrarySourceEntity(
             "source-1", LibrarySourceType.SAF_TREE, "content://tree/1", null, 1,
