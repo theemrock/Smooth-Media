@@ -36,19 +36,6 @@ class AndroidSafDocumentTreeReader(
         }
     }
 
-    override fun checkReadable(fileUri: String): DocumentReadability = try {
-        val file = measureUriCreation { Uri.parse(fileUri) }
-        val descriptor = measureOpenFileDescriptor {
-            contentResolver.openFileDescriptor(file, "r")
-        }
-            ?: return DocumentReadability.UNREADABLE
-        descriptor.use { DocumentReadability.READABLE }
-    } catch (_: SecurityException) {
-        DocumentReadability.PERMISSION_LOST
-    } catch (_: Exception) {
-        DocumentReadability.UNREADABLE
-    }
-
     private fun readDocuments(cursor: Cursor, parentUri: Uri): DirectoryReadResult {
         val idColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
         val nameColumn = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
@@ -103,15 +90,6 @@ class AndroidSafDocumentTreeReader(
             block()
         } finally {
             timing.recordQuery(System.nanoTime() - startedAt)
-        }
-    }
-
-    private inline fun <T> measureOpenFileDescriptor(block: () -> T): T {
-        val startedAt = System.nanoTime()
-        return try {
-            block()
-        } finally {
-            timing.recordOpenFileDescriptor(System.nanoTime() - startedAt)
         }
     }
 

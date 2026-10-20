@@ -129,7 +129,7 @@ class SelectedAudioDiscoveryTest {
     }
 
     @Test
-    fun unreadableFileAndNestedFolderAreSkippedWithoutDroppingReadableFiles() {
+    fun discoveryDoesNotPreflightFileReadability() {
         val root = "content://provider/tree/music"
         val blockedFolder = "content://provider/tree/music/document/blocked"
         val readable = document("ok", "content://provider/document/ok", "ok.flac", null)
@@ -145,13 +145,19 @@ class SelectedAudioDiscoveryTest {
                 ),
                 blockedFolder to DirectoryReadResult.Unreadable,
             ),
-            unreadableFiles = setOf(unreadable.uri),
         )
 
         val result = SelectedAudioDiscovery(FakePermissionGateway(), reader).discover(source(root))
 
         assertEquals(
-            AudioDiscoveryResult.Completed("source-1", listOf(readable.toDiscoveryFile("source-1", AudioFormat.FLAC)), 2),
+            AudioDiscoveryResult.Completed(
+                "source-1",
+                listOf(
+                    readable.toDiscoveryFile("source-1", AudioFormat.FLAC),
+                    unreadable.toDiscoveryFile("source-1", AudioFormat.MP3),
+                ),
+                1,
+            ),
             result,
         )
     }
@@ -169,25 +175,31 @@ class SelectedAudioDiscoveryTest {
     }
 
     @Test
-    fun fileSpecificReadDenialIsSkippedWhileRevokedRootGrantIsReported() {
+    fun fileSpecificReadDenialIsDeferredToHashWhileRevokedRootGrantIsReported() {
         val root = "content://provider/tree/music"
         val denied = document("denied", "content://provider/document/denied", "denied.mp3", null)
         val reader = FakeTreeReader(
             directories = mapOf(root to DirectoryReadResult.Readable(listOf(denied))),
-            permissionDeniedFiles = setOf(denied.uri),
         )
         val stillAvailable = SelectedAudioDiscovery(FakePermissionGateway(), reader).discover(source(root))
+        val permissionLostReader = FakeTreeReader(
+            directories = mapOf(root to DirectoryReadResult.PermissionLost),
+        )
         val revoked = SelectedAudioDiscovery(
             FakePermissionGateway(
-                inspections = mutableListOf(
-                    TreePermissionInspection.Available(1),
-                    TreePermissionInspection.PermissionLost,
-                ),
+                TreePermissionInspection.PermissionLost,
             ),
-            reader,
+            permissionLostReader,
         ).discover(source(root))
 
-        assertEquals(AudioDiscoveryResult.Completed("source-1", emptyList(), 1), stillAvailable)
+        assertEquals(
+            AudioDiscoveryResult.Completed(
+                "source-1",
+                listOf(denied.toDiscoveryFile("source-1", AudioFormat.MP3)),
+                0,
+            ),
+            stillAvailable,
+        )
         assertEquals(AudioDiscoveryResult.PermissionLost("source-1"), revoked)
     }
 
@@ -261,8 +273,6 @@ class SelectedAudioDiscoveryTest {
 
 private class FakeTreeReader(
     private val directories: Map<String, DirectoryReadResult> = emptyMap(),
-    private val unreadableFiles: Set<String> = emptySet(),
-    private val permissionDeniedFiles: Set<String> = emptySet(),
 ) : SafDocumentTreeReader {
     val visitedDirectories = mutableListOf<String>()
 
@@ -271,11 +281,6 @@ private class FakeTreeReader(
         return directories[directoryUri] ?: DirectoryReadResult.Readable(emptyList())
     }
 
-    override fun checkReadable(fileUri: String): DocumentReadability = when {
-        fileUri in permissionDeniedFiles -> DocumentReadability.PERMISSION_LOST
-        fileUri in unreadableFiles -> DocumentReadability.UNREADABLE
-        else -> DocumentReadability.READABLE
-    }
 }
 
 private class FakePermissionGateway(

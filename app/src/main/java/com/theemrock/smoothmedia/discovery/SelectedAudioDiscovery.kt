@@ -74,16 +74,8 @@ sealed interface DirectoryReadResult {
     data object Failed : DirectoryReadResult
 }
 
-enum class DocumentReadability {
-    READABLE,
-    PERMISSION_LOST,
-    UNREADABLE,
-}
-
 interface SafDocumentTreeReader {
     fun listChildren(directoryUri: String): DirectoryReadResult
-
-    fun checkReadable(fileUri: String): DocumentReadability
 }
 
 sealed interface AudioDiscoveryResult {
@@ -170,28 +162,19 @@ class SelectedAudioDiscovery(
                         } else {
                             val format = AudioFormat.fromDocument(document.displayName, document.mimeType)
                                 ?: return@forEach
-                            when (safeCheckReadable(document.uri)) {
-                                DocumentReadability.READABLE -> files.putIfAbsent(
-                                    document.documentId,
-                                    DiscoveredAudioFile(
-                                        sourceId = sourceId,
-                                        uri = document.uri,
-                                        documentId = document.documentId,
-                                        displayName = document.displayName,
-                                        format = format,
-                                        mimeType = document.mimeType,
-                                        sizeBytes = document.sizeBytes,
-                                        modifiedAtEpochMs = document.modifiedAtEpochMs,
-                                    ),
-                                )
-
-                                DocumentReadability.PERMISSION_LOST -> {
-                                    currentSourceIssue()?.let { return it }
-                                    skippedUnreadable++
-                                }
-
-                                DocumentReadability.UNREADABLE -> skippedUnreadable++
-                            }
+                            files.putIfAbsent(
+                                document.documentId,
+                                DiscoveredAudioFile(
+                                    sourceId = sourceId,
+                                    uri = document.uri,
+                                    documentId = document.documentId,
+                                    displayName = document.displayName,
+                                    format = format,
+                                    mimeType = document.mimeType,
+                                    sizeBytes = document.sizeBytes,
+                                    modifiedAtEpochMs = document.modifiedAtEpochMs,
+                                ),
+                            )
                         }
                     }
                 }
@@ -223,13 +206,5 @@ class SelectedAudioDiscovery(
         }
 
         return AudioDiscoveryResult.Completed(sourceId, files.values.toList(), skippedUnreadable)
-    }
-
-    private fun safeCheckReadable(uri: String): DocumentReadability = try {
-        treeReader.checkReadable(uri)
-    } catch (_: SecurityException) {
-        DocumentReadability.PERMISSION_LOST
-    } catch (_: Exception) {
-        DocumentReadability.UNREADABLE
     }
 }

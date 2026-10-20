@@ -26,6 +26,25 @@ import org.junit.Test
 
 class ScanToCatalogPipelineTest {
     @Test
+    fun hashOpenFailureFailsCandidateWithoutCatalogIngestion() {
+        var ingestCalls = 0
+        val pipeline = ScanToCatalogPipeline(
+            state = RunningScanState(),
+            hash = { _, _ -> FullFileHashResult.Unreadable },
+            ingest = { _, _ ->
+                ingestCalls++
+                error("unreadable hash must not reach catalog ingestion")
+            },
+        )
+
+        assertEquals(
+            CandidateProcessingResult.Failed(FailureReason.HASH_FAILED),
+            pipeline.process("session", file()),
+        )
+        assertEquals(0, ingestCalls)
+    }
+
+    @Test
     fun hashCancellationIsThrottledButPostHashSessionCheckRemainsMandatory() {
         val state = RunningScanState()
         val pipeline = ScanToCatalogPipeline(
