@@ -96,6 +96,8 @@ import com.theemrock.smoothmedia.metadata.RoomTrackMetadataRepository
 import com.theemrock.smoothmedia.metadata.TrackMetadataRepository
 import com.theemrock.smoothmedia.metadata.TrackMetadataEnrichmentUseCase
 import com.theemrock.smoothmedia.metadata.GenreMetadataBackfill
+import com.theemrock.smoothmedia.metadata.MetadataEditorCoordinator
+import com.theemrock.smoothmedia.metadata.MetadataEditorState
 import com.theemrock.smoothmedia.source.AndroidSelectedTreeParser
 import com.theemrock.smoothmedia.source.SourceRegistryFactory
 import com.theemrock.smoothmedia.source.SourceRegistryRuntime
@@ -106,6 +108,7 @@ import com.theemrock.smoothmedia.ui.SourceManagementScreen
 import com.theemrock.smoothmedia.ui.SettingsScreen
 import com.theemrock.smoothmedia.ui.LibraryManagementScreen
 import com.theemrock.smoothmedia.ui.LibrarySearchScreen
+import com.theemrock.smoothmedia.ui.MetadataEditorScreen
 import com.theemrock.smoothmedia.ui.NowPlayingScreen
 import com.theemrock.smoothmedia.ui.EqualizerScreen
 import com.theemrock.smoothmedia.ui.QueueScreen
@@ -186,6 +189,7 @@ class MainActivity : ComponentActivity() {
     private var genreBackfillRunning by mutableStateOf(false)
     private var genreBackfillStatus by mutableStateOf<String?>(null)
     private lateinit var genreMetadataBackfill: GenreMetadataBackfill
+    private lateinit var metadataEditorCoordinator: MetadataEditorCoordinator
     private val metadataAutonomousTriggerRunning = AtomicBoolean(false)
     private var dashboardData by mutableStateOf<LibraryDashboardData?>(null)
     private var showDashboard by mutableStateOf(true)
@@ -202,6 +206,13 @@ class MainActivity : ComponentActivity() {
     private var currentLyrics by mutableStateOf<CachedLyrics?>(null)
     private var showEqualizer by mutableStateOf(false)
     private var showQueue by mutableStateOf(false)
+    private var showMetadataEditor by mutableStateOf(false)
+    private var metadataEditorState by mutableStateOf(MetadataEditorState(emptyList()))
+    private var metadataEditorItems by mutableStateOf(emptyList<com.theemrock.smoothmedia.metadata.MetadataEditorBatchItem>())
+    private var metadataEditorSaving by mutableStateOf(false)
+    private var metadataEditorProgress by mutableStateOf<String?>(null)
+    private var metadataEditorError by mutableStateOf<String?>(null)
+    private val metadataEditorCancelRequested = AtomicBoolean(false)
     private var nowPlayingSong by mutableStateOf<LibrarySong?>(null)
     private var playbackState by mutableStateOf(PlaybackEngineState())
     private var equalizerBands by mutableStateOf<List<EqualizerBand>>(emptyList())
@@ -258,6 +269,7 @@ class MainActivity : ComponentActivity() {
         )
         enableEdgeToEdge()
         runtime = SourceRegistryFactory.create(this)
+        metadataEditorCoordinator = MetadataEditorCoordinator(runtime.database, contentResolver)
         metadataAutonomousSettings = SharedPreferencesMetadataAutonomousSettings(this)
         metadataAutonomousEnabled = metadataAutonomousSettings.enabled
         // No verified in-app WAL backup provider exists yet; keep the switch
@@ -304,6 +316,10 @@ class MainActivity : ComponentActivity() {
         )
         libraryBackCallback = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (showMetadataEditor) {
+                    closeMetadataEditor()
+                    return
+                }
                 if (showSourceManagement) {
                     openLibraryManagement()
                     return
@@ -434,7 +450,18 @@ class MainActivity : ComponentActivity() {
                     androidx.compose.foundation.layout.Box(
                         modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding(),
                     ) {
-                    if (showQueue) {
+                    if (showMetadataEditor) {
+                        MetadataEditorScreen(
+                            state = metadataEditorState,
+                            affectedFileCount = metadataEditorItems.size,
+                            saving = metadataEditorSaving,
+                            progress = metadataEditorProgress,
+                            error = metadataEditorError,
+                            onChange = { metadataEditorState = it },
+                            onSave = ::saveMetadataEditor,
+                            onCancel = ::closeMetadataEditor,
+                        )
+                    } else if (showQueue) {
                         QueueScreen(
                             state = queueController.state.value,
                             onBack = { showQueue = false },
@@ -567,6 +594,7 @@ class MainActivity : ComponentActivity() {
                                     playSong(first, albumDetailData!!.songs)
                                 }
                             },
+                            onEditSongs = { songs -> openMetadataEditor(songs) },
                             onSong = { song -> playSong(song, albumDetailData!!.songs) },
                             onAddToQueue = ::addToQueue,
                             onPlayNext = ::playNextSong,
@@ -596,6 +624,7 @@ class MainActivity : ComponentActivity() {
                             onGenreSelected = { genre -> openLibraryDetail(LibraryCollectionType.GENRES, genre) },
                             onFolderSelected = { folder -> openLibraryDetail(LibraryCollectionType.FOLDERS, folder) },
                             onSong = { song -> playSong(song, libraryDetailSongs) },
+                            onEditSongs = { openMetadataEditor(libraryDetailSongs) },
                             onAddToQueue = ::addToQueue,
                             onPlayNext = ::playNextSong,
                             playbackState = playbackState.takeIf { nowPlayingSong != null },
@@ -683,6 +712,7 @@ class MainActivity : ComponentActivity() {
                             onCollection = ::openCollection,
                             onSearch = { showSearch = true },
                             onSong = { song -> playSong(song) },
+                            onEditSong = { song -> openMetadataEditor(listOf(song)) },
                             playbackState = playbackState.takeIf { nowPlayingSong != null },
                             miniPlayerSong = nowPlayingSong,
                             onMiniPlayerOpen = { showNowPlaying = true },
@@ -1384,6 +1414,72 @@ class MainActivity : ComponentActivity() {
         }
         runOnUiThread {
             if (!isDestroyed) genreArtworkPreviews = genreArtworkPreviews + previews
+        }
+    }
+
+    private fun openMetadataEditor(songs: List<LibrarySong>) {
+        val ids = songs.map { it.trackId }.distinct()
+        if (ids.isEmpty()) return
+        metadataEditorState = MetadataEditorState(ids)
+        metadataEditorItems = emptyList()
+        metadataEditorError = null
+        metadataEditorProgress = "Dosya hedefleri hazırlanıyor..."
+        metadataEditorCancelRequested.set(false)
+        showMetadataEditor = true
+        executor.execute {
+            val loaded = runCatching { metadataEditorCoordinator.load(ids) }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                loaded.onSuccess { result ->
+                    metadataEditorItems = result.items
+                    metadataEditorProgress = if (result.skippedTrackIds.isEmpty()) null else
+                        "${result.skippedTrackIds.size} kayıt için erişilebilir MP3/FLAC location bulunamadı."
+                }.onFailure { error ->
+                    metadataEditorError = error.message ?: "Metadata hedefleri okunamadı."
+                    metadataEditorProgress = null
+                }
+            }
+        }
+    }
+
+    private fun saveMetadataEditor() {
+        if (metadataEditorSaving || metadataEditorItems.isEmpty()) return
+        metadataEditorSaving = true
+        metadataEditorError = null
+        metadataEditorProgress = "Yazılıyor..."
+        metadataEditorCancelRequested.set(false)
+        val edit = metadataEditorState.toFileTagEdit()
+        executor.execute {
+            val result = runCatching {
+                metadataEditorCoordinator.save(
+                    items = metadataEditorItems,
+                    edit = edit,
+                    cancelled = metadataEditorCancelRequested,
+                ) { completed, total ->
+                    runOnUiThread { if (!isDestroyed) metadataEditorProgress = "$completed/$total dosya doğrulandı" }
+                }
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                metadataEditorSaving = false
+                result.onSuccess { summary ->
+                    metadataEditorProgress = "Tamamlandı: ${summary.completed} başarılı, ${summary.failed} hata" + if (summary.cancelled) ", iptal edildi" else ""
+                }.onFailure { error ->
+                    metadataEditorError = error.message ?: "Metadata yazımı başarısız."
+                    metadataEditorProgress = null
+                }
+            }
+        }
+    }
+
+    private fun closeMetadataEditor() {
+        if (metadataEditorSaving) {
+            metadataEditorCancelRequested.set(true)
+            metadataEditorProgress = "İptal bekleniyor..."
+        } else {
+            showMetadataEditor = false
+            metadataEditorProgress = null
+            metadataEditorError = null
         }
     }
 

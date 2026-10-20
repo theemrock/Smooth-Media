@@ -19,6 +19,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -62,6 +63,7 @@ fun LibraryDetailScreen(
     onGenreSelected: (LibraryCollectionRow) -> Unit = {},
     onFolderSelected: (LibraryCollectionRow) -> Unit = {},
     onSong: (LibrarySong) -> Unit,
+    onEditSongs: (List<LibrarySong>) -> Unit = {},
     onAddToQueue: (LibrarySong) -> Unit,
     onPlayNext: (LibrarySong) -> Unit,
     playbackState: PlaybackEngineState? = null,
@@ -100,6 +102,9 @@ fun LibraryDetailScreen(
             if (type == LibraryCollectionType.ARTISTS) Text("${albums.size} albüm", color = Color(0xFFAAB9C2), fontSize = 14.sp)
             if (type == LibraryCollectionType.GENRES) Text("${albums.size} albüm · ${artists.size} sanatçı", color = Color(0xFFAAB9C2), fontSize = 14.sp)
             if (type == LibraryCollectionType.FOLDERS && detailPath != null && !detailPath.contains(row.title)) Text(detailPath, color = Color(0xFFAAB9C2), fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (songs.isNotEmpty() && (type == LibraryCollectionType.ARTISTS || type == LibraryCollectionType.ALBUMS)) {
+                OutlinedButton(onClick = { onEditSongs(songs) }) { Text("Seçili koleksiyonu düzenle") }
+            }
         }
         if (type == LibraryCollectionType.ARTISTS && albums.isNotEmpty()) {
             DetailSectionTitle("Albümler")

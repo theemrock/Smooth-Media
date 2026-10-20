@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -61,6 +62,7 @@ fun LibraryAlbumDetailScreen(
     onDashboard: () -> Unit,
     onSettings: () -> Unit = {},
     onPlayAlbum: () -> Unit = {},
+    onEditSongs: (List<LibrarySong>) -> Unit = {},
     onSong: (LibrarySong) -> Unit,
     onAddToQueue: (LibrarySong) -> Unit,
     onPlayNext: (LibrarySong) -> Unit,
@@ -87,6 +89,11 @@ fun LibraryAlbumDetailScreen(
         ) {
             item { AlbumDetailHeader(data, totalDuration, artworkResolver) }
             if (data.songs.isNotEmpty()) item { AlbumDetailActions(onPlayAlbum) }
+            if (data.songs.isNotEmpty()) item {
+                OutlinedButton(onClick = { onEditSongs(data.songs) }, modifier = Modifier.fillMaxWidth()) {
+                    Text("Albüm kayıtlarını düzenle")
+                }
+            }
             item { AlbumDetailTabs() }
             if (data.songs.isEmpty()) {
                 item {

@@ -10,6 +10,7 @@ room = "2.8.5"
 ksp = "2.2.21-2.0.5"
 sqlite = "2.7.1"
 kotlinxSerialization = "1.8.1"
+kyantTaglib = "1.0.5"
 
 [libraries]
 activity-compose = { module = "androidx.activity:activity-compose", version.ref = "activityCompose" }
@@ -25,6 +26,7 @@ room-compiler = { module = "androidx.room:room-compiler", version.ref = "room" }
 room-testing = { module = "androidx.room:room-testing", version.ref = "room" }
 sqlite-framework = { module = "androidx.sqlite:sqlite-framework", version.ref = "sqlite" }
 kotlinx-serialization-bom = { module = "org.jetbrains.kotlinx:kotlinx-serialization-bom", version.ref = "kotlinxSerialization" }
+kyant-taglib = { module = "io.github.kyant0:taglib", version.ref = "kyantTaglib" }
 
 [plugins]
 android-application = { id = "com.android.application", version.ref = "agp" }

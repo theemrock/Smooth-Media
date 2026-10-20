@@ -18,7 +18,15 @@ object AndroidSelectedTreeParser {
     }
 }
 
-data class PersistedTreePermission(val uri: Uri, val isReadPermission: Boolean)
+data class PersistedTreePermission(
+    val uri: Uri,
+    val isReadPermission: Boolean,
+    val isWritePermission: Boolean = false,
+) {
+    val persistedFlags: Int
+        get() = (if (isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+            (if (isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+}
 
 enum class TreeProbeResult { AVAILABLE, UNAVAILABLE, PERMISSION_LOST, INVALID, FAILED }
 
@@ -39,10 +47,13 @@ class AndroidTreePermissionGateway(
 
     override fun takeAndVerify(selection: SelectedTree): TreePermissionTakeResult {
         val uri = parseAndValidate(selection) ?: return TreePermissionTakeResult.InvalidUri
-        val readFlags = selection.grantedFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION
-        if (readFlags == 0) return TreePermissionTakeResult.PermissionDenied
+        val requestedFlags = selection.grantedFlags and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        if (requestedFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION == 0) {
+            return TreePermissionTakeResult.PermissionDenied
+        }
         try {
-            operations.take(uri, readFlags)
+            operations.take(uri, requestedFlags)
         } catch (_: SecurityException) {
             return TreePermissionTakeResult.PermissionDenied
         } catch (_: IllegalArgumentException) {
@@ -51,7 +62,7 @@ class AndroidTreePermissionGateway(
             return TreePermissionTakeResult.Failed
         }
         val persistedFlags = try {
-            persistedReadFlags(uri)
+            persistedGrantFlags(uri)
         } catch (_: Exception) {
             return TreePermissionTakeResult.Failed
         }
@@ -80,7 +91,7 @@ class AndroidTreePermissionGateway(
         val uri = Uri.parse(rootUri)
         if (AndroidSelectedTreeParser.fromResult(uri, 0) == null) return TreePermissionInspection.InvalidUri
         val persistedFlags = try {
-            persistedReadFlags(uri)
+            persistedGrantFlags(uri)
         } catch (_: Exception) {
             return TreePermissionInspection.Failed
         }
@@ -98,12 +109,13 @@ class AndroidTreePermissionGateway(
         val uri = Uri.parse(rootUri)
         if (AndroidSelectedTreeParser.fromResult(uri, 0) == null) return TreePermissionReleaseResult.Failed
         val matching = try {
-            matchingReadPermissions(uri)
+            matchingPermissions(uri)
         } catch (_: Exception) {
             return TreePermissionReleaseResult.Failed
         }
         if (matching.isEmpty()) return TreePermissionReleaseResult.AlreadyReleased
-        val releaseFlags = (persistedPermissionFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        val releaseFlags = (persistedPermissionFlags and
+            (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION))
             .takeIf { it != 0 } ?: Intent.FLAG_GRANT_READ_URI_PERMISSION
         matching.forEach { permission ->
             try {
@@ -113,7 +125,7 @@ class AndroidTreePermissionGateway(
             }
         }
         val remaining = try {
-            matchingReadPermissions(uri)
+            matchingPermissions(uri)
         } catch (_: Exception) {
             return TreePermissionReleaseResult.Failed
         }
@@ -127,13 +139,13 @@ class AndroidTreePermissionGateway(
         return uri
     }
 
-    private fun persistedReadFlags(uri: Uri): Int =
-        if (matchingReadPermissions(uri).isEmpty()) 0 else Intent.FLAG_GRANT_READ_URI_PERMISSION
+    private fun persistedGrantFlags(uri: Uri): Int =
+        matchingPermissions(uri).fold(0) { flags, permission -> flags or permission.persistedFlags }
 
-    private fun matchingReadPermissions(uri: Uri): List<PersistedTreePermission> {
+    private fun matchingPermissions(uri: Uri): List<PersistedTreePermission> {
         val identity = treeIdentity(uri) ?: return emptyList()
         return operations.persistedPermissions().filter { permission ->
-            permission.isReadPermission && treeIdentity(permission.uri) == identity
+            permission.persistedFlags != 0 && treeIdentity(permission.uri) == identity
         }
     }
 
@@ -155,7 +167,13 @@ private class ContentResolverTreePermissionOperations(
     override fun take(uri: Uri, flags: Int) = contentResolver.takePersistableUriPermission(uri, flags)
 
     override fun persistedPermissions(): List<PersistedTreePermission> =
-        contentResolver.persistedUriPermissions.map { PersistedTreePermission(it.uri, it.isReadPermission) }
+        contentResolver.persistedUriPermissions.map {
+            PersistedTreePermission(
+                uri = it.uri,
+                isReadPermission = it.isReadPermission,
+                isWritePermission = it.isWritePermission,
+            )
+        }
 
     override fun release(uri: Uri, flags: Int) = contentResolver.releasePersistableUriPermission(uri, flags)
 

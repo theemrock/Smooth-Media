@@ -85,6 +85,19 @@ class AndroidTreePermissionGatewayTest {
     }
 
     @Test
+    fun grantedReadWriteGrant_persistsBothPlatformFlags() {
+        val operations = FakeOperations()
+        val lifecycleGateway = AndroidTreePermissionGateway(operations)
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+
+        assertEquals(
+            TreePermissionTakeResult.Granted(flags),
+            lifecycleGateway.takeAndVerify(selectedTree(grantedFlags = flags)),
+        )
+        assertEquals(flags, operations.heldPermissions.single().persistedFlags)
+    }
+
+    @Test
     fun permissionEnumerationFailures_areControlledForTakeInspectAndRelease() {
         val operations = FakeOperations().apply { failEnumeration = true }
         val failingGateway = AndroidTreePermissionGateway(operations)
@@ -109,7 +122,11 @@ class AndroidTreePermissionGatewayTest {
 
         override fun take(uri: Uri, flags: Int) {
             heldPermissions.removeAll { it.uri == uri }
-            heldPermissions += PersistedTreePermission(uri, isReadPermission = true)
+            heldPermissions += PersistedTreePermission(
+                uri,
+                isReadPermission = flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0,
+                isWritePermission = flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0,
+            )
         }
 
         override fun persistedPermissions(): List<PersistedTreePermission> {

@@ -110,6 +110,7 @@ dependencies {
     implementation(libs.sqlite.framework)
     implementation(libs.media3.exoplayer)
     implementation(libs.media3.session)
+    implementation(libs.kyant.taglib)
 
     ksp(libs.room.compiler)
 
@@ -120,4 +121,5 @@ dependencies {
     androidTestImplementation(libs.compose.ui.test.junit4)
     androidTestImplementation(libs.media3.exoplayer)
     androidTestImplementation(libs.room.testing)
+    androidTestImplementation(kotlin("stdlib"))
 }

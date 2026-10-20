@@ -105,11 +105,11 @@ Dosyadan okunan değer ve arama/eşleştirmede kullanılan normalize değer ayr�
 
 ## 14. Metadata editing desteklenecek
 
-Single/batch Tag Editor desteklenir ancak **yalnızca Room kataloğunu günceller**. Ses dosyasının ID3/Vorbis yorumlarını, embedded artwork'ünü veya fiziksel içeriğini değiştirmez. Genre/album gibi düzenlemeler ilgili Room relations ve search index'i günceller; ayrı dosya izni istemez. Bu hüküm önceki file-tag-write fikrini geçersiz kılar.
+Single/batch Tag Editor desteklenir. Kullanıcı açıkça seçtiğinde MP3 ID3 ve FLAC Vorbis Comment/Picture alanları fiziksel dosyaya yazılabilir. Room canonical katalog ve kullanıcı override kaydı olmaya devam eder; fiziksel yazma yalnızca doğrulanmış SAF descriptor, stale-hash kontrolü, read-back ve yeni current hash sonrasında Room'a yansıtılır. Genre/album gibi düzenlemeler Room relations ve search index'i de günceller. Tarama ve arka plan enrichment fiziksel writer çağırmaz.
 
 ## 15. Metadata düzenleme sonrası katalog güncellemesi
 
-**SUPERSEDED: eski `Permission → MetadataWriter → File → Targeted Rescan` akışı kaldırıldı.** Yeni akış `User Edit → Validate → Room Transaction → Relations / FTS / UI Invalidation` olur. Room'da kullanıcı override'ı ile hâlâ aynı hash kimliğine bağlı, farklı kaynaktan okunan alanlar arasında tutarsızlık varsa alan bazında Room-koru / dosyayı-kabul-et seçimi sunulabilir; varsayılan **Room'u koru**. **Önemli sınır:** MP3/FLAC içindeki embedded tag'in dış araçla değiştirilmesi normalde tam dosya hash'ini de değiştirir. İki kayıtlı hash de artık eşleşmiyorsa §6 gereği yeni fiziksel kimlik oluşur; bu durumda eski Track'in override'ları otomatik taşınmaz. Bu nedenle eski “tag conflict” akışı dış dosya düzenlemeleri için genel bir eşleştirme kaçamağı olarak kullanılmaz.
+Yeni akış `User Edit → Validate → SAF Descriptor Write → Read-back → Full Hash → Room Transaction → Relations / FTS / UI Invalidation` olur. Room'da kullanıcı override'ı ile hâlâ aynı hash kimliğine bağlı, farklı metadata okumaları arasında tutarsızlık varsa alan bazında “Room'u koru / Dosyaya yaz / Dosya değerlerini kabul et” seçimi sunulabilir; varsayılan Room override'ı korunur. Yazma başarısız veya read-back doğrulanamazsa Room metadata ve hash güncellenmez. Fiziksel tag yazımı dosyanın hash'ini değiştirebilir; yeni current hash yalnız doğrulanmış başarılı yazmadan sonra kaydedilir.
 
 ---
 
@@ -368,7 +368,7 @@ Minimal ve süresiz yerel history kaydı: `trackId`, gerçek zaman `timestamp` v
 
 ## 66. Android modern permissions
 
-Android 13+ için uygun `READ_MEDIA_AUDIO`, kullanıcı seçtiği klasörler için SAF grant/persisted permission ve gerekirse erişim isteği kullanılır; eski sürüm politikası supported `minSdk` ile uyumlu tutulur. `MANAGE_EXTERNAL_STORAGE` istenmez. Uygulama dış ses dosyalarını metadata düzenlemek amacıyla yazma izni istemez.
+Android 13+ için uygun `READ_MEDIA_AUDIO`, kullanıcı seçtiği klasörler için SAF grant/persisted permission ve gerekirse erişim isteği kullanılır; eski sürüm politikası supported `minSdk` ile uyumlu tutulur. `MANAGE_EXTERNAL_STORAGE` istenmez. Metadata yazımı yalnız kullanıcının açık edit işlemi ve doğrulanmış writable SAF descriptor ile yapılır; genel depolama yazma izni istenmez.
 
 ## 67. File mutation consent
 
@@ -376,7 +376,7 @@ Yalnızca kullanıcının seçtiği fiziksel silme için geçerli Android `Media
 
 ## 68. MediaFileOperations abstraction
 
-Merkezî servis `resolveLocation`, `requestDelete`, `verifyDeletion`, `reconcileCatalog` ve toplu işlemin devam durumunu yönetir. **SUPERSEDED:** `requestWrite`, `writeTags` ve sırf tag writer için `rescan` sorumlulukları çıkarıldı. Uygulama dosya move/copy/rename yapmaz. Physical-delete akışı ile catalog-trash akışı ayrı tutulur.
+Merkezî servis `resolveLocation`, `requestDelete`, `verifyDeletion`, `requestMetadataWrite`, `verifyMetadataWrite`, `reconcileCatalog` ve toplu işlemin devam durumunu yönetir. `requestMetadataWrite` yalnız MP3/FLAC, explicit user selection, source/location preconditions ve current-hash eşleşmesi sonrasında çalışır. Uygulama dosya move/copy/rename yapmaz. Physical-delete ve metadata-write akışları birbirinden ayrıdır.
 
 ---
 
@@ -614,7 +614,7 @@ Aynı fiziksel dosyanın aynı içerikle yeniden taranması yeni Track/TrackLoca
 
 ## 105. Metadata uyuşmazlıkları ve kullanıcı otoritesi
 
-Yalnız **hash ile aynı fiziksel kimlik doğrulanabildiğinde** ve farklı metadata okumaları/normalize değerleri Room override'ıyla gerçekten uyuşmadığında kullanıcıya **alan bazlı** veya **toplu** “Room'u koru / Dosyayı kabul et” seçeneği sunulabilir; varsayılan **Room'u koru**. **Dışarıdan embedded tag düzenlemek dosya byte'larını ve dolayısıyla tam hash'i değiştirir.** İki kayıtlı hash de eşleşmiyorsa eski TrackID'ye bu ekran aracılığıyla yeniden bağlamak yasaktır; yeni dosya sayılır (§6). Bu, önceki Grill Me conflict kararının katı hash kararı altında **uygulanabilirliği sınırlı** olduğunu açıkça belgeler. Room editleri hiçbir ses dosyasına yazılmaz.
+Yalnız **hash ile aynı fiziksel kimlik doğrulandığında** ve metadata değişikliği kullanıcı tarafından açıkça başlatıldığında dosyaya yazma yapılabilir. Yazma öncesi stale current hash reddedilir; yazma sonrası read-back ve full hash doğrulanır. Başarısız doğrulamada Room override'ı, metadata ve current hash korunur. Dışarıdan embedded tag düzenlemek dosya byte'larını ve current hash'i değiştirebilir; sonraki tarama iki kayıtlı hash ile fiziksel kimliği yeniden değerlendirir, hash uyumsuz dosya metadata benzerliğiyle eski TrackID'ye zorlanmaz. Kullanıcı isterse Room override'ını koruyarak dosyaya yazabilir veya başarılı dosya değerlerini kabul ederek seçili override'ı kaldırabilir.
 
 ## 106. Normal playlist işlemleri
 
@@ -837,7 +837,7 @@ Bu tabloda bulunan “doğrulanacak” işler kullanıcı kararını değiştirm
 | §47: output-device ayrı ses profilleri | **SUPERSEDED** | Tek ortak EQ profili. |
 | §50: crossfade 3–5 sn preview ile ilişkilendirilmiş | **AYRILDI** | Smart Crossfade 0–12 sn OFF, 3–5 sn audio preview ayrı fikir. |
 | §§63–65: skipCount, totalPlayedMs, playedMs, device history | **SUPERSEDED** | Minimal PlaybackEvent; ayrı preference model; %50 gerçek dinleme. |
-| §§67–68: writeTags/requestWrite/trash API sorumlulukları | **DARALTILDI** | Fiziksel delete + doğrulama; Room-only metadata; katalog/physical trash ayrımı. |
+| §§67–68: writeTags/requestWrite/trash API sorumlulukları | **REVİZE EDİLDİ** | Explicit metadata write + doğrulama; physical delete ve metadata-write ayrı akışlar. |
 | §§72–74: M3U import/export | **SUPERSEDED** | M3U import/export yok. Numaralar tarihsel iz olarak kaldı. |
 | §§75–76: genel portable backup | **GENİŞLETİLDİ** | Ses dosyasız yedek, iki hash ile strict restore, migration, opsiyonel Drive. |
 | §81: gelecekte çok dil | **KESİNLEŞTİ** | İlk sürüm Türkçe + İngilizce. |
@@ -858,7 +858,7 @@ Bu tabloda bulunan “doğrulanacak” işler kullanıcı kararını değiştirm
 
 ## Yürürlükte olmayan öneri/kararlar
 
-- Ses dosyasına tag/metadata yazmak.
+- Kullanıcı onayı olmadan ses dosyasına tag/metadata yazmak.
 - M3U import/export.
 - Her output device için otomatik bağımsız EQ profili.
 - Aynı TrackID'nin bir normal playlist'te birden fazla kez yer alması.
@@ -876,7 +876,7 @@ Bu tabloda bulunan “doğrulanacak” işler kullanıcı kararını değiştirm
 2. **MediaStore ID, TrackID değildir.**
 3. **Track ve TrackLocation farklı entity'dir.**
 4. **Fiziksel dosya hash kimliği ve mantıksal Track merge ayrı süreçtir.**
-5. **Kullanıcı override'ı Room'dadır; ses dosyasına metadata yazılmaz.**
+5. **Kullanıcı override'ı Room'dadır; explicit doğrulanmış edit ile MP3/FLAC dosyasına metadata yazılabilir.**
 6. **Track–Genre many-to-many; Tag ilişkisi ayrı ve gelişebilirdir.**
 7. **Genre ağacı ile fiziksel Folder birbirine karıştırılmaz.**
 8. **Playlist ve queue canonical TrackID kullanır; normal playlist/queue içinde duplicate TrackID olmaz.**
@@ -886,5 +886,7 @@ Bu tabloda bulunan “doğrulanacak” işler kullanıcı kararını değiştirm
 12. **Üçüncü taraf GPL kodu bağımsız Smooth implementation'a kopyalanmaz.**
 
 **2026-10-16 ek kaydı:** §128 kişisel/kurumsal bilgi koruma ve güvenli checkpoint standardı eklendi; önceki katalog/oynatma kararları değiştirilmedi.
+
+**2026-10-20 ek kaydı:** Kullanıcının açık kararıyla MP3 ID3 ve FLAC Vorbis Comment/Picture fiziksel yazımı yeniden etkinleştirildi. Yazma yalnız explicit SAF descriptor, stale-hash kontrolü, read-back ve full-hash doğrulaması sonrasında yapılır; Room canonical katalog olarak kalır. Eski metadata audit/dry-run/autonomous-apply kullanıcı akışı kaldırılmak üzere supersede edildi.
 
 **Belge sonu.**

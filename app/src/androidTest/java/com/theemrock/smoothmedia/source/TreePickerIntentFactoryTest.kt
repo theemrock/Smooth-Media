@@ -12,14 +12,14 @@ import org.junit.runner.RunWith
 @RunWith(AndroidJUnit4::class)
 class TreePickerIntentFactoryTest {
     @Test
-    fun create_usesOpenDocumentTreeWithReadPersistableAndPrefixFlags() {
+    fun create_usesOpenDocumentTreeWithReadWritePersistableAndPrefixFlagsForP09test() {
         val intent = TreePickerIntentFactory.create()
 
         assertEquals(Intent.ACTION_OPEN_DOCUMENT_TREE, intent.action)
         assertTrue(intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION != 0)
+        assertTrue(intent.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0)
         assertTrue(intent.flags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION != 0)
         assertTrue(intent.flags and Intent.FLAG_GRANT_PREFIX_URI_PERMISSION != 0)
-        assertFalse(intent.flags and Intent.FLAG_GRANT_WRITE_URI_PERMISSION != 0)
     }
 
     @Test

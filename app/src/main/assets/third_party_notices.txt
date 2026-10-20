@@ -1,0 +1,26 @@
+Smooth Media — Third-Party Notices
+
+Kyant0/taglib Android wrapper
+Component: io.github.kyant0:taglib 1.0.5
+Repository: https://github.com/Kyant0/taglib
+License: Apache License 2.0
+License text: https://raw.githubusercontent.com/Kyant0/taglib/main/LICENSE
+
+Native TagLib
+The Android artifact bundles native TagLib functionality. The native upstream
+project is separately licensed under LGPL and MPL terms.
+Project: https://taglib.org/
+License information: https://taglib.org/license/
+Release notes: https://github.com/Kyant0/taglib/releases
+Resolved native source snapshot: TagLib git commit
+3c917caf52b6d14bfb548d4dc27d8601815edbe2 (bundled by Kyant0/taglib 1.0.5).
+The resolved AAR contains no standalone license files; upstream source
+licenses verified at this snapshot are COPYING.LGPL and COPYING.MPL.
+
+Reference projects reviewed without copying code or assets
+- Metadator — AGPL-3.0: https://github.com/BobbyESP/Metadator
+- MP3-Cover-Editor: https://github.com/PauLopNun/MP3-Cover-Editor
+- Tagger — WTFPL: https://github.com/mvxGREEN/Tagger
+
+The exact resolved native version and license files must be verified for each
+release and kept with the complete third-party notice bundle.

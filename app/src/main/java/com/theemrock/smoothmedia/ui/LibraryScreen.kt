@@ -36,6 +36,7 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
@@ -80,6 +81,7 @@ fun LibraryScreen(
     onCollection: (LibraryCollectionType) -> Unit = {},
     onSearch: () -> Unit = {},
     onSong: (LibrarySong) -> Unit = {},
+    onEditSong: (LibrarySong) -> Unit = {},
     onAddToQueue: (LibrarySong) -> Unit = {},
     onPlayNext: (LibrarySong) -> Unit = {},
     onMenu: () -> Unit = {},
@@ -113,7 +115,7 @@ fun LibraryScreen(
                 !state.loaded || (state.loading && state.songs.isEmpty()) -> LoadingState()
                 state.songs.isEmpty() -> EmptyState()
                 else -> Box(modifier = Modifier.weight(1f)) {
-                    SongsList(state, onNearEnd, artworkResolver, onSong, onAddToQueue, onPlayNext, initialScrollIndex, initialScrollOffset, onScrollPositionChanged)
+                    SongsList(state, onNearEnd, artworkResolver, onSong, onEditSong, onAddToQueue, onPlayNext, initialScrollIndex, initialScrollOffset, onScrollPositionChanged)
                 }
             }
             if (playbackState != null && miniPlayerSong != null) {
@@ -195,7 +197,7 @@ private fun RowScope.SectionTab(label: String, selected: Boolean, onClick: () ->
 }
 
 @Composable
-private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResolver: AndroidArtworkResolver?, onSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit, initialScrollIndex: Int, initialScrollOffset: Int, onScrollPositionChanged: (Int, Int) -> Unit) {
+private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResolver: AndroidArtworkResolver?, onSong: (LibrarySong) -> Unit, onEditSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit, initialScrollIndex: Int, initialScrollOffset: Int, onScrollPositionChanged: (Int, Int) -> Unit) {
     var gridMode by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState(initialScrollIndex, initialScrollOffset)
     val gridState = rememberLazyGridState()
@@ -239,7 +241,7 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        gridItems(state.songs, key = { it.trackId }) { song -> SongGridCard(song, artworkResolver, onSong, onAddToQueue, onPlayNext) }
+                        gridItems(state.songs, key = { it.trackId }) { song -> SongGridCard(song, artworkResolver, onSong, onEditSong, onAddToQueue, onPlayNext) }
                         item { if (state.loading) CircularProgressIndicator(color = Cyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp) }
                     }
                     LibraryGridScrollbar(gridState, Modifier.padding(top = 8.dp, bottom = 8.dp))
@@ -252,7 +254,7 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        items(state.songs, key = { it.trackId }) { song -> SongRow(song, artworkResolver, artworkSize, onSong, onAddToQueue, onPlayNext) }
+                        items(state.songs, key = { it.trackId }) { song -> SongRow(song, artworkResolver, artworkSize, onSong, onEditSong, onAddToQueue, onPlayNext) }
                         item {
                             if (state.loading) Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(color = Cyan, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
@@ -271,6 +273,7 @@ private fun SongGridCard(
     song: LibrarySong,
     artworkResolver: AndroidArtworkResolver?,
     onSong: (LibrarySong) -> Unit,
+    onEditSong: (LibrarySong) -> Unit,
     onAddToQueue: (LibrarySong) -> Unit,
     onPlayNext: (LibrarySong) -> Unit,
 ) {
@@ -282,12 +285,15 @@ private fun SongGridCard(
         }
         Text(song.title, color = Color.White, fontSize = 13.sp, fontWeight = FontWeight.SemiBold, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(song.artist, color = Muted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(formatDuration(song.durationMs), color = Muted, fontSize = 11.sp)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(formatDuration(song.durationMs), color = Muted, fontSize = 11.sp, modifier = Modifier.weight(1f))
+            TextButton(onClick = { onEditSong(song) }) { Text("Düzenle", color = Cyan, fontSize = 10.sp) }
+        }
     }
 }
 
 @Composable
-private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?, artworkSize: androidx.compose.ui.unit.Dp, onSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit) {
+private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?, artworkSize: androidx.compose.ui.unit.Dp, onSong: (LibrarySong) -> Unit, onEditSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit) {
     var actionsExpanded by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
@@ -327,6 +333,7 @@ private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?,
             DropdownMenu(expanded = actionsExpanded, onDismissRequest = { actionsExpanded = false }, modifier = Modifier.width(180.dp)) {
                 DropdownMenuItem(text = { Text("Sonraki çal") }, onClick = { actionsExpanded = false; onPlayNext(song) })
                 DropdownMenuItem(text = { Text("Kuyruğa ekle") }, onClick = { actionsExpanded = false; onAddToQueue(song) })
+                DropdownMenuItem(text = { Text("Düzenle") }, onClick = { actionsExpanded = false; onEditSong(song) })
             }
         }
     }
