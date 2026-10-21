@@ -122,6 +122,7 @@ import com.theemrock.smoothmedia.ui.SmoothMediaColors
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import kotlin.math.abs
 
 private val DarkColorScheme = darkColorScheme(
@@ -149,6 +150,7 @@ private enum class LibraryBackTarget { DASHBOARD, LIBRARY, COLLECTIONS, DETAIL }
 class MainActivity : ComponentActivity() {
     private lateinit var runtime: SourceRegistryRuntime
     private lateinit var executor: ExecutorService
+    private lateinit var navigationExecutor: ExecutorService
     private lateinit var scanControlExecutor: ExecutorService
     private lateinit var scanController: ManualScanController
     private lateinit var metadataCoordinator: MetadataMissingTrackPageCoordinator
@@ -186,6 +188,8 @@ class MainActivity : ComponentActivity() {
     private var metadataAutonomousEnabled by mutableStateOf(false)
     private var metadataAutonomousToggleEnabled by mutableStateOf(false)
     private var metadataAutonomousStatus by mutableStateOf<String?>(null)
+    private val navigationGeneration = AtomicLong(0)
+    private val collectionPageLoadInFlight = AtomicBoolean(false)
     private var genreBackfillRunning by mutableStateOf(false)
     private var genreBackfillStatus by mutableStateOf<String?>(null)
     private lateinit var genreMetadataBackfill: GenreMetadataBackfill
@@ -281,6 +285,7 @@ class MainActivity : ComponentActivity() {
             backupVerified = { false },
         )
         executor = Executors.newSingleThreadExecutor()
+        navigationExecutor = Executors.newSingleThreadExecutor()
         scanControlExecutor = Executors.newSingleThreadExecutor()
         equalizerProfileStore = EqualizerProfileStore(this)
         manualEqualizerLevels = equalizerProfileStore.readLevels()
@@ -639,16 +644,29 @@ class MainActivity : ComponentActivity() {
                         LibraryCollectionScreen(
                             state = collectionViewModel.state.value,
                             onNearEnd = {
-                                executor.execute {
-                                    collectionViewModel.loadNextPage()
-                                    if (collectionViewModel.state.value.type == LibraryCollectionType.ARTISTS) {
-                                        refreshArtistAlbumPreviews()
-                                    } else if (collectionViewModel.state.value.type == LibraryCollectionType.GENRES) {
-                                        refreshGenreArtworkPreviews()
+                                val requestedType = collectionViewModel.state.value.type
+                                if (collectionPageLoadInFlight.compareAndSet(false, true)) {
+                                    navigationExecutor.execute {
+                                        try {
+                                            if (collectionViewModel.state.value.type == requestedType) {
+                                                val previousCount = collectionViewModel.state.value.collections.size
+                                                collectionViewModel.loadNextPage()
+                                                val newRows = collectionViewModel.state.value.collections.drop(previousCount)
+                                                if (collectionViewModel.state.value.type == requestedType) {
+                                                    if (requestedType == LibraryCollectionType.ARTISTS) {
+                                                        refreshArtistAlbumPreviews(newRows)
+                                                    } else if (requestedType == LibraryCollectionType.GENRES) {
+                                                        refreshGenreArtworkPreviews(newRows)
+                                                    }
+                                                }
+                                            }
+                                        } finally {
+                                            collectionPageLoadInFlight.set(false)
+                                        }
                                     }
                                 }
                             },
-                            onRetry = { executor.execute { collectionViewModel.retry() } },
+                            onRetry = { navigationExecutor.execute { collectionViewModel.retry() } },
                             onSongs = {
                                 showAllSongs()
                             },
@@ -819,6 +837,7 @@ class MainActivity : ComponentActivity() {
             executor.execute { runtime.close() }
             executor.shutdown()
         }
+        if (::navigationExecutor.isInitialized) navigationExecutor.shutdownNow()
         if (::scanControlExecutor.isInitialized) scanControlExecutor.shutdown()
         super.onDestroy()
     }
@@ -1390,16 +1409,17 @@ class MainActivity : ComponentActivity() {
         artistAlbumPreviews = emptyMap()
         genreArtworkPreviews = emptyMap()
         updateLibraryBackCallback()
-        executor.execute {
+        submitLatestNavigation { _ ->
             collectionViewModel.loadInitial(type)
             if (type == LibraryCollectionType.ARTISTS) refreshArtistAlbumPreviews()
             if (type == LibraryCollectionType.GENRES) refreshGenreArtworkPreviews()
         }
     }
 
-    private fun refreshArtistAlbumPreviews() {
-        val rows = collectionViewModel.state.value.collections
-        val previews = rows.associate { row ->
+    private fun refreshArtistAlbumPreviews(rows: List<LibraryCollectionRow> = collectionViewModel.state.value.collections) {
+        val missingRows = rows.filterNot { it.title in artistAlbumPreviews }
+        if (missingRows.isEmpty()) return
+        val previews = missingRows.associate { row ->
             row.title to libraryRepository.loadArtistAlbumPreviews(row.title)
         }
         runOnUiThread {
@@ -1407,15 +1427,25 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun refreshGenreArtworkPreviews() {
-        val rows = collectionViewModel.state.value.collections
-        val previews = rows.associate { row ->
+    private fun refreshGenreArtworkPreviews(rows: List<LibraryCollectionRow> = collectionViewModel.state.value.collections) {
+        val missingRows = rows.filterNot { it.title in genreArtworkPreviews }
+        if (missingRows.isEmpty()) return
+        val previews = missingRows.associate { row ->
             row.title to libraryRepository.loadGenreArtworkPreviews(row.title)
         }
         runOnUiThread {
             if (!isDestroyed) genreArtworkPreviews = genreArtworkPreviews + previews
         }
     }
+
+    private fun submitLatestNavigation(block: (Long) -> Unit) {
+        val request = navigationGeneration.incrementAndGet()
+        navigationExecutor.execute {
+            if (isLatestNavigation(request)) block(request)
+        }
+    }
+
+    private fun isLatestNavigation(request: Long): Boolean = navigationGeneration.get() == request
 
     private fun openMetadataEditor(songs: List<LibrarySong>) {
         val ids = songs.map { it.trackId }.distinct()
@@ -1497,7 +1527,7 @@ class MainActivity : ComponentActivity() {
         filteredCollectionType = null
         albumDetailData = null
         updateLibraryBackCallback()
-        executor.execute {
+        submitLatestNavigation { request ->
             val filter = AlbumGroupingKey.decode(row.key, row.title, row.subtitle.orEmpty()).toFilter()
             val songs = mutableListOf<LibrarySong>()
             var offset = 0
@@ -1507,7 +1537,7 @@ class MainActivity : ComponentActivity() {
                 offset += page.songs.size
             } while (page.hasMore && page.songs.isNotEmpty())
             val detail = LibraryAlbumDetailData(row, songs)
-            runOnUiThread { if (!isDestroyed) albumDetailData = detail }
+            runOnUiThread { if (!isDestroyed && isLatestNavigation(request)) albumDetailData = detail }
         }
     }
 
@@ -1526,7 +1556,7 @@ class MainActivity : ComponentActivity() {
         libraryDetailGenreChildren = emptyList()
         libraryDetailGenreAssignments = emptyMap()
         updateLibraryBackCallback()
-        executor.execute {
+        submitLatestNavigation { request ->
             val folderParts = row.key.split('\u001E')
             val filter = when (type) {
                 LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
@@ -1534,7 +1564,7 @@ class MainActivity : ComponentActivity() {
                 LibraryCollectionType.FOLDERS -> if (folderParts.size == 2) {
                     LibraryTrackFilter.SafFolder(folderParts[0], folderParts[1])
                 } else LibraryTrackFilter.Folder(row.key)
-                LibraryCollectionType.ALBUMS -> return@execute
+                LibraryCollectionType.ALBUMS -> return@submitLatestNavigation
             }
             val songs = mutableListOf<LibrarySong>()
             var offset = 0
@@ -1570,7 +1600,7 @@ class MainActivity : ComponentActivity() {
                 }
             } else emptyMap()
             runOnUiThread {
-                if (!isDestroyed) {
+                if (!isDestroyed && isLatestNavigation(request)) {
                     libraryDetailSongs = songs
                     libraryDetailAlbums = albums
                     libraryDetailFolderChildren = folderChildren
@@ -1598,7 +1628,7 @@ class MainActivity : ComponentActivity() {
         showLibraryDetail = false
         filteredCollectionType = type
         updateLibraryBackCallback()
-        executor.execute { libraryViewModel.loadInitial(filter, row.title) }
+        submitLatestNavigation { _ -> libraryViewModel.loadInitial(filter, row.title) }
     }
 
     private fun showAllSongs() {
@@ -1614,7 +1644,7 @@ class MainActivity : ComponentActivity() {
         showLibrary = true
         filteredCollectionType = null
         updateLibraryBackCallback()
-        executor.execute { libraryViewModel.loadInitial(null, "Your library") }
+        submitLatestNavigation { _ -> libraryViewModel.loadInitial(null, "Your library") }
     }
 
     private fun returnToCollections(type: LibraryCollectionType) {
@@ -1626,7 +1656,7 @@ class MainActivity : ComponentActivity() {
         filteredCollectionType = null
         updateLibraryBackCallback()
         if (collectionViewModel.state.value.type != type || !collectionViewModel.state.value.loaded) {
-            executor.execute { collectionViewModel.loadInitial(type) }
+            submitLatestNavigation { _ -> collectionViewModel.loadInitial(type) }
         }
     }
 
