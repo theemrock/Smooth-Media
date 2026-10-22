@@ -33,6 +33,7 @@ fun MetadataEditorScreen(
     saving: Boolean,
     progress: String? = null,
     error: String? = null,
+    writingEnabled: Boolean = false,
     onChange: (MetadataEditorState) -> Unit,
     onSave: () -> Unit,
     onCancel: () -> Unit,
@@ -62,7 +63,15 @@ fun MetadataEditorScreen(
                     value = state.values[field].orEmpty(),
                     onValueChange = { onChange(state.set(field, it)) },
                     label = { Text(label) },
-                    placeholder = { Text("Karma/değiştirme yok") },
+                    placeholder = {
+                        Text(
+                            when {
+                                field in state.mixed -> "Farklı değerler"
+                                field in state.missing -> "Eksik metadata"
+                                else -> "Karma/değiştirme yok"
+                            },
+                        )
+                    },
                     modifier = Modifier.weight(1f),
                     enabled = !saving,
                 )
@@ -77,10 +86,13 @@ fun MetadataEditorScreen(
         progress?.let { Text(it, color = Color(0xFF19C3E6)) }
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             OutlinedButton(onClick = onCancel) { Text(if (saving) "İptal" else "Vazgeç") }
-            Button(onClick = { confirm = true }, enabled = !saving && (state.values.isNotEmpty() || state.cleared.isNotEmpty())) {
+            Button(onClick = { confirm = true }, enabled = !saving && writingEnabled && state.isDirty) {
                 Text("Kaydet")
             }
             if (saving) CircularProgressIndicator(color = Color(0xFF19C3E6))
+        }
+        if (!writingEnabled) {
+            Text("Fiziksel metadata yazımı şu anda kilitli.", color = Color(0xFFFFC107))
         }
     }
     if (confirm) {

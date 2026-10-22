@@ -52,6 +52,8 @@ import androidx.compose.ui.unit.sp
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryCollectionType
 import com.theemrock.smoothmedia.library.LibraryCollectionUiState
+import com.theemrock.smoothmedia.library.selectedCollectionRows
+import com.theemrock.smoothmedia.library.toggleCollectionSelection
 import com.theemrock.smoothmedia.library.LibraryArtistAlbumPreview
 import com.theemrock.smoothmedia.library.LibraryGenreArtworkPreview
 import com.theemrock.smoothmedia.library.artistFormatLabels
@@ -75,6 +77,7 @@ fun LibraryCollectionScreen(
     onSongs: () -> Unit,
     onCollection: (LibraryCollectionType) -> Unit,
     onCollectionSelected: (LibraryCollectionRow) -> Unit = {},
+    onEditSelectedCollections: (LibraryCollectionType, List<LibraryCollectionRow>) -> Unit = { _, _ -> },
     onSources: () -> Unit,
     onSearch: () -> Unit = {},
     onMenu: () -> Unit = {},
@@ -84,6 +87,9 @@ fun LibraryCollectionScreen(
     genreArtworkPreviews: Map<String, List<LibraryGenreArtworkPreview>> = emptyMap(),
     artworkResolver: AndroidArtworkResolver? = null,
 ) {
+    var selectionMode by remember(state.type) { mutableStateOf(false) }
+    var selectedKeys by remember(state.type) { mutableStateOf(emptySet<String>()) }
+    LaunchedEffect(state.type) { selectedKeys = emptySet(); selectionMode = false }
     Surface(color = CollectionInk, modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
             LibraryNavigationBar(
@@ -95,7 +101,19 @@ fun LibraryCollectionScreen(
                 onSources = onSources,
                 onSettings = onSettings,
             )
-            CollectionHeader(state.type, state.totalCollections)
+            CollectionHeader(
+                type = state.type,
+                total = state.totalCollections,
+                selectionMode = selectionMode,
+                selectedCount = selectedKeys.size,
+                onToggleSelectionMode = {
+                    selectionMode = !selectionMode
+                    if (selectionMode) selectedKeys = emptySet()
+                },
+                onEditSelected = {
+                    onEditSelectedCollections(state.type, selectedCollectionRows(state.collections, selectedKeys))
+                },
+            )
             LibrarySectionTabs(
                 selected = state.type,
                 onSongs = onSongs,
@@ -105,7 +123,19 @@ fun LibraryCollectionScreen(
                 state.errorMessage != null -> CollectionError(state.errorMessage, onRetry)
                 !state.loaded || (state.loading && state.collections.isEmpty()) -> CollectionLoading()
                 state.collections.isEmpty() -> CollectionEmpty(state.type)
-                else -> CollectionGrid(state, onNearEnd, onCollectionSelected, artistAlbumPreviews, genreArtworkPreviews, artworkResolver)
+                else -> CollectionGrid(
+                    state = state,
+                    onNearEnd = onNearEnd,
+                    onCollection = onCollectionSelected,
+                    selectedKeys = selectedKeys,
+                    selectionMode = selectionMode,
+                    onToggleSelection = { row ->
+                        selectedKeys = toggleCollectionSelection(selectedKeys, row.key)
+                    },
+                    artistAlbumPreviews = artistAlbumPreviews,
+                    genreArtworkPreviews = genreArtworkPreviews,
+                    artworkResolver = artworkResolver,
+                )
             }
         }
     }
@@ -115,6 +145,10 @@ fun LibraryCollectionScreen(
 private fun CollectionHeader(
     type: LibraryCollectionType,
     total: Int?,
+    selectionMode: Boolean,
+    selectedCount: Int,
+    onToggleSelectionMode: () -> Unit,
+    onEditSelected: () -> Unit,
 ) {
     Column(modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -126,6 +160,17 @@ private fun CollectionHeader(
                     fontSize = 14.sp,
                 )
             }
+            if (type == LibraryCollectionType.ALBUMS || type == LibraryCollectionType.ARTISTS) {
+                OutlinedButton(onClick = onToggleSelectionMode) {
+                    Text(if (selectionMode) "Seçimi kapat" else "Seç")
+                }
+            }
+        }
+        if (selectionMode && (type == LibraryCollectionType.ALBUMS || type == LibraryCollectionType.ARTISTS)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text("$selectedCount seçildi", color = CollectionMuted, fontSize = 13.sp)
+                OutlinedButton(onClick = onEditSelected, enabled = selectedCount > 0) { Text("Seçilenleri düzenle") }
+            }
         }
     }
 }
@@ -135,6 +180,9 @@ private fun CollectionGrid(
     state: LibraryCollectionUiState,
     onNearEnd: () -> Unit,
     onCollection: (LibraryCollectionRow) -> Unit,
+    selectedKeys: Set<String>,
+    selectionMode: Boolean,
+    onToggleSelection: (LibraryCollectionRow) -> Unit,
     artistAlbumPreviews: Map<String, List<LibraryArtistAlbumPreview>>,
     genreArtworkPreviews: Map<String, List<LibraryGenreArtworkPreview>>,
     artworkResolver: AndroidArtworkResolver?,
@@ -146,7 +194,9 @@ private fun CollectionGrid(
         ArtistCollectionContent(
             state = state,
             onNearEnd = latestNearEnd.value,
-            onCollection = onCollection,
+            onCollection = { row -> if (selectionMode) onToggleSelection(row) else onCollection(row) },
+            selectedKeys = selectedKeys,
+            selectionMode = selectionMode,
             artistAlbumPreviews = artistAlbumPreviews,
             artworkResolver = artworkResolver,
         )
@@ -185,7 +235,7 @@ private fun CollectionGrid(
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         gridItems(state.collections, key = { it.key }) { collection ->
-                            CollectionCard(collection, state.type, genreArtworkPreviews[collection.title], artworkResolver) { onCollection(collection) }
+                            CollectionCard(collection, state.type, genreArtworkPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode) { onCollection(collection) }
                         }
                         item { if (state.loading) CircularProgressIndicator(color = CollectionCyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp) }
                     }
@@ -200,7 +250,7 @@ private fun CollectionGrid(
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
                         listItems(state.collections, key = { it.key }) { collection ->
-                            CollectionListRow(collection, state.type, genreArtworkPreviews[collection.title], artworkResolver) { onCollection(collection) }
+                            CollectionListRow(collection, state.type, genreArtworkPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode) { onCollection(collection) }
                         }
                         item { if (state.loading) CircularProgressIndicator(color = CollectionCyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp) }
                     }
@@ -217,10 +267,12 @@ private fun CollectionListRow(
     type: LibraryCollectionType,
     genrePreviews: List<LibraryGenreArtworkPreview>?,
     artworkResolver: AndroidArtworkResolver?,
+    selected: Boolean,
+    selectionMode: Boolean,
     onClick: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(6.dp)).padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -246,6 +298,8 @@ private fun ArtistCollectionContent(
     state: LibraryCollectionUiState,
     onNearEnd: () -> Unit,
     onCollection: (LibraryCollectionRow) -> Unit,
+    selectedKeys: Set<String>,
+    selectionMode: Boolean,
     artistAlbumPreviews: Map<String, List<LibraryArtistAlbumPreview>>,
     artworkResolver: AndroidArtworkResolver?,
 ) {
@@ -296,7 +350,7 @@ private fun ArtistCollectionContent(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     gridItems(sortedRows, key = { it.key }) { collection ->
-                        ArtistGridCard(collection, artistAlbumPreviews[collection.title], artworkResolver) { onCollection(collection) }
+                        ArtistGridCard(collection, artistAlbumPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode) { onCollection(collection) }
                     }
                     item {
                         if (state.loading) CircularProgressIndicator(color = CollectionCyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp)
@@ -322,7 +376,7 @@ private fun ArtistCollectionContent(
                             )
                         }
                         listItems(group.artists, key = { it.key }) { collection ->
-                            ArtistListRow(collection, artistAlbumPreviews[collection.title], artworkResolver) { onCollection(collection) }
+                            ArtistListRow(collection, artistAlbumPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode) { onCollection(collection) }
                         }
                     }
                     item {
@@ -380,10 +434,12 @@ private fun ArtistListRow(
     collection: LibraryCollectionRow,
     previews: List<LibraryArtistAlbumPreview>?,
     artworkResolver: AndroidArtworkResolver?,
+    selected: Boolean,
+    selectionMode: Boolean,
     onClick: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(6.dp)).padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -408,9 +464,11 @@ private fun ArtistGridCard(
     collection: LibraryCollectionRow,
     previews: List<LibraryArtistAlbumPreview>?,
     artworkResolver: AndroidArtworkResolver?,
+    selected: Boolean,
+    selectionMode: Boolean,
     onClick: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(8.dp)).padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         ArtistAvatar(previews?.firstOrNull(), artworkResolver, Modifier.size(92.dp))
         Text(collection.title, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(collection.artistStatsLine, color = CollectionMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -444,12 +502,15 @@ private fun CollectionCard(
     type: LibraryCollectionType,
     genrePreviews: List<LibraryGenreArtworkPreview>?,
     artworkResolver: AndroidArtworkResolver?,
+    selected: Boolean,
+    selectionMode: Boolean,
     onClick: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onClick)
+            .border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(8.dp))
             .padding(4.dp),
     ) {
         if (type != LibraryCollectionType.ARTISTS) {

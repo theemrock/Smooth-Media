@@ -43,6 +43,7 @@ import com.theemrock.smoothmedia.library.LibrarySearchViewModel
 import com.theemrock.smoothmedia.library.LibrarySong
 import com.theemrock.smoothmedia.library.LibraryMetadataState
 import com.theemrock.smoothmedia.library.LibraryLocationState
+import com.theemrock.smoothmedia.library.deduplicateLibrarySongs
 import com.theemrock.smoothmedia.library.LibraryDashboardData
 import com.theemrock.smoothmedia.library.LibraryArtistAlbumPreview
 import com.theemrock.smoothmedia.library.LibraryGenreArtworkPreview
@@ -219,6 +220,7 @@ class MainActivity : ComponentActivity() {
     private var metadataEditorProgress by mutableStateOf<String?>(null)
     private var metadataEditorError by mutableStateOf<String?>(null)
     private val metadataEditorCancelRequested = AtomicBoolean(false)
+    private val metadataEditorGeneration = AtomicLong(0)
     private var nowPlayingSong by mutableStateOf<LibrarySong?>(null)
     private var playbackState by mutableStateOf(PlaybackEngineState())
     private var equalizerBands by mutableStateOf<List<EqualizerBand>>(emptyList())
@@ -684,6 +686,7 @@ class MainActivity : ComponentActivity() {
                                 if (collectionViewModel.state.value.type == LibraryCollectionType.ALBUMS) openAlbumDetail(row)
                                 else openLibraryDetail(collectionViewModel.state.value.type, row)
                             },
+                            onEditSelectedCollections = ::openMetadataEditorForCollections,
                             onSources = {
                                 openSources()
                             },
@@ -1470,6 +1473,7 @@ class MainActivity : ComponentActivity() {
     private fun openMetadataEditor(songs: List<LibrarySong>) {
         val ids = songs.map { it.trackId }.distinct()
         if (ids.isEmpty()) return
+        val generation = metadataEditorGeneration.incrementAndGet()
         metadataEditorState = MetadataEditorState(ids)
         metadataEditorItems = emptyList()
         metadataEditorError = null
@@ -1479,15 +1483,53 @@ class MainActivity : ComponentActivity() {
         executor.execute {
             val loaded = runCatching { metadataEditorCoordinator.load(ids) }
             runOnUiThread {
-                if (isDestroyed) return@runOnUiThread
+                if (isDestroyed || generation != metadataEditorGeneration.get()) return@runOnUiThread
                 loaded.onSuccess { result ->
                     metadataEditorItems = result.items
+                    if (!metadataEditorState.isDirty) {
+                        val snapshots = result.items
+                            .distinctBy { it.target?.trackId ?: it.id }
+                            .map { it.snapshot }
+                        if (ids.size == 1) {
+                            snapshots.firstOrNull()?.let { snapshot ->
+                                metadataEditorState = metadataEditorState.prefill(snapshot)
+                            }
+                        } else if (snapshots.isNotEmpty()) {
+                            metadataEditorState = metadataEditorState.prefill(snapshots)
+                        }
+                    }
                     metadataEditorProgress = if (result.skippedTrackIds.isEmpty()) null else
                         "${result.skippedTrackIds.size} kayıt için erişilebilir MP3/FLAC location bulunamadı."
                 }.onFailure { error ->
                     metadataEditorError = error.message ?: "Metadata hedefleri okunamadı."
                     metadataEditorProgress = null
                 }
+            }
+        }
+    }
+
+    private fun openMetadataEditorForCollections(
+        type: LibraryCollectionType,
+        rows: List<LibraryCollectionRow>,
+    ) {
+        if (rows.isEmpty() || (type != LibraryCollectionType.ALBUMS && type != LibraryCollectionType.ARTISTS)) return
+        submitLatestNavigation { request ->
+            val songPages = mutableListOf<List<LibrarySong>>()
+            rows.forEach { row ->
+                val filter = if (type == LibraryCollectionType.ALBUMS) {
+                    AlbumGroupingKey.decode(row.key, row.title, row.subtitle.orEmpty()).toFilter()
+                } else {
+                    LibraryTrackFilter.Artist(row.title)
+                }
+                var offset = 0
+                do {
+                    val page = libraryRepository.loadFilteredPage(filter, offset, 200)
+                    songPages += page.songs
+                    offset += page.songs.size
+                } while (page.hasMore && page.songs.isNotEmpty())
+            }
+            runOnUiThread {
+                if (!isDestroyed && isLatestNavigation(request)) openMetadataEditor(deduplicateLibrarySongs(songPages))
             }
         }
     }
@@ -1523,6 +1565,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun closeMetadataEditor() {
+        metadataEditorGeneration.incrementAndGet()
         if (metadataEditorSaving) {
             metadataEditorCancelRequested.set(true)
             metadataEditorProgress = "İptal bekleniyor..."
