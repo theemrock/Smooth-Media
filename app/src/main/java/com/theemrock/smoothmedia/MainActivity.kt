@@ -743,6 +743,7 @@ class MainActivity : ComponentActivity() {
                             onSearch = { showSearch = true },
                             onSong = { song -> playSong(song) },
                             onEditSong = { song -> openMetadataEditor(listOf(song)) },
+                            onEditSelectedSongs = ::openMetadataEditor,
                             playbackState = playbackState.takeIf { nowPlayingSong != null },
                             miniPlayerSong = nowPlayingSong,
                             onMiniPlayerOpen = { showNowPlaying = true },
