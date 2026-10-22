@@ -85,6 +85,8 @@ fun LibraryScreen(
     onSong: (LibrarySong) -> Unit = {},
     onEditSong: (LibrarySong) -> Unit = {},
     onEditSelectedSongs: (List<LibrarySong>) -> Unit = {},
+    onAddSelectedToPlaylist: (List<LibrarySong>) -> Unit = {},
+    onAddSelectedToQueue: (List<LibrarySong>) -> Unit = {},
     onAddToQueue: (LibrarySong) -> Unit = {},
     onPlayNext: (LibrarySong) -> Unit = {},
     onMenu: () -> Unit = {},
@@ -124,7 +126,7 @@ fun LibraryScreen(
                 !state.loaded || (state.loading && state.songs.isEmpty()) -> LoadingState()
                 state.songs.isEmpty() -> EmptyState()
                 else -> Box(modifier = Modifier.weight(1f)) {
-                    SongsList(state, onNearEnd, artworkResolver, onSong, onEditSong, onAddToQueue, onPlayNext, onEditSelectedSongs, initialScrollIndex, initialScrollOffset, onScrollPositionChanged)
+                    SongsList(state, onNearEnd, artworkResolver, onSong, onEditSong, onAddToQueue, onPlayNext, onEditSelectedSongs, onAddSelectedToPlaylist, onAddSelectedToQueue, initialScrollIndex, initialScrollOffset, onScrollPositionChanged)
                 }
             }
             if (playbackState != null && miniPlayerSong != null) {
@@ -206,7 +208,7 @@ private fun RowScope.SectionTab(label: String, selected: Boolean, onClick: () ->
 }
 
 @Composable
-private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResolver: AndroidArtworkResolver?, onSong: (LibrarySong) -> Unit, onEditSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit, onEditSelectedSongs: (List<LibrarySong>) -> Unit, initialScrollIndex: Int, initialScrollOffset: Int, onScrollPositionChanged: (Int, Int) -> Unit) {
+private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResolver: AndroidArtworkResolver?, onSong: (LibrarySong) -> Unit, onEditSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit, onEditSelectedSongs: (List<LibrarySong>) -> Unit, onAddSelectedToPlaylist: (List<LibrarySong>) -> Unit, onAddSelectedToQueue: (List<LibrarySong>) -> Unit, initialScrollIndex: Int, initialScrollOffset: Int, onScrollPositionChanged: (Int, Int) -> Unit) {
     var selectionMode by rememberSaveable { mutableStateOf(false) }
     var selection by remember { mutableStateOf(LibrarySongSelection()) }
     LaunchedEffect(state.songs) {
@@ -244,11 +246,14 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
                 if (!selectionMode) selection = selection.clear()
             }) { Text(if (selectionMode) "Seçimi kapat" else "Seç") }
             if (selectionMode) {
+                val selectedSongs = selectedLibrarySongs(state.songs, selection.trackIds)
                 Text("${selection.trackIds.size} seçildi", color = Muted, fontSize = 13.sp)
                 OutlinedButton(
                     enabled = selection.trackIds.isNotEmpty(),
-                    onClick = { onEditSelectedSongs(selectedLibrarySongs(state.songs, selection.trackIds)) },
+                    onClick = { onEditSelectedSongs(selectedSongs) },
                 ) { Text("Seçilenleri düzenle") }
+                OutlinedButton(enabled = selectedSongs.isNotEmpty(), onClick = { onAddSelectedToPlaylist(selectedSongs) }) { Text("Playliste ekle") }
+                OutlinedButton(enabled = selectedSongs.isNotEmpty(), onClick = { onAddSelectedToQueue(selectedSongs) }) { Text("Kuyruğa ekle") }
                 TextButton(onClick = { selection = selection.clear() }) { Text("Temizle") }
             }
         }

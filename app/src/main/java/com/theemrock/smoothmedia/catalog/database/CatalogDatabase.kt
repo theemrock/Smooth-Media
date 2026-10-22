@@ -34,8 +34,11 @@ import com.theemrock.smoothmedia.catalog.database.entity.ArtworkAssetEntity
 import com.theemrock.smoothmedia.catalog.database.entity.ArtworkAlbumBindingEntity
 import com.theemrock.smoothmedia.catalog.database.entity.ArtworkOverrideEntity
 import com.theemrock.smoothmedia.catalog.database.dao.ArtworkDao
+import com.theemrock.smoothmedia.catalog.database.dao.PlaylistDao
+import com.theemrock.smoothmedia.catalog.database.entity.PlaylistEntity
+import com.theemrock.smoothmedia.catalog.database.entity.PlaylistEntryEntity
 
-private const val CATALOG_SCHEMA_VERSION = 10
+private const val CATALOG_SCHEMA_VERSION = 11
 
 @Database(
     entities = [
@@ -64,6 +67,8 @@ private const val CATALOG_SCHEMA_VERSION = 10
         ArtworkAssetEntity::class,
         ArtworkAlbumBindingEntity::class,
         ArtworkOverrideEntity::class,
+        PlaylistEntity::class,
+        PlaylistEntryEntity::class,
     ],
     version = CATALOG_SCHEMA_VERSION,
     exportSchema = true,
@@ -94,6 +99,8 @@ abstract class CatalogDatabase : RoomDatabase() {
     abstract fun metadataApplyDao(): com.theemrock.smoothmedia.catalog.database.dao.MetadataApplyDao
 
     abstract fun artworkDao(): ArtworkDao
+
+    abstract fun playlistDao(): PlaylistDao
 
     companion object {
         const val SCHEMA_VERSION = CATALOG_SCHEMA_VERSION

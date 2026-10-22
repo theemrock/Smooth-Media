@@ -30,6 +30,9 @@ interface TrackDao {
     @Query("SELECT track_id FROM tracks WHERE catalog_lifecycle = 'ACTIVE' AND (:afterTrackId IS NULL OR track_id > :afterTrackId) ORDER BY track_id LIMIT :limit")
     fun listActiveTrackIdsAfter(afterTrackId: String?, limit: Int): List<String>
 
+    @Query("SELECT track_id FROM tracks WHERE catalog_lifecycle = 'ACTIVE' AND track_id IN (:trackIds)")
+    fun listActiveTrackIds(trackIds: List<String>): List<String>
+
     @Query("SELECT COUNT(*) FROM tracks WHERE catalog_lifecycle = 'ACTIVE'")
     fun countActiveTracks(): Int
 

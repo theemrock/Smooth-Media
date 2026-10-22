@@ -146,5 +146,15 @@ object CatalogMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(FROM_1_TO_2, FROM_2_TO_3, FROM_3_TO_4, FROM_4_TO_5, FROM_5_TO_6, FROM_6_TO_7, FROM_7_TO_8, FROM_8_TO_9, FROM_9_TO_10)
+    val FROM_10_TO_11 = object : Migration(10, 11) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS playlists (playlist_id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, normalized_name TEXT NOT NULL, created_at_epoch_ms INTEGER NOT NULL, updated_at_epoch_ms INTEGER NOT NULL)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_playlists_normalized_name ON playlists(normalized_name)")
+            db.execSQL("CREATE TABLE IF NOT EXISTS playlist_entries (playlist_id TEXT NOT NULL, track_id TEXT NOT NULL, position INTEGER NOT NULL, added_at_epoch_ms INTEGER NOT NULL, PRIMARY KEY(playlist_id, track_id), FOREIGN KEY(playlist_id) REFERENCES playlists(playlist_id) ON DELETE CASCADE, FOREIGN KEY(track_id) REFERENCES tracks(track_id) ON DELETE NO ACTION)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_playlist_entries_playlist_id_position ON playlist_entries(playlist_id, position)")
+            db.execSQL("CREATE INDEX IF NOT EXISTS index_playlist_entries_track_id ON playlist_entries(track_id)")
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(FROM_1_TO_2, FROM_2_TO_3, FROM_3_TO_4, FROM_4_TO_5, FROM_5_TO_6, FROM_6_TO_7, FROM_7_TO_8, FROM_8_TO_9, FROM_9_TO_10, FROM_10_TO_11)
 }

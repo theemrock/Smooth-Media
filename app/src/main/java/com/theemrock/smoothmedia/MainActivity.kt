@@ -26,6 +26,7 @@ import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
 import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoverySessionEntity
 import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoverySessionStatus
+import com.theemrock.smoothmedia.catalog.database.entity.PlaylistEntity
 import com.theemrock.smoothmedia.catalog.scan.ManualScanController
 import com.theemrock.smoothmedia.catalog.scan.ManualScanProgress
 import com.theemrock.smoothmedia.catalog.scan.ManualScanResult
@@ -59,6 +60,8 @@ import com.theemrock.smoothmedia.playback.PlaybackQueueStore
 import com.theemrock.smoothmedia.playback.PlaybackWindow
 import com.theemrock.smoothmedia.playback.PlaybackWindowResolver
 import com.theemrock.smoothmedia.playback.QueueMode
+import com.theemrock.smoothmedia.playlist.PlaylistRepository
+import com.theemrock.smoothmedia.playlist.orderedUniqueTrackIds
 import com.theemrock.smoothmedia.artwork.AndroidArtworkResolver
 import com.theemrock.smoothmedia.artwork.ArtworkDiskCache
 import com.theemrock.smoothmedia.artwork.ArtworkRepository
@@ -68,6 +71,7 @@ import com.theemrock.smoothmedia.ui.LibraryCollectionScreen
 import com.theemrock.smoothmedia.ui.LibraryAlbumDetailData
 import com.theemrock.smoothmedia.ui.LibraryAlbumDetailScreen
 import com.theemrock.smoothmedia.ui.LibraryDetailScreen
+import com.theemrock.smoothmedia.ui.PlaylistPickerDialog
 import com.theemrock.smoothmedia.ui.LyricsScreen
 import com.theemrock.smoothmedia.lyrics.CachedLyrics
 import com.theemrock.smoothmedia.lyrics.RoomLyricsCache
@@ -152,6 +156,7 @@ private enum class LibraryBackTarget { DASHBOARD, LIBRARY, COLLECTIONS, DETAIL }
 
 class MainActivity : ComponentActivity() {
     private lateinit var runtime: SourceRegistryRuntime
+    private lateinit var playlistRepository: PlaylistRepository
     private lateinit var executor: ExecutorService
     private lateinit var navigationExecutor: ExecutorService
     private lateinit var scanControlExecutor: ExecutorService
@@ -214,6 +219,9 @@ class MainActivity : ComponentActivity() {
     private var showEqualizer by mutableStateOf(false)
     private var showQueue by mutableStateOf(false)
     private var showMetadataEditor by mutableStateOf(false)
+    private var showPlaylistPicker by mutableStateOf(false)
+    private var playlistPickerSongs by mutableStateOf<List<LibrarySong>>(emptyList())
+    private var playlistOptions by mutableStateOf<List<PlaylistEntity>>(emptyList())
     private var metadataEditorState by mutableStateOf(MetadataEditorState(emptyList()))
     private var metadataEditorItems by mutableStateOf(emptyList<com.theemrock.smoothmedia.metadata.MetadataEditorBatchItem>())
     private var metadataEditorSaving by mutableStateOf(false)
@@ -278,6 +286,7 @@ class MainActivity : ComponentActivity() {
         )
         enableEdgeToEdge()
         runtime = SourceRegistryFactory.create(this)
+        playlistRepository = PlaylistRepository(runtime.database)
         metadataEditorCoordinator = MetadataEditorCoordinator(runtime.database, contentResolver)
         metadataAutonomousSettings = SharedPreferencesMetadataAutonomousSettings(this)
         metadataAutonomousEnabled = metadataAutonomousSettings.enabled
@@ -744,6 +753,8 @@ class MainActivity : ComponentActivity() {
                             onSong = { song -> playSong(song) },
                             onEditSong = { song -> openMetadataEditor(listOf(song)) },
                             onEditSelectedSongs = ::openMetadataEditor,
+                            onAddSelectedToPlaylist = ::openPlaylistPicker,
+                            onAddSelectedToQueue = ::addSelectedSongsToQueue,
                             playbackState = playbackState.takeIf { nowPlayingSong != null },
                             miniPlayerSong = nowPlayingSong,
                             onMiniPlayerOpen = { showNowPlaying = true },
@@ -828,6 +839,14 @@ class MainActivity : ComponentActivity() {
                             onLibraryManagement = ::openLibraryManagement,
                         )
                     }
+                    if (showPlaylistPicker) {
+                        PlaylistPickerDialog(
+                            playlists = playlistOptions,
+                            onDismiss = { showPlaylistPicker = false },
+                            onSelect = ::addSelectedSongsToPlaylist,
+                            onCreate = ::createPlaylistAndAddSelectedSongs,
+                        )
+                    }
                     }
                 }
             }
@@ -894,6 +913,80 @@ class MainActivity : ComponentActivity() {
     private fun addToQueue(song: LibrarySong) = enqueueSong(song, playNext = false)
 
     private fun playNextSong(song: LibrarySong) = enqueueSong(song, playNext = true)
+
+    private fun openPlaylistPicker(songs: List<LibrarySong>) {
+        if (songs.isEmpty()) return
+        playlistPickerSongs = songs.distinctBy { it.trackId }
+        executor.execute {
+            val options = runCatching { playlistRepository.listAll() }.getOrDefault(emptyList())
+            runOnUiThread {
+                playlistOptions = options
+                showPlaylistPicker = true
+            }
+        }
+    }
+
+    private fun addSelectedSongsToPlaylist(playlist: PlaylistEntity) {
+        val songs = playlistPickerSongs
+        executor.execute {
+            val result = runCatching { playlistRepository.addTracks(playlist.playlistId, songs.map { it.trackId }) }
+            runOnUiThread {
+                showPlaylistPicker = false
+                statusMessage = result.fold(
+                    onSuccess = { "Playlist: ${it.added} eklendi, ${it.skippedExisting + it.skippedMissing} atlandı" },
+                    onFailure = { "Playlist ekleme başarısız: ${it.message ?: "bilinmeyen hata"}" },
+                )
+            }
+        }
+    }
+
+    private fun createPlaylistAndAddSelectedSongs(name: String) {
+        val songs = playlistPickerSongs
+        executor.execute {
+            val result = runCatching {
+                val playlist = playlistRepository.create(name)
+                playlistRepository.addTracks(playlist.playlistId, songs.map { it.trackId })
+            }
+            runOnUiThread {
+                showPlaylistPicker = false
+                statusMessage = result.fold(
+                    onSuccess = { "Playlist oluşturuldu: ${it.added} eklendi, ${it.skippedExisting + it.skippedMissing} atlandı" },
+                    onFailure = { "Playlist oluşturma başarısız: ${it.message ?: "bilinmeyen hata"}" },
+                )
+            }
+        }
+    }
+
+    private fun addSelectedSongsToQueue(songs: List<LibrarySong>) {
+        val orderedSongs = orderedUniqueTrackIds(songs.map { it.trackId }).mapNotNull { id -> songs.firstOrNull { it.trackId == id } }
+        if (orderedSongs.isEmpty()) return
+        executor.execute {
+            val resolver = CatalogPlaybackLocationResolver(runtime.database)
+            val resolved = orderedSongs.mapNotNull { song ->
+                if (!song.isAccessible) return@mapNotNull null
+                val location = runCatching { resolver.resolve(song.trackId).firstOrNull() }.getOrNull() ?: return@mapNotNull null
+                QueueItem(song.trackId, title = song.title, artist = song.artist, album = song.album, durationMs = song.durationMs) to location
+            }
+            val skipped = orderedSongs.size - resolved.size
+            runOnUiThread {
+                var added = 0
+                resolved.forEach { (item, _) ->
+                    val changed = if (queueController.state.value.mode == QueueMode.GHOST) {
+                        queueController.takeOverUserQueue(item, playNext = false)
+                    } else queueController.add(item)
+                    if (changed) added++
+                }
+                if (added > 0) {
+                    persistQueue()
+                    syncQueueToSession(
+                        playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING,
+                        preservePosition = true,
+                    )
+                }
+                statusMessage = "Kuyruk: $added eklendi, ${skipped + (resolved.size - added)} atlandı"
+            }
+        }
+    }
 
     private fun enqueueSong(song: LibrarySong, playNext: Boolean) {
         if (!song.isAccessible) return
