@@ -73,11 +73,12 @@ class MetadataEditorCoordinator(
         if (writeGate.decision() == MetadataEditorWriteDecision.BLOCKED) {
             return MetadataEditorBatchResult(
                 completed = 0,
-                failed = items.take(100).size,
+                failed = 0,
                 cancelled = cancelled.get(),
+                blocked = true,
             )
         }
-        val session = MetadataFileWriteSession(contentResolver, adapter) { locator -> hashProvider(locator) }
+        val session = MetadataFileWriteSession(contentResolver, adapter, writeGate = writeGate) { locator -> hashProvider(locator) }
         val reconciler = MetadataFileWriteReconciler(database)
         var processed = 0
         return MetadataEditorBatchRunner().run(items, edit, cancelled::get) { item, requestedEdit ->

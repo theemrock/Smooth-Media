@@ -12,6 +12,7 @@ data class MetadataEditorBatchResult(
     val completed: Int,
     val failed: Int,
     val cancelled: Boolean,
+    val blocked: Boolean = false,
 )
 
 class MetadataEditorBatchRunner(

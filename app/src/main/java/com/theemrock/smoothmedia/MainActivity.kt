@@ -1649,7 +1649,11 @@ class MainActivity : ComponentActivity() {
                 if (isDestroyed) return@runOnUiThread
                 metadataEditorSaving = false
                 result.onSuccess { summary ->
+                    if (summary.blocked) {
+                        metadataEditorProgress = "Fiziksel yazma kilitli; dosya ve Room deÄŸiÅŸmedi."
+                    } else {
                     metadataEditorProgress = "Tamamlandı: ${summary.completed} başarılı, ${summary.failed} hata" + if (summary.cancelled) ", iptal edildi" else ""
+                    }
                 }.onFailure { error ->
                     metadataEditorError = error.message ?: "Metadata yazımı başarısız."
                     metadataEditorProgress = null

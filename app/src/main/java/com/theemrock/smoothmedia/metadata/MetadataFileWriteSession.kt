@@ -78,18 +78,21 @@ sealed interface MetadataFileWriteOutcome {
 
     data class Rejected(val reason: MetadataFileWriteRejection) : MetadataFileWriteOutcome
     data class Failed(val reason: FileTagWriteFailure) : MetadataFileWriteOutcome
+    data object Blocked : MetadataFileWriteOutcome
 }
 
 /** Executes one explicit file write; it does not update Room. */
 class MetadataFileWriteSession(
     private val contentResolver: ContentResolver,
     private val adapter: FileTagAdapter,
+    private val writeGate: MetadataEditorWriteGate = MetadataEditorWriteGate(),
     private val hasher: (String) -> StoredFileHash?,
 ) {
     fun write(
         target: MetadataFileWriteTarget,
         change: FileTagChange,
     ): MetadataFileWriteOutcome {
+        if (writeGate.decision() == MetadataEditorWriteDecision.BLOCKED) return MetadataFileWriteOutcome.Blocked
         val observedHash = hasher(target.locator)
         when (val decision = MetadataFileWritePolicy.validate(target, observedHash)) {
             MetadataFileWriteDecision.Allowed -> Unit
