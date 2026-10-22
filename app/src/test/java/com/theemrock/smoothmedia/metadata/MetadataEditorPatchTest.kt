@@ -117,4 +117,55 @@ class MetadataEditorPatchTest {
         assertFalse(state.isDirty)
         assertEquals(FileTagEdit(), state.toFileTagEdit())
     }
+
+    @Test
+    fun singlePrefillKeepsOriginalAndExposesRepairSuggestionWithoutDirtying() {
+        val state = MetadataEditorState(selectedTrackIds = listOf("track-1")).prefill(
+            FileTagSnapshot(
+                properties = mapOf("TITLE" to listOf("GÃ¶zlerin")),
+                pictures = emptyList(),
+            ),
+        )
+
+        assertEquals("GÃ¶zlerin", state.values[MetadataEditorField.TITLE])
+        assertEquals("Gözlerin", state.suggestions[MetadataEditorField.TITLE])
+        assertFalse(state.isDirty)
+        assertEquals(FileTagEdit(), state.toFileTagEdit())
+    }
+
+    @Test
+    fun applyingSuggestionMarksOnlyThatFieldTouched() {
+        val state = MetadataEditorState(selectedTrackIds = listOf("track-1"))
+            .prefill(FileTagSnapshot(mapOf("TITLE" to listOf("GÃ¶zlerin")), emptyList()))
+            .applySuggestion(MetadataEditorField.TITLE)
+
+        assertEquals("Gözlerin", state.values[MetadataEditorField.TITLE])
+        assertTrue(MetadataEditorField.TITLE in state.touched)
+        assertEquals("Gözlerin", state.toFileTagEdit().title)
+    }
+
+    @Test
+    fun dismissingSuggestionLeavesSnapshotUntouchedAndClean() {
+        val state = MetadataEditorState(selectedTrackIds = listOf("track-1"))
+            .prefill(FileTagSnapshot(mapOf("TITLE" to listOf("GÃ¶zlerin")), emptyList()))
+            .dismissSuggestion(MetadataEditorField.TITLE)
+
+        assertEquals("GÃ¶zlerin", state.values[MetadataEditorField.TITLE])
+        assertTrue(MetadataEditorField.TITLE !in state.suggestions)
+        assertFalse(state.isDirty)
+        assertEquals(FileTagEdit(), state.toFileTagEdit())
+    }
+
+    @Test
+    fun bulkPrefillDoesNotOfferAutomaticRepairSuggestions() {
+        val state = MetadataEditorState(selectedTrackIds = listOf("a", "b")).prefill(
+            listOf(
+                FileTagSnapshot(mapOf("TITLE" to listOf("GÃ¶zlerin")), emptyList()),
+                FileTagSnapshot(mapOf("TITLE" to listOf("GÃ¶zlerin")), emptyList()),
+            ),
+        )
+
+        assertTrue(state.suggestions.isEmpty())
+        assertFalse(state.isDirty)
+    }
 }

@@ -81,6 +81,19 @@ fun MetadataEditorScreen(
                     modifier = Modifier.padding(top = 8.dp),
                 ) { Text("Sil") }
             }
+            state.suggestions[field]?.let { suggestion ->
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("Önerilen düzeltme: $suggestion", color = Color(0xFFFFC107), modifier = Modifier.weight(1f))
+                    TextButton(
+                        onClick = { onChange(state.applySuggestion(field)) },
+                        enabled = !saving,
+                    ) { Text("Uygula") }
+                    TextButton(
+                        onClick = { onChange(state.dismissSuggestion(field)) },
+                        enabled = !saving,
+                    ) { Text("Reddet") }
+                }
+            }
         }
         error?.let { Text(it, color = Color(0xFFFF8F8F)) }
         progress?.let { Text(it, color = Color(0xFF19C3E6)) }

@@ -8,6 +8,8 @@ import java.nio.charset.StandardCharsets
 
 /** Byte-level decoding used by format adapters; no heuristic mojibake replacement. */
 object TagTextDecoder {
+    data class RepairSuggestion(val original: String, val repaired: String)
+
     fun decode(bytes: ByteArray, declaredCharset: Charset? = null): String {
         if (bytes.size >= 3 && bytes[0] == 0xEF.toByte() && bytes[1] == 0xBB.toByte() && bytes[2] == 0xBF.toByte()) {
             return bytes.copyOfRange(3, bytes.size).toString(StandardCharsets.UTF_8)
@@ -35,6 +37,11 @@ object TagTextDecoder {
             .filter { candidate -> candidate != value && score(candidate) > originalScore }
             .maxByOrNull(::score)
             ?: value
+    }
+
+    fun suggestRepair(value: String): RepairSuggestion? {
+        val repaired = normalizeText(value)
+        return repaired.takeIf { it != value }?.let { RepairSuggestion(value, it) }
     }
 
     private fun decodeUtf8RoundTrip(value: String, legacyCharset: Charset): String? {

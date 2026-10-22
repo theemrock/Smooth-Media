@@ -3,6 +3,7 @@ package com.theemrock.smoothmedia.metadata
 import java.nio.charset.StandardCharsets
 import java.nio.charset.Charset
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TagTextDecoderTest {
@@ -55,5 +56,17 @@ class TagTextDecoderTest {
 
         assertEquals("Gözlerin", once)
         assertEquals(once, TagTextDecoder.normalizeText(once))
+    }
+
+    @Test fun repairSuggestionReturnsOnlyHighConfidenceCandidate() {
+        assertEquals("Gözlerin", TagTextDecoder.suggestRepair("GÃ¶zlerin")?.repaired)
+        assertEquals("GÃ¶zlerin", TagTextDecoder.suggestRepair("GÃ¶zlerin")?.original)
+    }
+
+    @Test fun repairSuggestionDoesNotChangeValidAsciiTurkishOrAmbiguousText() {
+        assertNull(TagTextDecoder.suggestRepair("Album"))
+        assertNull(TagTextDecoder.suggestRepair("Şarkı"))
+        assertNull(TagTextDecoder.suggestRepair("Åland"))
+        assertNull(TagTextDecoder.suggestRepair("Ã"))
     }
 }

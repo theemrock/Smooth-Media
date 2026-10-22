@@ -19,6 +19,7 @@ data class MetadataEditorState(
     val touched: Set<MetadataEditorField> = emptySet(),
     val mixed: Set<MetadataEditorField> = emptySet(),
     val missing: Set<MetadataEditorField> = emptySet(),
+    val suggestions: Map<MetadataEditorField, String> = emptyMap(),
 ) {
     fun set(field: MetadataEditorField, value: String): MetadataEditorState = copy(
         values = values + (field to value),
@@ -26,6 +27,7 @@ data class MetadataEditorState(
         touched = touched + field,
         mixed = mixed - field,
         missing = missing - field,
+        suggestions = suggestions - field,
     )
 
     fun clear(field: MetadataEditorField): MetadataEditorState = copy(
@@ -34,10 +36,18 @@ data class MetadataEditorState(
         touched = touched + field,
         mixed = mixed - field,
         missing = missing - field,
+        suggestions = suggestions - field,
     )
 
     /** Displays only fields present in the source snapshot; this never marks fields dirty. */
-    fun prefill(snapshot: FileTagSnapshot): MetadataEditorState = prefill(listOf(snapshot))
+    fun prefill(snapshot: FileTagSnapshot): MetadataEditorState {
+        val state = prefill(listOf(snapshot))
+        return state.copy(
+            suggestions = state.values.mapNotNull { (field, value) ->
+                TagTextDecoder.suggestRepair(value)?.repaired?.let { field to it }
+            }.toMap(),
+        )
+    }
 
     /** Displays common values and explicit mixed/missing states without making them dirty. */
     fun prefill(snapshots: List<FileTagSnapshot>): MetadataEditorState {
@@ -66,8 +76,15 @@ data class MetadataEditorState(
             cleared = cleared.intersect(touched),
             mixed = snapshotMixed - touched,
             missing = snapshotMissing - touched,
+            suggestions = emptyMap(),
         )
     }
+
+    fun applySuggestion(field: MetadataEditorField): MetadataEditorState =
+        suggestions[field]?.let { set(field, it) } ?: this
+
+    fun dismissSuggestion(field: MetadataEditorField): MetadataEditorState =
+        copy(suggestions = suggestions - field)
 
     val isDirty: Boolean
         get() = touched.isNotEmpty()
