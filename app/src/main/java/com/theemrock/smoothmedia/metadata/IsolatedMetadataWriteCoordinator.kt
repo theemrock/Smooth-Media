@@ -65,6 +65,7 @@ sealed interface IsolatedWriteRollbackResult {
  */
 class IsolatedMetadataWriteCoordinator(
     private val workspace: Path,
+    private val usableSpaceBytes: (Path) -> Long = { path -> Files.getFileStore(path).usableSpace },
     private val sha256: (Path) -> String = ::sha256File,
 ) {
     private val readySessions = mutableSetOf<Path>()
@@ -76,7 +77,7 @@ class IsolatedMetadataWriteCoordinator(
         val normalizedWorkspace = workspace.toAbsolutePath().normalize()
         if (normalizedSource.startsWith(normalizedWorkspace)) return IsolatedWritePreparationResult.Rejected(IsolatedWritePreparationRejection.SOURCE_INSIDE_WORKSPACE)
         val size = Files.size(source)
-        val usable = runCatching { Files.getFileStore(workspace).usableSpace }.getOrDefault(0L)
+        val usable = runCatching { usableSpaceBytes(workspace) }.getOrDefault(0L)
         if (size > usable / 2L) return IsolatedWritePreparationResult.Rejected(IsolatedWritePreparationRejection.INSUFFICIENT_SPACE)
         val backup = workspace.resolve("$sourceId-${UUID.randomUUID()}.backup")
         val staged = workspace.resolve("$sourceId-${UUID.randomUUID()}.stage")

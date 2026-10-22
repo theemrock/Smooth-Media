@@ -59,6 +59,13 @@ class IsolatedMetadataWriteCoordinatorTest {
     }
 
     @Test
+    fun unusableSpaceMeasurementRemainsFailClosed() = withFixture { source, workspace ->
+        val coordinator = IsolatedMetadataWriteCoordinator(workspace, usableSpaceBytes = { 0L })
+        val rejected = coordinator.prepare(source, "track-1") as IsolatedWritePreparationResult.Rejected
+        assertEquals(IsolatedWritePreparationRejection.INSUFFICIENT_SPACE, rejected.reason)
+    }
+
+    @Test
     fun rollbackSuccessRestoresSourceAndRollbackFailurePreservesRecoveryBackup() = withFixture { source, workspace ->
         val coordinator = IsolatedMetadataWriteCoordinator(workspace)
         val session = prepared(coordinator, source)
