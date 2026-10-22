@@ -38,9 +38,17 @@ class AndroidArtworkResolver(
     private val bitmapCache = object : LruCache<String, Bitmap>(maxCacheBytes) {
         override fun sizeOf(key: String, value: Bitmap): Int = value.byteCount
     }
-    private val failedCache = LruCache<String, Boolean>(128)
+    private val loadCoordinator = ArtworkLoadCoordinator<String, Bitmap>()
 
     fun load(request: ArtworkRequest, targetPx: Int): Bitmap? {
+        val targetBucket = ArtworkCacheKey.targetBucket(targetPx)
+        return loadCoordinator.load(
+            key = "${request.cacheKey}|$targetBucket",
+            loader = { loadUncached(request, targetBucket) },
+        )
+    }
+
+    private fun loadUncached(request: ArtworkRequest, targetPx: Int): Bitmap? {
         val persistedAsset = persistedAsset(request)
         val cacheIdentity = persistedAsset?.assetId ?: request.cacheKey
         val cacheVersion = persistedAsset?.updatedAtEpochMs?.toString() ?: "v1"
@@ -53,7 +61,6 @@ class AndroidArtworkResolver(
             }
             diskCache.invalidate(cacheKey)
         }
-        if (failedCache.get(cacheKey) == true) return null
         val selector = EmbeddedArtworkSelector(
             candidateLoader = { key -> loadCandidates(request, key) },
             artworkReader = ::readEmbeddedArtwork,
@@ -61,11 +68,9 @@ class AndroidArtworkResolver(
         val bytes = persistedAsset?.let(::readPersistedArtwork)
             ?: selector.load(request.cacheKey)
             ?: run {
-            failedCache.put(cacheKey, true)
             return null
         }
         val bitmap = decodeSampled(bytes, targetPx) ?: run {
-            failedCache.put(cacheKey, true)
             return null
         }
         diskCache?.put(cacheKey, bytes)
@@ -74,9 +79,8 @@ class AndroidArtworkResolver(
     }
 
     fun invalidate(request: ArtworkRequest, targetPx: Int) {
-        val cacheKey = ArtworkCacheKey.forThumbnail(request.cacheKey, targetPx)
+        val cacheKey = ArtworkCacheKey.forThumbnail(request.cacheKey, ArtworkCacheKey.targetBucket(targetPx))
         bitmapCache.remove(cacheKey)
-        failedCache.remove(cacheKey)
         diskCache?.invalidate(cacheKey)
     }
 

@@ -114,13 +114,17 @@ fun LibraryCollectionScreen(
 @Composable
 private fun CollectionHeader(
     type: LibraryCollectionType,
-    total: Int,
+    total: Int?,
 ) {
     Column(modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 10.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(collectionLabel(type).lowercase().replaceFirstChar { it.uppercase() }, color = Color.White, fontSize = 26.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("$total koleksiyon", color = CollectionMuted, fontSize = 14.sp)
+                Text(
+                    text = total?.let { "$it koleksiyon" } ?: "Koleksiyon sayısı yükleniyor…",
+                    color = CollectionMuted,
+                    fontSize = 14.sp,
+                )
             }
         }
     }

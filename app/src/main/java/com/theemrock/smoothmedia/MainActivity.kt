@@ -453,6 +453,7 @@ class MainActivity : ComponentActivity() {
         collectionViewModel = LibraryCollectionViewModel(
             pageLoader = libraryRepository::loadCollections,
             totalLoader = libraryRepository::countCollections,
+            pageAndTotalLoader = libraryRepository::loadCollectionsWithTotal,
         )
         setContent {
             SmoothMediaTheme {
@@ -1439,9 +1440,8 @@ class MainActivity : ComponentActivity() {
     private fun refreshArtistAlbumPreviews(rows: List<LibraryCollectionRow> = collectionViewModel.state.value.collections) {
         val missingRows = rows.filterNot { it.title in artistAlbumPreviews }
         if (missingRows.isEmpty()) return
-        val previews = missingRows.associate { row ->
-            row.title to libraryRepository.loadArtistAlbumPreviews(row.title)
-        }
+        val previewRows = libraryRepository.loadArtistAlbumPreviews(missingRows.map { it.title })
+        val previews = missingRows.associate { row -> row.title to previewRows[row.title].orEmpty() }
         runOnUiThread {
             if (!isDestroyed) artistAlbumPreviews = artistAlbumPreviews + previews
         }

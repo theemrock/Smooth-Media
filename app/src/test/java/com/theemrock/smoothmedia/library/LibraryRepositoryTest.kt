@@ -1,5 +1,6 @@
 package com.theemrock.smoothmedia.library
 
+import com.theemrock.smoothmedia.catalog.database.dao.LibraryArtistAlbumPreviewRow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -116,6 +117,96 @@ class LibraryRepositoryTest {
         assertEquals(1, viewModel.state.value.totalCollections)
         assertEquals(listOf("Album"), viewModel.state.value.collections.map { it.title })
         assertEquals(listOf(0 to 1), calls)
+    }
+
+    @Test
+    fun collectionViewModel_usesCombinedPageAndTotalForInitialAlbums() {
+        var combinedCalls = 0
+        var separatePageCalls = 0
+        var separateTotalCalls = 0
+        val viewModel = LibraryCollectionViewModel(
+            pageLoader = { _, _, _ ->
+                separatePageCalls++
+                error("Albums initial load must use the combined loader")
+            },
+            totalLoader = {
+                separateTotalCalls++
+                error("Albums initial load must use the combined loader")
+            },
+            pageAndTotalLoader = { type, offset, limit ->
+                combinedCalls++
+                assertEquals(LibraryCollectionType.ALBUMS, type)
+                assertEquals(0, offset)
+                assertEquals(2, limit)
+                LibraryCollectionPage(
+                    collections = listOf(LibraryCollectionRow("album-1", "Album", "Artist", 2)),
+                    hasMore = true,
+                    totalCollections = 5,
+                )
+            },
+        )
+
+        viewModel.loadInitial(LibraryCollectionType.ALBUMS, pageSize = 2)
+
+        assertEquals(1, combinedCalls)
+        assertEquals(0, separatePageCalls)
+        assertEquals(0, separateTotalCalls)
+        assertEquals(5, viewModel.state.value.totalCollections)
+    }
+
+    @Test
+    fun collectionViewModel_showsZeroOnlyAfterLoadedEmptyCombinedPage() {
+        val viewModel = LibraryCollectionViewModel(
+            pageLoader = { _, _, _ -> error("combined loader must be used") },
+            totalLoader = { error("combined loader must be used") },
+            pageAndTotalLoader = { _, _, _ ->
+                LibraryCollectionPage(
+                    collections = emptyList(),
+                    hasMore = false,
+                    totalCollections = 0,
+                )
+            },
+        )
+
+        viewModel.loadInitial(LibraryCollectionType.ARTISTS, pageSize = 2)
+
+        assertEquals(0, viewModel.state.value.totalCollections)
+        assertTrue(viewModel.state.value.loaded)
+    }
+
+    @Test
+    fun artistAlbumPreviewBatch_emptyPageReturnsNoQueriesAndNoRows() {
+        assertEquals(emptyMap<String, List<LibraryArtistAlbumPreview>>(), mapArtistAlbumPreviewRows(emptyList(), emptyList()))
+    }
+
+    @Test
+    fun artistAlbumPreviewBatch_oneArtistPreservesOrderedAlbumsAndMissingArtistIsEmpty() {
+        val result = mapArtistAlbumPreviewRows(
+            artists = listOf("Björk", "Missing"),
+            rows = listOf(
+                LibraryArtistAlbumPreviewRow("Björk", "Album A", "Björk"),
+                LibraryArtistAlbumPreviewRow("Björk", "Album B", "Björk"),
+            ),
+        )
+
+        assertEquals(listOf("Album A", "Album B"), result["Björk"]?.map { it.album })
+        assertEquals(emptyList<LibraryArtistAlbumPreview>(), result["Missing"])
+    }
+
+    @Test
+    fun artistAlbumPreviewBatch_fiftyArtistsKeepsEachPageArtistIndependent() {
+        val artists = (1..50).map { "Artist $it" }
+        val rows = artists.flatMap { artist ->
+            listOf(
+                LibraryArtistAlbumPreviewRow(artist, "$artist Album 1", artist),
+                LibraryArtistAlbumPreviewRow(artist, "$artist Album 2", artist),
+            )
+        }
+
+        val result = mapArtistAlbumPreviewRows(artists, rows)
+
+        assertEquals(50, result.size)
+        assertEquals(listOf("Artist 50 Album 1", "Artist 50 Album 2"), result["Artist 50"]?.map { it.album })
     }
 
     @Test

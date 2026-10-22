@@ -4,6 +4,11 @@ import java.io.File
 import java.security.MessageDigest
 
 object ArtworkCacheKey {
+    fun targetBucket(targetPx: Int): Int {
+        val target = targetPx.coerceAtLeast(1)
+        return listOf(96, 128, 192, 720).firstOrNull { it >= target } ?: target
+    }
+
     fun forThumbnail(assetKey: String, targetPx: Int, sourceVersion: String = "v1"): String =
         "$assetKey|$targetPx|$sourceVersion"
 }

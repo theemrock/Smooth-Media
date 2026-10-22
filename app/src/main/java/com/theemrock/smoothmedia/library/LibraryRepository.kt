@@ -8,6 +8,8 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import androidx.sqlite.db.SimpleSQLiteQuery
 import com.theemrock.smoothmedia.catalog.database.dao.LibraryDao
+import com.theemrock.smoothmedia.catalog.database.dao.LibraryCollectionWithTotalRow
+import com.theemrock.smoothmedia.catalog.database.dao.LibraryArtistAlbumPreviewRow
 import com.theemrock.smoothmedia.catalog.database.dao.SafDocumentDao
 import com.theemrock.smoothmedia.catalog.database.entity.SafDocumentEntity
 
@@ -101,6 +103,17 @@ data class LibraryArtistAlbumPreview(
     val albumArtist: String,
 )
 
+internal fun mapArtistAlbumPreviewRows(
+    artists: List<String>,
+    rows: List<LibraryArtistAlbumPreviewRow>,
+): Map<String, List<LibraryArtistAlbumPreview>> =
+    artists.distinct().associateWith { artist ->
+        rows.asSequence()
+            .filter { it.artist == artist }
+            .map { LibraryArtistAlbumPreview(it.album, it.albumArtist) }
+            .toList()
+    }
+
 /** Canonical album rows used when entering Album Detail from Artist Detail. */
 data class LibraryArtistAlbumRow(
     val key: String,
@@ -131,6 +144,7 @@ data class LibraryArtworkCandidate(
 data class LibraryCollectionPage(
     val collections: List<LibraryCollectionRow>,
     val hasMore: Boolean,
+    val totalCollections: Int? = null,
 )
 
 enum class LibrarySearchCategory { SONGS, ARTISTS, ALBUMS, GENRES, FOLDERS }
@@ -405,6 +419,39 @@ class RoomLibraryRepository(
     private val dao: LibraryDao,
     private val safDocumentDao: SafDocumentDao? = null,
 ) : LibraryRepository, LibraryCollectionRepository, FilteredLibraryRepository, LibraryArtworkCandidateRepository, LibrarySearchRepository {
+    fun loadCollectionsWithTotal(
+        type: LibraryCollectionType,
+        offset: Int,
+        limit: Int,
+    ): LibraryCollectionPage {
+        require(offset >= 0) { "offset must be non-negative" }
+        require(limit > 0) { "limit must be positive" }
+        if (type != LibraryCollectionType.ALBUMS && type != LibraryCollectionType.ARTISTS) {
+            val page = loadCollections(type, offset, limit)
+            return page.copy(totalCollections = countCollections(type))
+        }
+        val rows = when (type) {
+            LibraryCollectionType.ALBUMS -> dao.loadAlbumsWithTotal(offset, limit + 1)
+            LibraryCollectionType.ARTISTS -> dao.loadArtistsWithTotal(offset, limit + 1)
+            else -> error("Unsupported combined collection type")
+        }
+        return LibraryCollectionPage(
+            collections = rows.take(limit).map { row ->
+                LibraryCollectionRow(
+                    key = row.key,
+                    title = row.title,
+                    subtitle = row.subtitle,
+                    trackCount = row.trackCount,
+                    albumCount = row.albumCount,
+                    mp3Count = row.mp3Count,
+                    flacCount = row.flacCount,
+                )
+            },
+            hasMore = rows.size > limit,
+            totalCollections = rows.firstOrNull()?.totalCount ?: 0,
+        )
+    }
+
     override fun search(query: String, limit: Int, offset: Int): LibrarySearchPage {
         val normalized = LibrarySearchQuery.normalize(query) ?: return LibrarySearchPage()
         require(limit > 0) { "limit must be positive" }
@@ -564,6 +611,61 @@ class RoomLibraryRepository(
 
     fun loadArtistAlbumPreviews(artist: String, limit: Int = 3): List<LibraryArtistAlbumPreview> =
         dao.loadArtistAlbumPreviews(artist, limit).map { LibraryArtistAlbumPreview(it.album, it.albumArtist) }
+
+    fun loadArtistAlbumPreviews(artists: List<String>, limit: Int = 3): Map<String, List<LibraryArtistAlbumPreview>> {
+        require(limit > 0) { "limit must be positive" }
+        val distinctArtists = artists.distinct()
+        if (distinctArtists.isEmpty()) return emptyMap()
+        val placeholders = distinctArtists.joinToString(",") { "?" }
+        val args = arrayOf<Any?>(*distinctArtists.toTypedArray(), limit)
+        return dao.loadArtistAlbumPreviewsRaw(
+            SimpleSQLiteQuery(
+                """
+                WITH artist_albums AS (
+                    SELECT
+                        COALESCE(artist_override.value, m.normalizedArtist) AS artist,
+                        COALESCE(album_override.value, m.normalizedAlbum) AS album,
+                        COALESCE(album_artist_override.value, m.normalizedAlbumArtist, '') AS albumArtist,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY COALESCE(artist_override.value, m.normalizedArtist)
+                            ORDER BY
+                                COALESCE(album_override.value, m.normalizedAlbum) COLLATE NOCASE,
+                                COALESCE(album_artist_override.value, m.normalizedAlbumArtist, '') COLLATE NOCASE
+                        ) AS previewRank
+                    FROM tracks AS t
+                    LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
+                    LEFT JOIN track_metadata_overrides AS artist_override
+                        ON artist_override.trackId = t.track_id AND artist_override.fieldName = 'ARTIST'
+                    LEFT JOIN track_metadata_overrides AS album_override
+                        ON album_override.trackId = t.track_id AND album_override.fieldName = 'ALBUM'
+                    LEFT JOIN track_metadata_overrides AS album_artist_override
+                        ON album_artist_override.trackId = t.track_id AND album_artist_override.fieldName = 'ALBUM_ARTIST'
+                    WHERE t.catalog_lifecycle = 'ACTIVE'
+                      AND COALESCE(artist_override.value, m.normalizedArtist) IN ($placeholders)
+                      AND COALESCE(album_override.value, m.normalizedAlbum) IS NOT NULL
+                      AND trim(COALESCE(album_override.value, m.normalizedAlbum)) <> ''
+                      AND (
+                          NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id = t.track_id)
+                          OR EXISTS (
+                              SELECT 1
+                              FROM track_locations visible_l
+                              LEFT JOIN locator_bindings visible_b ON visible_b.location_id = visible_l.location_id
+                              LEFT JOIN catalog_exclusions visible_e
+                                  ON visible_e.source_id = visible_l.source_id AND visible_e.locator = visible_b.locator
+                              WHERE visible_l.track_id = t.track_id AND visible_e.exclusion_id IS NULL
+                          )
+                      )
+                    GROUP BY artist, album, albumArtist
+                )
+                SELECT artist, album, albumArtist
+                FROM artist_albums
+                WHERE previewRank <= ?
+                ORDER BY artist COLLATE NOCASE, album COLLATE NOCASE, albumArtist COLLATE NOCASE
+                """.trimIndent(),
+                args,
+            ),
+        ).let { rows -> mapArtistAlbumPreviewRows(distinctArtists, rows) }
+    }
 
     fun loadArtistAlbumRows(artist: String, limit: Int = 2000): List<LibraryCollectionRow> {
         require(limit > 0) { "limit must be positive" }
@@ -881,7 +983,7 @@ class LibraryViewModel(
 data class LibraryCollectionUiState(
     val type: LibraryCollectionType = LibraryCollectionType.ALBUMS,
     val collections: List<LibraryCollectionRow> = emptyList(),
-    val totalCollections: Int = 0,
+    val totalCollections: Int? = null,
     val loaded: Boolean = false,
     val loading: Boolean = false,
     val hasMore: Boolean = true,
@@ -891,6 +993,7 @@ data class LibraryCollectionUiState(
 class LibraryCollectionViewModel(
     private val pageLoader: (type: LibraryCollectionType, offset: Int, limit: Int) -> LibraryCollectionPage,
     private val totalLoader: (type: LibraryCollectionType) -> Int,
+    private val pageAndTotalLoader: ((type: LibraryCollectionType, offset: Int, limit: Int) -> LibraryCollectionPage)? = null,
 ) {
     val state: MutableState<LibraryCollectionUiState> = mutableStateOf(LibraryCollectionUiState())
 
@@ -903,13 +1006,14 @@ class LibraryCollectionViewModel(
         nextOffset = 0
         state.value = LibraryCollectionUiState(type = type, loading = true)
         runCatching {
-            pageLoader(type, 0, pageSize) to totalLoader(type)
-        }.onSuccess { (page, total) ->
+            pageAndTotalLoader?.invoke(type, 0, pageSize)
+                ?: pageLoader(type, 0, pageSize).copy(totalCollections = totalLoader(type))
+        }.onSuccess { page ->
             nextOffset = page.collections.size
             state.value = LibraryCollectionUiState(
                 type = type,
                 collections = page.collections,
-                totalCollections = total,
+                totalCollections = page.totalCollections ?: 0,
                 loaded = true,
                 hasMore = page.hasMore,
             )

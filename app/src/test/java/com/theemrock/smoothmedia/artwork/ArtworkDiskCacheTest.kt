@@ -9,6 +9,14 @@ import org.junit.Test
 
 class ArtworkDiskCacheTest {
     @Test
+    fun targetBucketNeverUsesSmallerDecodeForLargerRequest() {
+        assertEquals(96, ArtworkCacheKey.targetBucket(64))
+        assertEquals(128, ArtworkCacheKey.targetBucket(100))
+        assertEquals(192, ArtworkCacheKey.targetBucket(192))
+        assertEquals(1000, ArtworkCacheKey.targetBucket(1000))
+    }
+
+    @Test
     fun cacheStoresAndReturnsEncodedArtwork() {
         val root = Files.createTempDirectory("artwork-cache-").toFile()
         try {
