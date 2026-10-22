@@ -11,6 +11,7 @@ import com.theemrock.smoothmedia.catalog.database.entity.StoredFileHash
 import com.theemrock.smoothmedia.catalog.identity.AudioFormat
 import com.theemrock.smoothmedia.catalog.model.LocationAvailability
 import java.io.ByteArrayOutputStream
+import java.security.MessageDigest
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import java.util.concurrent.atomic.AtomicInteger
@@ -78,11 +79,14 @@ class IsolatedMetadataTagLibDeviceTest {
     @Test
     fun flacReadWritePreservesPictureAndSelectedFields() {
         val uri = providerUri("synthetic.flac")
+        val beforeBytes = readBytes(uri)
         val before = read(uri)
         assertEquals(title, before.properties["TITLE"]!!.single())
         assertEquals(listOf("Rock", "Anadolu Rock"), before.properties["GENRE"])
         assertEquals(listOf("keep-me"), before.properties["CUSTOM"])
-        assertEquals(1, before.pictures.size)
+        assertEquals(2, before.pictures.size)
+        val beforeLayout = parseFlac(beforeBytes)
+        assertFlacFixture(beforeLayout)
 
         val result = session().write(
             target(uri, AudioFormat.FLAC, hash(uri)),
@@ -94,7 +98,39 @@ class IsolatedMetadataTagLibDeviceTest {
         assertEquals(listOf(title), written.snapshot.properties["TITLE"])
         assertEquals(listOf("Rock", "Anadolu Rock"), written.snapshot.properties["GENRE"])
         assertEquals(listOf("keep-me"), written.snapshot.properties["CUSTOM"])
-        assertEquals(1, written.snapshot.pictures.size)
+        assertEquals(2, written.snapshot.pictures.size)
+        val afterBytes = readBytes(uri)
+        val afterLayout = parseFlac(afterBytes)
+        assertFlacPictureAndAudioPreserved(beforeLayout, afterLayout, "artist")
+        logFlacDiff(beforeLayout, afterLayout, "artist")
+    }
+
+    @Test
+    fun flacNoOpRoundTripReportsLayoutAndPreservesPicturesAndAudio() {
+        val uri = providerUri("synthetic.flac")
+        val beforeBytes = readBytes(uri)
+        val beforeLayout = parseFlac(beforeBytes)
+        val before = read(uri)
+
+        val result = session().write(
+            target(uri, AudioFormat.FLAC, hash(uri)),
+            FileTagEditMapper.toChange(before, FileTagEdit()),
+        )
+
+        assertTrue(result is MetadataFileWriteOutcome.Written)
+        val afterBytes = readBytes(uri)
+        val afterLayout = parseFlac(afterBytes)
+        assertFlacPictureAndAudioPreserved(beforeLayout, afterLayout, "no-op")
+        logFlacDiff(beforeLayout, afterLayout, "no-op")
+        android.util.Log.i(TAG, "FLAC_NOOP_FILE_SHA|before=${sha256(beforeBytes)}|after=${sha256(afterBytes)}|equal=${beforeBytes.contentEquals(afterBytes)}")
+    }
+
+    @Test
+    fun flacPictureReplacementPathIsNotImplicitlyExercisedByMetadataEdit() {
+        val before = read(providerUri("synthetic.flac"))
+        val change = FileTagEditMapper.toChange(before, FileTagEdit(artist = "Yeni Sanatçı"))
+
+        assertEquals(null, change.pictures)
     }
 
     @Test
@@ -175,16 +211,126 @@ class IsolatedMetadataTagLibDeviceTest {
 
     private fun syntheticFlac(): ByteArray {
         val streamInfo = ByteArray(34)
-        ByteBuffer.wrap(streamInfo).order(ByteOrder.BIG_ENDIAN).putShort(4096.toShort()).putShort(4096.toShort())
-        val sampleAndChannels = (44100L shl 44) or (15L shl 36)
+        ByteBuffer.wrap(streamInfo).order(ByteOrder.BIG_ENDIAN).putShort(192.toShort()).putShort(192.toShort())
+        val sampleAndChannels = (44100L shl 44) or (15L shl 36) or 192L
         for (shift in 7 downTo 0) streamInfo[18 + (7 - shift)] = (sampleAndChannels ushr (shift * 8)).toByte()
         val values = listOf("TITLE=$title", "ARTIST=$artist", "GENRE=Rock", "GENRE=Anadolu Rock", "CUSTOM=keep-me")
         val comments = ByteArrayOutputStream().apply { values.forEach { write(littleString(it)) } }.toByteArray()
         val vorbis = littleString("Smooth Synthetic") + littleInt(values.size) + comments
-        val picture = ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(3).array() + bigString("image/png") +
-            bigString("synthetic") + ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN).putInt(1).putInt(1)
-                .putInt(24).putInt(0).putInt(pngBytes().size).array() + pngBytes()
-        return "fLaC".toByteArray() + block(false, 0, streamInfo) + block(false, 4, vorbis) + block(true, 6, picture)
+        val pictureOne = pictureBlock(type = 3, mime = "image/png", description = "front", data = pngBytes())
+        val pictureTwo = pictureBlock(type = 4, mime = "image/png", description = "back", data = pngBytes())
+        val padding = ByteArray(32)
+        val frame = silentFlacFrame()
+        return "fLaC".toByteArray() +
+            block(false, 0, streamInfo) +
+            block(false, 4, vorbis) +
+            block(false, 1, padding) +
+            block(false, 6, pictureOne) +
+            block(true, 6, pictureTwo) +
+            frame
+    }
+
+    private fun pictureBlock(type: Int, mime: String, description: String, data: ByteArray): ByteArray =
+        ByteBuffer.allocate(4).order(ByteOrder.BIG_ENDIAN).putInt(type).array() + bigString(mime) +
+            bigString(description) + ByteBuffer.allocate(20).order(ByteOrder.BIG_ENDIAN).putInt(1).putInt(1)
+                .putInt(8).putInt(0).putInt(data.size).array() + data
+
+    /** One valid FLAC constant subframe containing 192 silent 16-bit samples. */
+    private fun silentFlacFrame(): ByteArray {
+        val header = byteArrayOf(0xFF.toByte(), 0xF8.toByte(), 0x19, 0x18)
+        val headerWithCrc = header + crc8(header).toByte()
+        val frameWithoutCrc = headerWithCrc + byteArrayOf(0x00, 0x00)
+        return frameWithoutCrc + byteArrayOf(crc16(frameWithoutCrc).ushr(8).toByte(), crc16(frameWithoutCrc).toByte())
+    }
+
+    private fun parseFlac(bytes: ByteArray): FlacLayout {
+        require(bytes.copyOfRange(0, 4).contentEquals("fLaC".toByteArray()))
+        var offset = 4
+        val blocks = mutableListOf<FlacBlock>()
+        while (true) {
+            val header = bytes[offset].toInt() and 0xFF
+            val last = header and 0x80 != 0
+            val type = header and 0x7F
+            val length = ((bytes[offset + 1].toInt() and 0xFF) shl 16) or
+                ((bytes[offset + 2].toInt() and 0xFF) shl 8) or
+                (bytes[offset + 3].toInt() and 0xFF)
+            val payload = bytes.copyOfRange(offset + 4, offset + 4 + length)
+            blocks += FlacBlock(type, payload)
+            offset += 4 + length
+            if (last) break
+        }
+        return FlacLayout(blocks, bytes.copyOfRange(offset, bytes.size))
+    }
+
+    private fun assertFlacFixture(layout: FlacLayout) {
+        assertEquals(listOf(0, 4, 1, 6, 6), layout.blocks.map { it.type })
+        assertEquals(2, layout.pictures.size)
+        assertEquals(listOf(3, 4), layout.pictures.map { it.type })
+        assertEquals(listOf("front", "back"), layout.pictures.map { it.description })
+        assertTrue(layout.audio.isNotEmpty())
+    }
+
+    private fun assertFlacPictureAndAudioPreserved(before: FlacLayout, after: FlacLayout, label: String) {
+        assertEquals("$label picture count", before.pictures.size, after.pictures.size)
+        assertEquals("$label picture metadata", before.pictures.map { it.signature }, after.pictures.map { it.signature })
+        assertEquals("$label audio SHA-256", sha256(before.audio), sha256(after.audio))
+    }
+
+    private fun logFlacDiff(before: FlacLayout, after: FlacLayout, label: String) {
+        android.util.Log.i(TAG, "FLAC_LAYOUT|label=$label|beforeTypes=${before.blocks.map { it.type }}|afterTypes=${after.blocks.map { it.type }}|beforePadding=${before.paddingBytes}|afterPadding=${after.paddingBytes}|beforeAudioSha=${sha256(before.audio)}|afterAudioSha=${sha256(after.audio)}|beforePictures=${before.pictures.map { it.signature }}|afterPictures=${after.pictures.map { it.signature }}")
+    }
+
+    private fun crc16(bytes: ByteArray): Int {
+        var crc = 0
+        bytes.forEach { value ->
+            crc = crc xor ((value.toInt() and 0xFF) shl 8)
+            repeat(8) { crc = if (crc and 0x8000 != 0) (crc shl 1 xor 0x8005) and 0xFFFF else (crc shl 1) and 0xFFFF }
+        }
+        return crc
+    }
+
+    private fun crc8(bytes: ByteArray): Int {
+        var crc = 0
+        bytes.forEach { value ->
+            crc = crc xor (value.toInt() and 0xFF)
+            repeat(8) { crc = if (crc and 0x80 != 0) (crc shl 1 xor 0x07) and 0xFF else (crc shl 1) and 0xFF }
+        }
+        return crc
+    }
+
+    private data class FlacBlock(val type: Int, val payload: ByteArray)
+    private data class FlacPicture(val type: Int, val mime: String, val description: String, val payload: ByteArray) {
+        val signature: String get() = "$type|$mime|$description|${sha256(payload)}|${payload.size}"
+    }
+    private data class FlacLayout(val blocks: List<FlacBlock>, val audio: ByteArray) {
+        val pictures: List<FlacPicture>
+            get() = blocks.filter { it.type == 6 }.map { parsePicture(it.payload) }
+        val paddingBytes: Int get() = blocks.filter { it.type == 1 }.sumOf { it.payload.size }
+    }
+
+    private companion object {
+        const val TAG = "SmoothMediaIsolatedTagLib"
+
+        fun sha256(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+            .digest(bytes).joinToString("") { "%02x".format(it) }
+
+        fun parsePicture(bytes: ByteArray): FlacPicture {
+            var offset = 0
+            val type = intAt(bytes, offset); offset += 4
+            val mimeLength = intAt(bytes, offset); offset += 4
+            val mime = bytes.copyOfRange(offset, offset + mimeLength).toString(Charsets.UTF_8); offset += mimeLength
+            val descriptionLength = intAt(bytes, offset); offset += 4
+            val description = bytes.copyOfRange(offset, offset + descriptionLength).toString(Charsets.UTF_8); offset += descriptionLength
+            offset += 16
+            val payloadLength = intAt(bytes, offset); offset += 4
+            return FlacPicture(type, mime, description, bytes.copyOfRange(offset, offset + payloadLength))
+        }
+
+        fun intAt(bytes: ByteArray, offset: Int): Int =
+            ((bytes[offset].toInt() and 0xFF) shl 24) or
+                ((bytes[offset + 1].toInt() and 0xFF) shl 16) or
+                ((bytes[offset + 2].toInt() and 0xFF) shl 8) or
+                (bytes[offset + 3].toInt() and 0xFF)
     }
 
     private fun frame(id: String, payload: ByteArray) = id.toByteArray() + synchsafe(payload.size) + byteArrayOf(0, 0) + payload
