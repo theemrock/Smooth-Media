@@ -55,6 +55,8 @@ import com.theemrock.smoothmedia.playback.PlaybackQueueController
 import com.theemrock.smoothmedia.playback.QueueItem
 import com.theemrock.smoothmedia.playback.RepeatMode
 import com.theemrock.smoothmedia.playback.PlaybackQueueStore
+import com.theemrock.smoothmedia.playback.PlaybackWindow
+import com.theemrock.smoothmedia.playback.PlaybackWindowResolver
 import com.theemrock.smoothmedia.playback.QueueMode
 import com.theemrock.smoothmedia.artwork.AndroidArtworkResolver
 import com.theemrock.smoothmedia.artwork.ArtworkDiskCache
@@ -224,6 +226,7 @@ class MainActivity : ComponentActivity() {
     private var manualEqualizerEnabled by mutableStateOf(true)
     private var lastPlaybackEntryId: String? = null
     private var lastPersistedPlaybackPosition = 0L
+    private var activeGhostPlaybackWindowEntryIds: List<String> = emptyList()
     private lateinit var equalizerProfileStore: EqualizerProfileStore
     private lateinit var libraryViewModel: LibraryViewModel
     private lateinit var collectionViewModel: LibraryCollectionViewModel
@@ -312,6 +315,11 @@ class MainActivity : ComponentActivity() {
                     lastPlaybackEntryId = entryId
                     val index = queueController.state.value.items.indexOfFirst { it.entryId == entryId }
                     if (index >= 0) updateNowPlayingItem(index)
+                    val domainOrder = queueController.orderedForPlayback()
+                    val hasFollowingDomainItem = domainOrder.indexOfFirst { it.entryId == entryId } < domainOrder.lastIndex
+                    if (queueController.state.value.mode == QueueMode.GHOST && PlaybackWindow.needsRefresh(activeGhostPlaybackWindowEntryIds, entryId, hasFollowingDomainItem)) {
+                        syncQueueToSession(playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true)
+                    }
                 }
                 if (entryChanged || abs(position - lastPersistedPlaybackPosition) >= 5_000L) {
                     persistQueue()
@@ -932,11 +940,23 @@ class MainActivity : ComponentActivity() {
         val items = queueController.orderedForPlayback()
         if (items.isEmpty()) return
         val currentEntryId = queueController.state.value.current?.entryId
-        val startIndex = items.indexOfFirst { it.entryId == currentEntryId }.coerceAtLeast(0)
+        val isGhostContext = queueController.state.value.mode == QueueMode.GHOST
+        val window = currentEntryId?.takeIf { isGhostContext }?.let { PlaybackWindow.select(items, it) }
+        val itemsForSession = window?.items ?: items
+        val startIndex = window?.selectedIndex ?: itemsForSession.indexOfFirst { it.entryId == currentEntryId }.coerceAtLeast(0)
         executor.execute {
             val resolver = CatalogPlaybackLocationResolver(runtime.database)
-            val locations = items.mapNotNull { item -> resolver.resolve(item.trackId).firstOrNull()?.let { item.entryId to it } }.toMap()
-            runOnUiThread { playbackClient.loadQueue(items, locations, startIndex = startIndex, startPositionMs = if (preservePosition) playbackState.positionMs else 0L, playWhenReady = playWhenReady) }
+            val resolution = if (isGhostContext && currentEntryId != null) {
+                PlaybackWindowResolver.resolve(items, currentEntryId) { item -> resolver.resolve(item.trackId).firstOrNull() }
+            } else null
+            val resolvedItems = resolution?.items ?: itemsForSession
+            val locations = resolution?.locations
+                ?: resolvedItems.mapNotNull { item -> resolver.resolve(item.trackId).firstOrNull()?.let { item.entryId to it } }.toMap()
+            val resolvedStartIndex = resolution?.startIndex ?: startIndex
+            runOnUiThread {
+                activeGhostPlaybackWindowEntryIds = if (isGhostContext) resolvedItems.map { it.entryId } else emptyList()
+                playbackClient.loadQueue(resolvedItems, locations, startIndex = resolvedStartIndex, startPositionMs = if (preservePosition) playbackState.positionMs else 0L, playWhenReady = playWhenReady)
+            }
         }
     }
 

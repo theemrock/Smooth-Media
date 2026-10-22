@@ -39,6 +39,6 @@ An unresolved or inaccessible location is excluded only from the Media3 window, 
 - Shuffle, repeat, Previous/Next, and Ghost-to-User takeover continue to use the full domain queue.
 - Existing `PlaybackQueueTest` coverage remains valid.
 
-## Verification limitation
+## Verification status and limitation
 
-The local Gradle test task currently fails before compilation with `Unable to establish loopback connection`. The implementation will retain source-level and focused unit-test evidence, but a passing Gradle run and device benchmark require repairing that local environment first.
+The local Gradle test environment runs with Android Studio JBR and process-local `ANDROID_HOME`; the focused playback tests and full JVM unit-test suite pass. A connected-device benchmark still requires a separate debug package and an already-granted debug SAF source. It must not use, alter, or reset the production package, production Room data, production SAF grants, media files, or audio-volume setting.
