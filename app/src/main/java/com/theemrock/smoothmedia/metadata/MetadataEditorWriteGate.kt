@@ -9,6 +9,11 @@ enum class MetadataEditorWriteDecision {
 class MetadataEditorWriteGate(
     private val physicalWritesEnabled: Boolean = false,
 ) {
+    companion object {
+        /** The application composition root opts into physical ID3 writes explicitly. */
+        fun production(): MetadataEditorWriteGate = MetadataEditorWriteGate(physicalWritesEnabled = true)
+    }
+
     fun decision(): MetadataEditorWriteDecision =
         if (physicalWritesEnabled) MetadataEditorWriteDecision.ALLOWED
         else MetadataEditorWriteDecision.BLOCKED

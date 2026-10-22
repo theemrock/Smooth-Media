@@ -105,6 +105,8 @@ import com.theemrock.smoothmedia.metadata.TrackMetadataEnrichmentUseCase
 import com.theemrock.smoothmedia.metadata.GenreMetadataBackfill
 import com.theemrock.smoothmedia.metadata.MetadataEditorCoordinator
 import com.theemrock.smoothmedia.metadata.MetadataEditorState
+import com.theemrock.smoothmedia.metadata.MetadataEditorWriteDecision
+import com.theemrock.smoothmedia.metadata.MetadataEditorWriteGate
 import com.theemrock.smoothmedia.source.AndroidSelectedTreeParser
 import com.theemrock.smoothmedia.source.SourceRegistryFactory
 import com.theemrock.smoothmedia.source.SourceRegistryRuntime
@@ -202,6 +204,7 @@ class MainActivity : ComponentActivity() {
     private var genreBackfillStatus by mutableStateOf<String?>(null)
     private lateinit var genreMetadataBackfill: GenreMetadataBackfill
     private lateinit var metadataEditorCoordinator: MetadataEditorCoordinator
+    private val metadataEditorWriteGate = MetadataEditorWriteGate.production()
     private val metadataAutonomousTriggerRunning = AtomicBoolean(false)
     private var dashboardData by mutableStateOf<LibraryDashboardData?>(null)
     private var showDashboard by mutableStateOf(true)
@@ -287,7 +290,11 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
         runtime = SourceRegistryFactory.create(this)
         playlistRepository = PlaylistRepository(runtime.database)
-        metadataEditorCoordinator = MetadataEditorCoordinator(runtime.database, contentResolver)
+        metadataEditorCoordinator = MetadataEditorCoordinator(
+            runtime.database,
+            contentResolver,
+            writeGate = metadataEditorWriteGate,
+        )
         metadataAutonomousSettings = SharedPreferencesMetadataAutonomousSettings(this)
         metadataAutonomousEnabled = metadataAutonomousSettings.enabled
         // No verified in-app WAL backup provider exists yet; keep the switch
@@ -482,6 +489,7 @@ class MainActivity : ComponentActivity() {
                             saving = metadataEditorSaving,
                             progress = metadataEditorProgress,
                             error = metadataEditorError,
+                            writingEnabled = metadataEditorWriteGate.decision() == MetadataEditorWriteDecision.ALLOWED,
                             onChange = { metadataEditorState = it },
                             onSave = ::saveMetadataEditor,
                             onCancel = ::closeMetadataEditor,
