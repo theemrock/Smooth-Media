@@ -26,6 +26,19 @@ enum class FlacVerificationMismatch {
 
 /** Independent comparison boundary; audio hash and parsed PICTURE data come from callers. */
 object MetadataArtifactVerification {
+    fun summarize(inspection: FlacInspection): FlacVerificationSummary =
+        FlacVerificationSummary(
+            audioSha256 = inspection.audioSha256,
+            pictures = inspection.pictures.map { picture ->
+                PictureFingerprint(
+                    pictureType = picture.pictureType.toString(),
+                    mimeType = picture.mimeType,
+                    description = picture.description,
+                    payloadSha256 = picture.payloadSha256,
+                )
+            },
+        )
+
     fun summarize(audioSha256: String, snapshot: FileTagSnapshot): FlacVerificationSummary =
         FlacVerificationSummary(
             audioSha256 = audioSha256,
