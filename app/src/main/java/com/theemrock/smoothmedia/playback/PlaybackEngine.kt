@@ -9,10 +9,15 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
+import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
+import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.theemrock.smoothmedia.eq.AndroidEqualizerBackend
+import com.theemrock.smoothmedia.eq.AutoEqAudioProcessor
 import com.theemrock.smoothmedia.eq.EqualizerBand
 import com.theemrock.smoothmedia.eq.EqualizerProfileStore
+import com.theemrock.smoothmedia.eq.ParametricEq
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -39,8 +44,12 @@ interface PlaybackEngine : AutoCloseable {
     fun equalizerBands(): List<EqualizerBand> = emptyList()
     fun applyManualEqualizer(levels: Map<Short, Int>): Boolean = false
     fun setEqualizerEnabled(enabled: Boolean): Boolean = false
+    fun applyAutoEq(text: String?): Boolean = false
     override fun close()
 }
+
+internal const val AUTOEQ_PREF_NAME = "autoeq"
+internal const val AUTOEQ_PREF_KEY = "profile_text"
 
 class Media3PlaybackEngine(
     context: Context,
@@ -51,7 +60,18 @@ class Media3PlaybackEngine(
     private val listeners = CopyOnWriteArrayList<(PlaybackEngineState) -> Unit>()
     private var currentLocations: List<PlaybackLocation> = emptyList()
     private var currentLocationIndex: Int = -1
-    private val exoPlayer = ExoPlayer.Builder(context.applicationContext).setLooper(thread.looper).build()
+    private val autoEqProcessor = AutoEqAudioProcessor()
+    private val autoEqPrefs = context.getSharedPreferences(AUTOEQ_PREF_NAME, Context.MODE_PRIVATE)
+    private val exoPlayer = ExoPlayer.Builder(context.applicationContext)
+        .setLooper(thread.looper)
+        .setRenderersFactory(object : DefaultRenderersFactory(context.applicationContext) {
+            override fun buildAudioSink(
+                audioContext: Context,
+                enableFloatOutput: Boolean,
+                enableAudioTrackPlaybackParams: Boolean,
+            ): AudioSink = DefaultAudioSink.Builder(audioContext).setAudioProcessors(arrayOf(autoEqProcessor)).build()
+        })
+        .build()
     private val equalizerBackend = AndroidEqualizerBackend()
     private val equalizerProfile = EqualizerProfileStore(context)
     @Volatile
@@ -61,6 +81,7 @@ class Media3PlaybackEngine(
     override val player: Player get() = exoPlayer
 
     init {
+        autoEqPrefs.getString(AUTOEQ_PREF_KEY, null)?.let { autoEqProcessor.setProfile(ParametricEq.parseAutoEq(it)) }
         handler.post {
             exoPlayer.setAudioAttributes(
                 AudioAttributes.Builder()
@@ -185,6 +206,13 @@ class Media3PlaybackEngine(
     }
 
     override fun equalizerBands(): List<EqualizerBand> = onPlayerThreadBlocking { equalizerBackend.bands() }
+
+    override fun applyAutoEq(text: String?): Boolean {
+        val saved = text?.takeIf { it.isNotBlank() }
+        autoEqPrefs.edit().putString(AUTOEQ_PREF_KEY, saved).apply()
+        autoEqProcessor.setProfile(saved?.let { ParametricEq.parseAutoEq(it) })
+        return true
+    }
 
     override fun close() {
         val released = CountDownLatch(1)

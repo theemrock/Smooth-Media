@@ -6,7 +6,7 @@ import java.nio.charset.Charset
 import java.nio.charset.CodingErrorAction
 import java.nio.charset.StandardCharsets
 
-/** Byte-level decoding used by format adapters; no heuristic mojibake replacement. */
+/** Byte-level decoding used by format adapters; heuristic repair only for high-confidence cases. */
 object TagTextDecoder {
     data class RepairSuggestion(val original: String, val repaired: String)
 
@@ -24,12 +24,14 @@ object TagTextDecoder {
     }
 
     /**
-     * Repairs only high-confidence text that was decoded as a legacy single-byte
-     * charset even though its bytes were UTF-8. The original value remains the
-     * raw metadata value; callers can safely apply this repeatedly.
+     * Repairs only high-confidence text that was decoded as a legacy single-byte charset even
+     * though its bytes were UTF-8 (for example Turkish "ı" read as Latin-2 becomes "ą"). The
+     * candidate is accepted only if it round-trips to valid UTF-8 and has fewer suspicious letters.
      */
     fun normalizeText(value: String): String {
-        if (value.isEmpty() || value.none(SUSPICIOUS_MARKERS::contains)) return value
+        if (value.isEmpty() || value.none(::isSuspicious)) return value
+        val tableRepaired = TurkishMojibakeTable.repair(value)
+        if (tableRepaired != value && '�' !in tableRepaired) return tableRepaired
         val originalScore = score(value)
         return LEGACY_CHARSETS
             .asSequence()
@@ -56,12 +58,19 @@ object TagTextDecoder {
         val candidate = runCatching { decoder.decode(bytes.duplicate()).toString() }.getOrNull()
             ?: return null
         val roundTrip = candidate.toByteArray(StandardCharsets.UTF_8).contentEquals(bytes.arrayOrCopy())
-        return candidate.takeIf { roundTrip && '\uFFFD' !in it }
+        return candidate.takeIf { roundTrip && '�' !in it }
     }
 
+    /** True when the text still contains characters that point to a mis-decoded Turkish/Polish name. */
+    fun containsSuspicious(value: String): Boolean = value.any(::isSuspicious)
+
+    /** A Latin-letter marker, or a CJK ideograph (a Turkish/Polish name read through GBK/Big5). */
+    private fun isSuspicious(c: Char): Boolean =
+        c in SUSPICIOUS_MARKERS || c.code in 0x3400..0x9FFF || c.code in 0xFF61..0xFF9F
+
     private fun score(value: String): Int {
-        val suspicious = value.count(SUSPICIOUS_MARKERS::contains)
-        val replacementPenalty = if ('\uFFFD' in value) 100 else 0
+        val suspicious = value.count(::isSuspicious)
+        val replacementPenalty = if ('�' in value) 100 else 0
         val controlsPenalty = value.count { it.code in 0..8 || it.code in 14..31 }
         return -suspicious * 10 - replacementPenalty - controlsPenalty * 5
     }
@@ -73,8 +82,19 @@ object TagTextDecoder {
             duplicate().apply { rewind() }.let { copy -> ByteArray(copy.remaining()).also(copy::get) }
         }
 
-    private val SUSPICIOUS_MARKERS = setOf('Ã', 'Â', 'â', 'ð', 'Å', 'Ä', '\uFFFD')
+    /** Letters that show up when UTF-8 Turkish/Polish text is read as a legacy charset. */
+    private val SUSPICIOUS_MARKERS = setOf(
+        'Ã', 'Â', 'â', 'ð', 'Å', 'Ä', '�',
+        'Ă', 'ą', 'ź', 'Ĺ', 'ĺ', 'ž', 'Ľ', 'ľ', 'ę', 'Ę',
+    )
+
+    /** Latin-2 first: it is the charset that produced the observed Turkish mojibake (ı → "ą", ü → "Ă" + "ź"). */
     private val LEGACY_CHARSETS = listOf(
+        Charset.forName("ISO-8859-2"),
+        Charset.forName("GBK"),
+        Charset.forName("Big5"),
+        Charset.forName("Shift_JIS"),
+        Charset.forName("GBK"),
         StandardCharsets.ISO_8859_1,
         Charset.forName("windows-1252"),
         Charset.forName("windows-1254"),

@@ -9,7 +9,7 @@ import kotlin.random.Random
 
 enum class QueueMode { GHOST, USER }
 
-enum class QueueEntryOrigin { GHOST, MANUAL }
+enum class QueueEntryOrigin { GHOST, MANUAL, SUGGESTED }
 
 data class GhostPlaybackContext(
     val sourceKey: String? = null,
@@ -101,6 +101,19 @@ class PlaybackQueueController {
             shuffleOrder = state.value.shuffleOrder + item.entryId,
         )
         return true
+    }
+
+    /** Appends an automatic pack after the last item. Tracks already in the queue are skipped. Returns how many were added. */
+    fun addSuggestions(items: List<QueueItem>): Int {
+        val existing = state.value.items.map { it.trackId }.toHashSet()
+        val fresh = items.filter { existing.add(it.trackId) }.map { it.copy(origin = QueueEntryOrigin.SUGGESTED) }
+        if (fresh.isEmpty()) return 0
+        state.value = state.value.copy(
+            items = state.value.items + fresh,
+            currentIndex = if (state.value.currentIndex < 0) 0 else state.value.currentIndex,
+            shuffleOrder = state.value.shuffleOrder + fresh.map { it.entryId },
+        )
+        return fresh.size
     }
 
     fun addNext(item: QueueItem): Boolean {

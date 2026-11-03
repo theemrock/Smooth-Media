@@ -80,19 +80,17 @@ jobs:
         run: |
           set -euo pipefail
           cat > release-notes.md <<'EOF'
-          # Smooth Media interim pre-release
+          # Smooth Media pre-release
 
-          P01-10C checkpoint sonrası ara sürüm. P01 tamamlanmış sayılmaz.
+          Ara sürüm. Kapsam: şarkı sözleri (lrclib, toplu çekme), veritabanı şeması v12–v14,
+          klasör ağacı, otomatik tür listeleri, performans iyileştirmeleri ve Türkçe etiket onarımı.
 
-          - P01-09 metadata okuyamayan 8 dosya kabul edilmiş sınırlamadır; silinmedi, EXCLUDED yapılmadı ve yeniden işlenmedi.
-          - P01-11: erişilemeyen parçaların soluk gösterimi açık.
-          - P01-12: arama açık.
           - Bu APK, Shell ile ortak release sertifikası kullanır.
           - Kurulum için Android 13+ (`minSdk 33`) gerekir; paket `com.theemrock.smoothmedia`.
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Smooth Media ${GITHUB_REF_NAME#smooth-media-p01-10c-interim-} (pre-release)" \
+            --title "Smooth Media ${GITHUB_REF_NAME#smooth-media-p01-*-interim-} (pre-release)" \
             --notes-file release-notes.md \
             --prerelease \
             --verify-tag

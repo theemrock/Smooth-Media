@@ -97,6 +97,59 @@ fun LibraryNavigationBar(
                     },
                 )
             }
+            HorizontalDivider(color = NavigationMuted.copy(alpha = .35f))
+            Text(
+                "Akıllı listeler",
+                color = NavigationCyan,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            SmartListMenu.lists.forEach { list ->
+                DropdownMenuItem(
+                    text = { Text("${list.title}  ${list.trackCount}") },
+                    trailingIcon = {
+                        Text(
+                            "✎",
+                            color = NavigationCyan,
+                            modifier = Modifier.clickable {
+                                menuExpanded = false
+                                SmartListMenu.onEdit(list)
+                            }.padding(4.dp),
+                        )
+                    },
+                    onClick = {
+                        menuExpanded = false
+                        SmartListMenu.onOpen(list)
+                    },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("+ Akıllı liste", color = NavigationCyan) },
+                onClick = {
+                    menuExpanded = false
+                    SmartListMenu.onCreate()
+                },
+            )
+            HorizontalDivider(color = NavigationMuted.copy(alpha = .35f))
+            Text(
+                "Playlistler",
+                color = NavigationCyan,
+                fontSize = 12.sp,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
+            )
+            PlaylistMenu.playlists.forEach { playlist ->
+                DropdownMenuItem(
+                    text = { Text(playlist.name) },
+                    onClick = { menuExpanded = false },
+                )
+            }
+            DropdownMenuItem(
+                text = { Text("+ Playlist oluştur", color = NavigationCyan) },
+                onClick = {
+                    menuExpanded = false
+                    PlaylistMenu.onCreate()
+                },
+            )
         }
         Row(
             modifier = Modifier.weight(1f).clickable(onClick = onSearch).padding(horizontal = 12.dp, vertical = 10.dp),

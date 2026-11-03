@@ -13,6 +13,8 @@ data class MetadataEditorBatchResult(
     val failed: Int,
     val cancelled: Boolean,
     val blocked: Boolean = false,
+    /** Failure reason -> count, so the editor can say why files were not written. */
+    val failureReasons: Map<String, Int> = emptyMap(),
 )
 
 class MetadataEditorBatchRunner(

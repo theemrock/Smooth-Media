@@ -81,6 +81,7 @@ class MetadataEditorCoordinator(
         val session = MetadataFileWriteSession(contentResolver, adapter, writeGate = writeGate) { locator -> hashProvider(locator) }
         val reconciler = MetadataFileWriteReconciler(database)
         var processed = 0
+        val reasons = linkedMapOf<String, Int>()
         return MetadataEditorBatchRunner().run(items, edit, cancelled::get) { item, requestedEdit ->
             val target = item.target
             val outcome = if (target == null) {
@@ -96,8 +97,17 @@ class MetadataEditorCoordinator(
             )
             processed++
             onProgress(processed, items.size.coerceAtMost(100))
+            if (!accepted) {
+                val reason = when (outcome) {
+                    is MetadataFileWriteOutcome.Rejected -> outcome.reason.name
+                    is MetadataFileWriteOutcome.Failed -> outcome.reason.name
+                    MetadataFileWriteOutcome.Blocked -> "BLOCKED"
+                    is MetadataFileWriteOutcome.Written -> "RECONCILE_FAILED"
+                }
+                reasons[reason] = (reasons[reason] ?: 0) + 1
+            }
             if (accepted) MetadataEditorItemResult.SUCCESS else MetadataEditorItemResult.FAILURE
-        }
+        }.copy(failureReasons = reasons)
     }
 }
 

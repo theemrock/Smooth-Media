@@ -7,14 +7,20 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.Button
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.theemrock.smoothmedia.eq.AdaptiveEqState
 import com.theemrock.smoothmedia.eq.EqualizerBand
+import com.theemrock.smoothmedia.eq.ParametricEq
 
 @Composable
 fun EqualizerScreen(
@@ -25,8 +31,12 @@ fun EqualizerScreen(
     onEnabledChanged: (Boolean) -> Unit,
     onReset: () -> Unit,
     onManualLevelChanged: (Short, Int) -> Unit,
+    savedAutoEqText: String?,
+    onApplyAutoEq: (String?) -> Unit,
     onBack: () -> Unit,
 ) {
+    var autoEqInput by rememberSaveable { mutableStateOf(savedAutoEqText.orEmpty()) }
+    val autoEqProfile = ParametricEq.parseAutoEq(autoEqInput)
     Column(Modifier.fillMaxSize().padding(20.dp), verticalArrangement = Arrangement.spacedBy(16.dp)) {
         Row(Modifier.fillMaxWidth()) {
             Button(onClick = onBack) { Text("Back") }
@@ -54,6 +64,25 @@ fun EqualizerScreen(
                     valueRange = band.minLevelMb.toFloat()..band.maxLevelMb.toFloat(),
                 )
             }
+        }
+        Text("AutoEQ", color = Color.White)
+        OutlinedTextField(
+            value = autoEqInput,
+            onValueChange = { autoEqInput = it },
+            label = { Text("Paste AutoEQ profile") },
+            modifier = Modifier.fillMaxWidth(),
+            minLines = 3,
+        )
+        Text(
+            "${autoEqProfile.bands.size} bands, preamp ${autoEqProfile.preampDb} dB",
+            color = Color(0xFFAAB9C2),
+        )
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = { onApplyAutoEq(autoEqInput.takeIf { it.isNotBlank() }) }) { Text("Apply") }
+            Button(onClick = {
+                autoEqInput = ""
+                onApplyAutoEq(null)
+            }) { Text("Clear") }
         }
     }
 }

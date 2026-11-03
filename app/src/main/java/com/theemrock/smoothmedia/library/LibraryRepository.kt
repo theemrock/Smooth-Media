@@ -525,20 +525,16 @@ class RoomLibraryRepository(
 
     fun loadDashboard(limit: Int = 5): LibraryDashboardData {
         require(limit > 0) { "limit must be positive" }
-        fun <T> timed(label: String, block: () -> T): T {
-            val t = System.nanoTime()
-            return block().also { android.util.Log.i("SMOOTH_PERF", "dash.$label ms=${(System.nanoTime() - t) / 1_000_000}") }
-        }
         return LibraryDashboardData(
-            totalTracks = timed("countTracks") { countTracks() },
-            albumCount = timed("countAlbums") { countCollections(LibraryCollectionType.ALBUMS) },
-            artistCount = timed("countArtists") { countCollections(LibraryCollectionType.ARTISTS) },
-            genreCount = timed("countGenres") { countCollections(LibraryCollectionType.GENRES) },
-            folderCount = timed("countFolders") { dashboardFolderCount(countCollections(LibraryCollectionType.FOLDERS)) },
-            songs = timed("songs") { loadPage(0, limit).songs },
-            albums = timed("albums") { loadCollections(LibraryCollectionType.ALBUMS, 0, limit).collections },
-            artists = timed("artists") { loadCollections(LibraryCollectionType.ARTISTS, 0, limit).collections },
-            genres = timed("genres") { loadCollections(LibraryCollectionType.GENRES, 0, limit).collections },
+            totalTracks = countTracks(),
+            albumCount = countCollections(LibraryCollectionType.ALBUMS),
+            artistCount = countCollections(LibraryCollectionType.ARTISTS),
+            genreCount = countCollections(LibraryCollectionType.GENRES),
+            folderCount = dashboardFolderCount(countCollections(LibraryCollectionType.FOLDERS)),
+            songs = loadPage(0, limit).songs,
+            albums = loadCollections(LibraryCollectionType.ALBUMS, 0, limit).collections,
+            artists = loadCollections(LibraryCollectionType.ARTISTS, 0, limit).collections,
+            genres = loadCollections(LibraryCollectionType.GENRES, 0, limit).collections,
         )
     }
 

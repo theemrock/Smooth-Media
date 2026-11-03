@@ -27,6 +27,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import com.theemrock.smoothmedia.lyrics.LyricsBulkFetcher
+import com.theemrock.smoothmedia.lyrics.LyricsBulkMode
 
 private val SettingsInk = SmoothMediaColors.Background
 private val SettingsMuted = SmoothMediaColors.TextMuted
@@ -77,7 +78,7 @@ fun LyricsBulkScreen(
     status: String?,
     progress: String?,
     log: List<LyricsBulkFetcher.LogEntry>,
-    onStart: () -> Unit,
+    onStart: (LyricsBulkMode) -> Unit,
     onStop: () -> Unit,
     onMenu: () -> Unit,
     onHome: () -> Unit,
@@ -102,7 +103,9 @@ fun LyricsBulkScreen(
                     if (running) {
                         Text("Durdur", color = SmoothMediaColors.Error, fontSize = 16.sp, modifier = Modifier.clickable(onClick = onStop))
                     } else {
-                        Text("Başlat", color = SettingsAccent, fontSize = 16.sp, modifier = Modifier.clickable(onClick = onStart))
+                        Text("Yeni parçalar", color = SettingsAccent, fontSize = 16.sp, modifier = Modifier.clickable { onStart(LyricsBulkMode.NEW) })
+                        Text("Bulunamayanlar", color = SettingsAccent, fontSize = 16.sp, modifier = Modifier.clickable { onStart(LyricsBulkMode.NOT_FOUND) })
+                        Text("Hatalar", color = SettingsAccent, fontSize = 16.sp, modifier = Modifier.clickable { onStart(LyricsBulkMode.ERROR) })
                     }
                 }
                 progress?.let { Text(it, color = Color.White, fontSize = 15.sp) }

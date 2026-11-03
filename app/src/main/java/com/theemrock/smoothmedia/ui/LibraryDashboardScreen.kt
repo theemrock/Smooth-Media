@@ -242,6 +242,18 @@ private fun DashboardMenu(
         DashboardMenuItem(CategoryIconKind.GENRES, "Türler", onClick = { onDismiss(); onCollection(LibraryCollectionType.GENRES) })
         DashboardMenuItem(CategoryIconKind.FOLDERS, "Klasörler", onClick = { onDismiss(); onCollection(LibraryCollectionType.FOLDERS) })
         HorizontalDivider(color = DashboardLine)
+        Text("Akıllı listeler", color = DashboardCyan, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        SmartListMenu.lists.forEach { list ->
+            DashboardMenuItem(CategoryIconKind.GENRES, "${list.title}  ${list.trackCount}", onClick = { onDismiss(); SmartListMenu.onOpen(list) })
+        }
+        DashboardMenuItem(CategoryIconKind.GENRES, "+ Akıllı liste", onClick = { onDismiss(); SmartListMenu.onCreate() })
+        HorizontalDivider(color = DashboardLine)
+        Text("Playlistler", color = DashboardCyan, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
+        PlaylistMenu.playlists.forEach { playlist ->
+            DashboardMenuItem(CategoryIconKind.SONGS, playlist.name, onClick = onDismiss)
+        }
+        DashboardMenuItem(CategoryIconKind.SONGS, "+ Playlist oluştur", onClick = { onDismiss(); PlaylistMenu.onCreate() })
+        HorizontalDivider(color = DashboardLine)
         DashboardMenuItem(CategoryIconKind.SETTINGS, "Ayarlar", onClick = { onDismiss(); onSettings() })
     }
 }

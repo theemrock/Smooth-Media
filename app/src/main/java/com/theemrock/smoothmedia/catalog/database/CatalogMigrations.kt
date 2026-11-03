@@ -162,6 +162,29 @@ object CatalogMigrations {
         }
     }
 
+    val FROM_12_TO_13 = object : Migration(12, 13) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS lyrics_misses (" +
+                    "trackId TEXT NOT NULL, checkedAtEpochMs INTEGER NOT NULL, PRIMARY KEY(trackId), " +
+                    "FOREIGN KEY(trackId) REFERENCES tracks(track_id) ON UPDATE NO ACTION ON DELETE CASCADE)",
+            )
+        }
+    }
+
+    val FROM_13_TO_14 = object : Migration(13, 14) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("ALTER TABLE lyrics_misses ADD COLUMN kind TEXT NOT NULL DEFAULT 'NOT_FOUND'")
+        }
+    }
+
+    val FROM_14_TO_15 = object : Migration(14, 15) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL("CREATE TABLE IF NOT EXISTS smart_playlists (smart_playlist_id TEXT NOT NULL PRIMARY KEY, name TEXT NOT NULL, normalized_name TEXT NOT NULL, rule_text TEXT NOT NULL, created_at_epoch_ms INTEGER NOT NULL, updated_at_epoch_ms INTEGER NOT NULL)")
+            db.execSQL("CREATE UNIQUE INDEX IF NOT EXISTS index_smart_playlists_normalized_name ON smart_playlists(normalized_name)")
+        }
+    }
+
     val ALL: Array<Migration> = arrayOf(
         FROM_1_TO_2,
         FROM_2_TO_3,
@@ -174,5 +197,8 @@ object CatalogMigrations {
         FROM_9_TO_10,
         FROM_10_TO_11,
         FROM_11_TO_12,
+        FROM_12_TO_13,
+        FROM_13_TO_14,
+        FROM_14_TO_15,
     )
 }

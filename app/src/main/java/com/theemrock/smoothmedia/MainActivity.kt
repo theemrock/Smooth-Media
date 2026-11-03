@@ -52,6 +52,8 @@ import com.theemrock.smoothmedia.library.SourceTrackCountSnapshot
 import com.theemrock.smoothmedia.genre.RoomGenreRepository
 import com.theemrock.smoothmedia.playback.CatalogPlaybackLocationResolver
 import com.theemrock.smoothmedia.playback.PlaybackEngineState
+import com.theemrock.smoothmedia.playback.AUTOEQ_PREF_KEY
+import com.theemrock.smoothmedia.playback.AUTOEQ_PREF_NAME
 import com.theemrock.smoothmedia.playback.PlaybackSessionClient
 import com.theemrock.smoothmedia.playback.PlaybackQueueController
 import com.theemrock.smoothmedia.playback.QueueItem
@@ -74,6 +76,16 @@ import com.theemrock.smoothmedia.library.FolderTreeNode
 import com.theemrock.smoothmedia.library.AutoGenreList
 import com.theemrock.smoothmedia.library.SmartRuleCompiler
 import com.theemrock.smoothmedia.ui.AutoGenreStrip
+import com.theemrock.smoothmedia.ui.SMART_KEY_PREFIX
+import com.theemrock.smoothmedia.ui.NewPlaylistDialog
+import com.theemrock.smoothmedia.ui.PlaylistMenu
+import com.theemrock.smoothmedia.ui.SmartListMenu
+import com.theemrock.smoothmedia.ui.SmartEditorState
+import com.theemrock.smoothmedia.ui.SmartPlaylistEditorDialog
+import com.theemrock.smoothmedia.library.SmartPlaylistRepository
+import com.theemrock.smoothmedia.library.SmartRuleDraft
+import com.theemrock.smoothmedia.library.SmartRuleDrafts
+import android.widget.Toast
 import com.theemrock.smoothmedia.ui.LyricsBulkScreen
 import com.theemrock.smoothmedia.ui.LibraryAlbumDetailData
 import com.theemrock.smoothmedia.ui.LibraryAlbumDetailScreen
@@ -249,6 +261,7 @@ class MainActivity : ComponentActivity() {
     private var equalizerBands by mutableStateOf<List<EqualizerBand>>(emptyList())
     private var manualEqualizerLevels by mutableStateOf<Map<Short, Int>>(emptyMap())
     private var manualEqualizerEnabled by mutableStateOf(true)
+    private var autoEqText by mutableStateOf<String?>(null)
     private var lastPlaybackEntryId: String? = null
     private var lastPersistedPlaybackPosition = 0L
     private var activeGhostPlaybackWindowEntryIds: List<String> = emptyList()
@@ -266,6 +279,14 @@ class MainActivity : ComponentActivity() {
     private var lyricsBulkProgress by mutableStateOf<String?>(null)
     private var lyricsBulkLog by mutableStateOf<List<LyricsBulkFetcher.LogEntry>>(emptyList())
     private var showLyricsBulk by mutableStateOf(false)
+    private var listenSignalEntryId: String? = null
+    private var listenSignalTrackId: String? = null
+    private var listenSignalPositionMs = 0L
+    private var listenSignalDurationMs: Long? = null
+    private val listenScores = java.util.concurrent.ConcurrentHashMap<String, Int>()
+    private val suggestionPackPending = AtomicBoolean(false)
+    /** Tracks whose accumulated listen score is at or below this are left out of automatic packs. */
+    private val SUGGESTION_DISLIKE_THRESHOLD = -2
     private var lyricsFetching by mutableStateOf(false)
     private var lyricsFetchStatus by mutableStateOf<String?>(null)
     private lateinit var artworkResolver: AndroidArtworkResolver
@@ -288,6 +309,9 @@ class MainActivity : ComponentActivity() {
     private val autoGenreTopContent: @Composable () -> Unit = {
         AutoGenreStrip(autoGenreLists, ::openAutoGenreList)
     }
+    private var smartEditor by mutableStateOf<SmartEditorState?>(null)
+    private var showNewPlaylistDialog by mutableStateOf(false)
+    private lateinit var smartPlaylistRepository: SmartPlaylistRepository
     private var folderTreeLoaded by mutableStateOf(false)
     private var folderTreeRoots by mutableStateOf<List<FolderTreeNode>>(emptyList())
     private var folderTreeChildren by mutableStateOf<Map<String, List<FolderTreeNode>>>(emptyMap())
@@ -327,6 +351,11 @@ class MainActivity : ComponentActivity() {
             contentResolver,
             writeGate = metadataEditorWriteGate,
         )
+        smartPlaylistRepository = SmartPlaylistRepository(runtime.database.smartPlaylistDao())
+        SmartListMenu.onOpen = ::openAutoGenreList
+        SmartListMenu.onCreate = { openSmartEditor(null) }
+        SmartListMenu.onEdit = ::openSmartEditor
+        PlaylistMenu.onCreate = { showNewPlaylistDialog = true }
         metadataAutonomousSettings = SharedPreferencesMetadataAutonomousSettings(this)
         metadataAutonomousEnabled = metadataAutonomousSettings.enabled
         // No verified in-app WAL backup provider exists yet; keep the switch
@@ -343,6 +372,7 @@ class MainActivity : ComponentActivity() {
         equalizerProfileStore = EqualizerProfileStore(this)
         manualEqualizerLevels = equalizerProfileStore.readLevels()
         manualEqualizerEnabled = equalizerProfileStore.isManualEnabled()
+        autoEqText = getSharedPreferences(AUTOEQ_PREF_NAME, MODE_PRIVATE).getString(AUTOEQ_PREF_KEY, null)
         queueStore = PlaybackQueueStore(this)
         queueController.restore(queueStore.read())
         playbackClient = PlaybackSessionClient(
@@ -360,6 +390,8 @@ class MainActivity : ComponentActivity() {
             },
             onQueueState = { entryId, position ->
                 queueController.syncCurrentEntry(entryId, position)
+                trackListenSignal(entryId, position)
+                maybeRequestSuggestionPack()
                 val entryChanged = entryId != null && entryId != lastPlaybackEntryId
                 if (entryChanged) {
                     lastPlaybackEntryId = entryId
@@ -491,7 +523,16 @@ class MainActivity : ComponentActivity() {
             runtime.database.safDocumentDao(),
         )
         lyricsCache = RoomLyricsCache(runtime.database.lyricsCacheDao())
-        lyricsFetch = LyricsFetchUseCase(lyricsCache, LrclibClient())
+        lyricsFetch = LyricsFetchUseCase(
+            cache = lyricsCache,
+            client = LrclibClient(),
+            recordMiss = { trackId, checkedAt, kind ->
+                runtime.database.lyricsMissDao().upsert(
+                    com.theemrock.smoothmedia.catalog.database.entity.LyricsMissEntity(trackId, checkedAt, kind),
+                )
+            },
+            clearMiss = { trackId -> runtime.database.lyricsMissDao().delete(trackId) },
+        )
         lyricsBulk = LyricsBulkFetcher(runtime.database.lyricsCacheDao(), lyricsFetch)
         lyricsExecutor = Executors.newSingleThreadExecutor()
         artworkResolver = AndroidArtworkResolver(
@@ -521,6 +562,17 @@ class MainActivity : ComponentActivity() {
                     androidx.compose.foundation.layout.Box(
                         modifier = Modifier.fillMaxSize().safeDrawingPadding().imePadding(),
                     ) {
+                    smartEditor?.let { editor ->
+                        SmartPlaylistEditorDialog(
+                            initialName = editor.name,
+                            initialDrafts = editor.drafts,
+                            notEditable = editor.notEditable,
+                            canDelete = editor.id != null,
+                            onSave = { name, drafts -> saveSmartPlaylist(editor.id, name, drafts) },
+                            onDelete = { editor.id?.let(::deleteSmartPlaylist) },
+                            onDismiss = { smartEditor = null },
+                        )
+                    }
                     if (showMetadataEditor) {
                         MetadataEditorScreen(
                             state = metadataEditorState,
@@ -589,6 +641,11 @@ class MainActivity : ComponentActivity() {
                                 manualEqualizerLevels = next
                                 equalizerProfileStore.writeLevels(next)
                                 playbackClient.applyManualEqualizer(next)
+                            },
+                            savedAutoEqText = autoEqText,
+                            onApplyAutoEq = { text ->
+                                autoEqText = text
+                                playbackClient.applyAutoEq(text)
                             },
                             onBack = { showEqualizer = false },
                         )
@@ -917,6 +974,12 @@ class MainActivity : ComponentActivity() {
                             onLyricsBulk = { showLyricsBulk = true },
                         )
                     }
+                    if (showNewPlaylistDialog) {
+                        NewPlaylistDialog(
+                            onCreate = ::createPlaylistFromMenu,
+                            onDismiss = { showNewPlaylistDialog = false },
+                        )
+                    }
                     if (showPlaylistPicker) {
                         PlaylistPickerDialog(
                             playlists = playlistOptions,
@@ -934,6 +997,39 @@ class MainActivity : ComponentActivity() {
         loadMetadataMissingCount()
         loadDashboard()
         executor.execute { libraryViewModel.loadInitial() }
+        val repairPrefs = getSharedPreferences(
+            com.theemrock.smoothmedia.metadata.StoredTextRepair.PREFS_NAME,
+            MODE_PRIVATE,
+        )
+        if (!repairPrefs.getBoolean(com.theemrock.smoothmedia.metadata.StoredTextRepair.PREF_KEY, false)) {
+            executor.execute {
+                val changed = runCatching {
+                    com.theemrock.smoothmedia.metadata.StoredTextRepair.runOnce(runtime.database.openHelper.writableDatabase)
+                }.getOrDefault(-1)
+                // Tracks whose stored text still looks garbled are re-read from their files (raw tags),
+                // which is the authoritative source; the normalizer repairs what it can on the way in.
+                val rereadIds = runCatching {
+                    val ids = mutableListOf<String>()
+                    runtime.database.openHelper.readableDatabase.query(
+                        androidx.sqlite.db.SimpleSQLiteQuery(
+                            "SELECT trackId, normalizedTitle, normalizedArtist, normalizedAlbum, normalizedAlbumArtist FROM track_metadata",
+                        ),
+                    ).use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val garbled = (1..4).any { i ->
+                                !cursor.isNull(i) && com.theemrock.smoothmedia.metadata.TagTextDecoder.containsSuspicious(cursor.getString(i))
+                            }
+                            if (garbled) ids += cursor.getString(0)
+                        }
+                    }
+                    ids
+                }.getOrDefault(emptyList())
+                rereadIds.forEach { id -> runCatching { metadataEnrichment.enrichTrack(id) } }
+                if (changed >= 0) {
+                    repairPrefs.edit().putBoolean(com.theemrock.smoothmedia.metadata.StoredTextRepair.PREF_KEY, true).apply()
+                }
+            }
+        }
         executor.execute { syncQueueToSession(playWhenReady = false) }
     }
 
@@ -1157,14 +1253,84 @@ class MainActivity : ComponentActivity() {
         )
     }
 
+    /** Classifies how the previous track ended (skip or completion) and updates the in-memory listen score. */
+    private fun trackListenSignal(entryId: String?, positionMs: Long) {
+        if (entryId == null) return
+        if (entryId != listenSignalEntryId) {
+            val previousTrackId = listenSignalTrackId
+            if (previousTrackId != null) {
+                val signal = com.theemrock.smoothmedia.playback.ListenScoring.classifySkip(listenSignalPositionMs, listenSignalDurationMs)
+                val weight = com.theemrock.smoothmedia.playback.ListenScoring.weight(signal)
+                listenScores[previousTrackId] = (listenScores[previousTrackId] ?: 0) + weight
+            }
+            val current = queueController.state.value.items.firstOrNull { it.entryId == entryId }
+            listenSignalEntryId = entryId
+            listenSignalTrackId = current?.trackId
+            listenSignalDurationMs = current?.durationMs
+        }
+        listenSignalPositionMs = positionMs
+    }
+
+    /** When two or fewer unplayed tracks remain, add the next automatic pack of five (same genre when known). */
+    private fun maybeRequestSuggestionPack() {
+        val state = queueController.state.value
+        if (state.items.isEmpty()) return
+        val unplayed = state.items.size - (state.currentIndex.coerceAtLeast(0) + 1)
+        if (!com.theemrock.smoothmedia.playback.SmartSuggestionPolicy.shouldRequestPack(unplayed, suggestionPackPending.get())) return
+        if (!suggestionPackPending.compareAndSet(false, true)) return
+        val seedTrackId = state.current?.trackId
+        val exclude = state.items.map { it.trackId }.toHashSet()
+        executor.execute {
+            val pack = runCatching { buildSuggestionPack(seedTrackId, exclude) }.getOrDefault(emptyList())
+            runOnUiThread {
+                if (!isDestroyed) {
+                    val added = queueController.addSuggestions(pack)
+                    if (added > 0) {
+                        persistQueue()
+                        syncQueueToSession(
+                            playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING,
+                            preservePosition = true,
+                        )
+                    }
+                }
+                suggestionPackPending.set(false)
+            }
+        }
+    }
+
+    /** Background: picks up to five accessible tracks, preferring the seed track's primary genre, skipping disliked ones. */
+    private fun buildSuggestionPack(seedTrackId: String?, exclude: Set<String>): List<QueueItem> {
+        val genreId = seedTrackId?.let { seed ->
+            runtime.database.openHelper.readableDatabase.query(
+                androidx.sqlite.db.SimpleSQLiteQuery(
+                    "SELECT genreId FROM track_genre_assignments WHERE trackId = ? AND isPrimary = 1 LIMIT 1",
+                    arrayOf(seed),
+                ),
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+        }
+        val candidates = if (genreId != null) {
+            libraryRepository.loadFilteredPage(
+                LibraryTrackFilter.SmartRuleMatch(SmartRuleCompiler.compile(com.theemrock.smoothmedia.library.SmartRule.Genre(genreId))),
+                0,
+                200,
+            ).songs
+        } else {
+            libraryRepository.loadPage(0, 200).songs
+        }
+        return candidates
+            .filter { it.isAccessible && it.trackId !in exclude }
+            .filter { (listenScores[it.trackId] ?: 0) >= SUGGESTION_DISLIKE_THRESHOLD }
+            .shuffled()
+            .take(com.theemrock.smoothmedia.playback.SmartSuggestionPolicy.PACK_SIZE)
+            .map { QueueItem(trackId = it.trackId, title = it.title, artist = it.artist, album = it.album, durationMs = it.durationMs) }
+    }
+
     private fun persistQueue() {
         if (::queueStore.isInitialized) queueStore.write(queueController.state.value)
     }
 
     private fun loadAndRefreshSources() {
-        val refreshStartedAt = System.nanoTime()
         executor.execute {
-            android.util.Log.i("SMOOTH_PERF", "sourceRefresh begin queueWaitMs=${(System.nanoTime() - refreshStartedAt) / 1_000_000}")
             val stored = runCatching { runtime.repository.listAll() }.getOrElse {
                 postState(emptyList(), R.string.source_storage_failed)
                 return@execute
@@ -1638,7 +1804,7 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    private fun startLyricsBulk() {
+    private fun startLyricsBulk(mode: com.theemrock.smoothmedia.lyrics.LyricsBulkMode) {
         if (lyricsBulkRunning) return
         lyricsBulkCancel.set(false)
         lyricsBulkRunning = true
@@ -1648,6 +1814,7 @@ class MainActivity : ComponentActivity() {
         lyricsExecutor.execute {
             val result = runCatching {
                 lyricsBulk.run(
+                    mode = mode,
                     cancelled = lyricsBulkCancel::get,
                     onProgress = { progress ->
                         runOnUiThread {
@@ -1714,9 +1881,84 @@ class MainActivity : ComponentActivity() {
 
     private fun loadAutoGenreLists() {
         executor.execute {
-            val lists = runCatching { libraryRepository.loadAutoGenreLists() }.getOrDefault(emptyList())
+            val genreLists = runCatching { libraryRepository.loadAutoGenreLists() }.getOrDefault(emptyList())
+            val smartLists = runCatching { loadSmartPlaylistLists() }.getOrDefault(emptyList())
+            val playlists = runCatching { playlistRepository.listAll() }.getOrDefault(emptyList())
             runOnUiThread {
-                if (!isDestroyed) autoGenreLists = lists
+                if (!isDestroyed) {
+                    autoGenreLists = genreLists
+                    SmartListMenu.lists = smartLists
+                    PlaylistMenu.playlists = playlists
+                }
+            }
+        }
+    }
+
+    /** Background: user smart playlists as strip chips, with their current track counts. */
+    private fun loadSmartPlaylistLists(): List<AutoGenreList> = smartPlaylistRepository.list().map { playlist ->
+        AutoGenreList(
+            key = SMART_KEY_PREFIX + playlist.id,
+            title = playlist.name,
+            trackCount = libraryRepository.countFilteredTracks(
+                LibraryTrackFilter.SmartRuleMatch(SmartRuleCompiler.compile(playlist.rule)),
+            ),
+            rule = playlist.rule,
+        )
+    }
+
+    /** Opens the editor for a new smart playlist (list null) or for an existing one. */
+    private fun openSmartEditor(list: AutoGenreList?) {
+        if (list == null) {
+            smartEditor = SmartEditorState(id = null, name = "", drafts = emptyList(), notEditable = false)
+            return
+        }
+        val drafts = SmartRuleDrafts.fromRule(list.rule)
+        smartEditor = SmartEditorState(
+            id = list.key.removePrefix(SMART_KEY_PREFIX),
+            name = list.title,
+            drafts = drafts.orEmpty(),
+            notEditable = drafts == null,
+        )
+    }
+
+    private fun createPlaylistFromMenu(name: String) {
+        executor.execute {
+            val result = runCatching { playlistRepository.create(name) }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                result.onSuccess {
+                    showNewPlaylistDialog = false
+                    loadAutoGenreLists()
+                }.onFailure {
+                    Toast.makeText(this, it.message ?: "Playlist oluşturulamadı", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun saveSmartPlaylist(id: String?, name: String, drafts: List<SmartRuleDraft>) {
+        val rule = SmartRuleDrafts.toRule(drafts) ?: return
+        executor.execute {
+            val saved = runCatching { smartPlaylistRepository.save(id, name, rule) }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                saved.onSuccess {
+                    smartEditor = null
+                    loadAutoGenreLists()
+                }.onFailure {
+                    Toast.makeText(this, "Kaydedilemedi; bu ad zaten kullanılıyor olabilir.", Toast.LENGTH_SHORT).show()
+                }
+            }
+        }
+    }
+
+    private fun deleteSmartPlaylist(id: String) {
+        executor.execute {
+            runCatching { smartPlaylistRepository.delete(id) }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                smartEditor = null
+                loadAutoGenreLists()
             }
         }
     }
@@ -1879,9 +2121,12 @@ class MainActivity : ComponentActivity() {
                 metadataEditorSaving = false
                 result.onSuccess { summary ->
                     if (summary.blocked) {
-                        metadataEditorProgress = "Fiziksel yazma kilitli; dosya ve Room deÄŸiÅŸmedi."
+                        metadataEditorProgress = "Fiziksel yazma kilitli; dosya ve Room değişmedi."
                     } else {
-                    metadataEditorProgress = "Tamamlandı: ${summary.completed} başarılı, ${summary.failed} hata" + if (summary.cancelled) ", iptal edildi" else ""
+                        val reasons = summary.failureReasons.entries.joinToString { "${it.key}: ${it.value}" }
+                        metadataEditorProgress = "Tamamlandı: ${summary.completed} başarılı, ${summary.failed} hata" +
+                            (if (summary.cancelled) ", iptal edildi" else "") +
+                            (if (reasons.isEmpty()) "" else " ($reasons)")
                     }
                 }.onFailure { error ->
                     metadataEditorError = error.message ?: "Metadata yazımı başarısız."
@@ -2114,12 +2359,9 @@ class MainActivity : ComponentActivity() {
 
     private fun loadDashboard() {
         if (!::libraryRepository.isInitialized || !::executor.isInitialized) return
-        val queuedAt = System.nanoTime()
         executor.execute {
-            val startedAt = System.nanoTime()
             runCatching { libraryRepository.loadDashboard() }
                 .onSuccess { data ->
-                    android.util.Log.i("SMOOTH_PERF", "dashboard queueMs=${(startedAt - queuedAt) / 1_000_000} loadMs=${(System.nanoTime() - startedAt) / 1_000_000}")
                     runOnUiThread { if (!isDestroyed) dashboardData = data }
                 }
                 .onFailure { runOnUiThread { if (!isDestroyed) dashboardData = null } }

@@ -38,8 +38,12 @@ import com.theemrock.smoothmedia.catalog.database.dao.PlaylistDao
 import com.theemrock.smoothmedia.catalog.database.entity.PlaylistEntity
 import com.theemrock.smoothmedia.catalog.database.entity.PlaylistEntryEntity
 import com.theemrock.smoothmedia.catalog.database.entity.TrackFolderScopeEntity
+import com.theemrock.smoothmedia.catalog.database.entity.LyricsMissEntity
+import com.theemrock.smoothmedia.catalog.database.dao.LyricsMissDao
+import com.theemrock.smoothmedia.catalog.database.dao.SmartPlaylistDao
+import com.theemrock.smoothmedia.catalog.database.entity.SmartPlaylistEntity
 
-private const val CATALOG_SCHEMA_VERSION = 12
+private const val CATALOG_SCHEMA_VERSION = 15
 
 @Database(
     entities = [
@@ -71,11 +75,17 @@ private const val CATALOG_SCHEMA_VERSION = 12
         PlaylistEntity::class,
         PlaylistEntryEntity::class,
         TrackFolderScopeEntity::class,
+        LyricsMissEntity::class,
+        SmartPlaylistEntity::class,
     ],
     version = CATALOG_SCHEMA_VERSION,
     exportSchema = true,
 )
 abstract class CatalogDatabase : RoomDatabase() {
+    abstract fun smartPlaylistDao(): SmartPlaylistDao
+
+    abstract fun lyricsMissDao(): LyricsMissDao
+
     abstract fun trackDao(): TrackDao
 
     abstract fun librarySourceDao(): LibrarySourceDao

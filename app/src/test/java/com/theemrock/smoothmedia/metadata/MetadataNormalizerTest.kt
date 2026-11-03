@@ -122,8 +122,9 @@ class MetadataNormalizerTest {
     }
 
     @Test
-    fun normalize_keepsAmbiguousCatalogCandidateUnchanged() {
+    fun normalize_repairsLatin2MojibakeOfTurkishDotlessI() {
+        // UTF-8 "\u0131" (C4 B1) read as Latin-2 shows as "\u00C4" + "\u0105"; the valid round-trip is "Yaln\u0131z".
         val value = "Yaln\u00C4\u0105z"
-        assertEquals(value, normalizer.normalize(RawAudioMetadata(title = value)).title.value)
+        assertEquals("Yaln\u0131z", normalizer.normalize(RawAudioMetadata(title = value)).title.value)
     }
 }

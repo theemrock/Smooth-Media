@@ -22,3 +22,7 @@
 ## Devam için
 - Telefon bağlı değilse: önce `./gradlew :app:testDebugUnitTest` ile testleri doğrulayın.
 - Toplu söz çekmeyi yeniden başlatmak için: uygulamayı açın > menü > Ayarlar > "Başlat".
+
+## Sonraki konu
+- ID3 / metadata sorununa bakılacak (kullanıcı sorunu tarif edecek).
+- Remix fallback (parantezli ek atılıp orijinal aranıyor) derlendi; cihazda doğrulanmalı.

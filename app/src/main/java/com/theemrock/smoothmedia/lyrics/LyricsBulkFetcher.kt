@@ -1,13 +1,24 @@
 package com.theemrock.smoothmedia.lyrics
 
 import com.theemrock.smoothmedia.catalog.database.dao.LyricsCacheDao
+import com.theemrock.smoothmedia.catalog.database.dao.LyricsCandidateRow
+
+/** Which tracks a bulk run covers. */
+enum class LyricsBulkMode {
+    /** Tracks never looked up before (default). */
+    NEW,
+    /** Only tracks whose last lookup found no record. */
+    NOT_FOUND,
+    /** Only tracks whose last lookup failed with a transient error. */
+    ERROR,
+}
 
 /**
  * Bulk lyrics download started by the user from Settings.
  *
- * Runs one lookup at a time, pauses between real network requests, and stops early if the
- * service keeps failing. Tracks that already have lyrics are skipped, so a stopped run can be
- * resumed by starting it again; tracks without lyrics are simply tried again on the next run.
+ * Runs one lookup at a time, pauses between real network requests, cools down after a failure,
+ * and stops early after repeated failures. Every outcome is recorded, so a normal run only covers
+ * tracks that were never looked up; the other modes re-run a chosen group on purpose.
  */
 class LyricsBulkFetcher(
     private val dao: LyricsCacheDao,
@@ -31,11 +42,16 @@ class LyricsBulkFetcher(
     data class LogEntry(val title: String, val artist: String, val result: String)
 
     fun run(
+        mode: LyricsBulkMode,
         cancelled: () -> Boolean,
         onProgress: (Progress) -> Unit,
         onEntry: (LogEntry) -> Unit = {},
     ): Progress {
-        val candidates = dao.listTracksWithoutLyrics()
+        val candidates: List<LyricsCandidateRow> = when (mode) {
+            LyricsBulkMode.NEW -> dao.listUntouchedTracks()
+            LyricsBulkMode.NOT_FOUND -> dao.listTracksByMissKind(LyricsFetchUseCase.KIND_NOT_FOUND)
+            LyricsBulkMode.ERROR -> dao.listTracksByMissKind(LyricsFetchUseCase.KIND_ERROR)
+        }
         var progress = Progress(total = candidates.size)
         onProgress(progress)
         var consecutiveFailures = 0

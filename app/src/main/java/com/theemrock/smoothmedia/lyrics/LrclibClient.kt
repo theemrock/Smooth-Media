@@ -4,6 +4,7 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 import java.net.URLEncoder
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Outcome of one lrclib lookup. Retryable covers throttling (429), server errors (5xx) and network failures. */
@@ -14,9 +15,14 @@ sealed interface LrclibResult {
 }
 
 /**
- * Minimal client for the public lrclib.net lookup endpoint. No API key is required.
- * Requests are made one at a time by the caller; this class only handles backoff for
- * throttling and transient failures (0.5 s, 2 s, 5 s), as agreed in the design notes.
+ * Minimal client for the public lrclib.net search endpoint (no API key).
+ *
+ * Uses /api/search with artist and title only, like the approved test script did. The strict
+ * /api/get endpoint (which also needs album and exact duration) missed many tracks whose local
+ * metadata differs slightly. Results are matched on normalized artist and title; synced lyrics
+ * are preferred, then the closest duration.
+ *
+ * Throttling and transient failures are retried with backoff (0.5 s, 2 s, 5 s).
  */
 class LrclibClient(
     private val userAgent: String = USER_AGENT,
@@ -26,30 +32,33 @@ class LrclibClient(
     private val sleepMs: (Long) -> Unit = { Thread.sleep(it) },
 ) {
     fun lookup(trackName: String, artistName: String, albumName: String?, durationMs: Long?): LrclibResult {
-        val url = buildUrl(trackName, artistName, albumName, durationMs)
-        var last: LrclibResult = LrclibResult.Retryable("no attempt")
+        val url = buildSearchUrl(trackName, artistName)
+        var last: Fetch = Fetch.Failed("no attempt")
         for (attempt in 0..BACKOFF_MS.size) {
             last = fetchOnce(url)
-            if (last !is LrclibResult.Retryable) return last
+            if (last !is Fetch.Failed) break
             if (attempt < BACKOFF_MS.size) sleepMs(BACKOFF_MS[attempt])
         }
-        return last
-    }
-
-    internal fun buildUrl(trackName: String, artistName: String, albumName: String?, durationMs: Long?): String {
-        val params = linkedMapOf(
-            "track_name" to trackName,
-            "artist_name" to artistName,
-        )
-        if (!albumName.isNullOrBlank()) params["album_name"] = albumName
-        durationMs?.let { if (it > 0L) params["duration"] = (it / 1000L).coerceIn(1L, 3600L).toString() }
-        val query = params.entries.joinToString("&") { (key, value) ->
-            "$key=${URLEncoder.encode(value, "UTF-8")}"
+        return when (val outcome = last) {
+            is Fetch.Ok -> pickBest(outcome.records, artistName, trackName, durationMs)
+            is Fetch.Failed -> LrclibResult.Retryable(outcome.reason)
         }
-        return "$BASE_URL/api/get?$query"
     }
 
-    private fun fetchOnce(url: String): LrclibResult {
+    internal fun buildSearchUrl(trackName: String, artistName: String): String {
+        val query = listOf(
+            "artist_name" to artistName,
+            "track_name" to trackName,
+        ).joinToString("&") { (key, value) -> "$key=${URLEncoder.encode(value, "UTF-8")}" }
+        return "$BASE_URL/api/search?$query"
+    }
+
+    private sealed interface Fetch {
+        data class Ok(val records: List<Record>) : Fetch
+        data class Failed(val reason: String) : Fetch
+    }
+
+    private fun fetchOnce(url: String): Fetch {
         return try {
             val connection = openConnection(url)
             connection.requestMethod = "GET"
@@ -59,33 +68,97 @@ class LrclibClient(
             connection.setRequestProperty("Accept", "application/json")
             // The connection is intentionally not disconnected: keep-alive avoids a new TLS handshake per request.
             when (val code = connection.responseCode) {
-                200 -> parseGetResponse(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
-                404 -> LrclibResult.NotFound
-                429, in 500..599 -> LrclibResult.Retryable("http $code")
-                else -> LrclibResult.Retryable("unexpected http $code")
+                200 -> parseSearchResponse(connection.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() })
+                    ?.let { Fetch.Ok(it) } ?: Fetch.Failed("malformed body")
+                429, in 500..599 -> Fetch.Failed("http $code")
+                else -> Fetch.Failed("unexpected http $code")
             }
         } catch (failure: IOException) {
-            LrclibResult.Retryable(failure.javaClass.simpleName)
+            Fetch.Failed(failure.javaClass.simpleName)
         }
     }
 
     companion object {
         const val BASE_URL = "https://lrclib.net"
-        const val USER_AGENT = "SmoothMedia/1013 (Android; https://github.com/theemrock/Smooth-Media)"
+        const val USER_AGENT = "SmoothMedia/1014 (Android; https://github.com/theemrock/Smooth-Media)"
         const val CONNECT_TIMEOUT_MS = 8_000
         const val READ_TIMEOUT_MS = 12_000
-        val BACKOFF_MS = longArrayOf(500L, 2_000L, 5_000L)
+        /** Retry waits for 503/429/network errors, the sequence used in the approved test (2 s, 5 s, 10 s, 20 s). */
+        val BACKOFF_MS = longArrayOf(2_000L, 5_000L, 10_000L, 20_000L)
 
-        /** Parses a /api/get response body. Pure function, no I/O. */
-        fun parseGetResponse(body: String): LrclibResult = try {
-            val json = JSONObject(body)
-            LrclibResult.Found(
-                syncedLyrics = json.optStringOrNull("syncedLyrics"),
-                plainLyrics = json.optStringOrNull("plainLyrics"),
-                instrumental = json.optBoolean("instrumental", false),
-            )
+        /** One record from the search response. Only the fields we use. */
+        data class Record(
+            val artistName: String,
+            val trackName: String,
+            val durationSec: Double?,
+            val syncedLyrics: String?,
+            val plainLyrics: String?,
+            val instrumental: Boolean,
+        )
+
+        /** Parses a /api/search response (a JSON array). Returns null when the body is not an array. */
+        fun parseSearchResponse(body: String): List<Record>? = try {
+            val array = JSONArray(body)
+            (0 until array.length()).map { i ->
+                val json = array.getJSONObject(i)
+                Record(
+                    artistName = json.optString("artistName", ""),
+                    trackName = json.optString("trackName", json.optString("name", "")),
+                    durationSec = if (json.has("duration") && !json.isNull("duration")) json.optDouble("duration") else null,
+                    syncedLyrics = json.optStringOrNull("syncedLyrics"),
+                    plainLyrics = json.optStringOrNull("plainLyrics"),
+                    instrumental = json.optBoolean("instrumental", false),
+                )
+            }
         } catch (_: org.json.JSONException) {
-            LrclibResult.Retryable("malformed body")
+            null
+        }
+
+        /**
+         * Chooses the best search result: artist and title must match after normalization
+         * (exact or one contains the other), then prefer synced lyrics, then the closest duration.
+         */
+        fun pickBest(records: List<Record>, artistName: String, trackName: String, durationMs: Long?): LrclibResult {
+            val wantArtist = normalize(artistName)
+            val wantTrack = normalize(trackName)
+            val candidates = records.filter { record ->
+                val artistOk = normalize(record.artistName).let { it == wantArtist || it.contains(wantArtist) || wantArtist.contains(it) }
+                val trackOk = normalize(record.trackName).let { it == wantTrack || it.contains(wantTrack) || wantTrack.contains(it) }
+                artistOk && trackOk && wantTrack.isNotEmpty() && wantArtist.isNotEmpty()
+            }
+            val best = candidates.minWithOrNull(
+                compareBy<Record> {
+                    // Records with words first: an instrumental version must not hide the sung one.
+                    if (it.syncedLyrics.isNullOrBlank() && it.plainLyrics.isNullOrBlank()) 1 else 0
+                }
+                    // Exact artist+title match first, so short titles do not pick a longer song.
+                    .thenBy { if (normalize(it.artistName) == wantArtist && normalize(it.trackName) == wantTrack) 0 else 1 }
+                    .thenBy { if (it.syncedLyrics.isNullOrBlank()) 1 else 0 }
+                    .thenBy { durationDistance(it.durationSec, durationMs) },
+            ) ?: return LrclibResult.NotFound
+            return LrclibResult.Found(best.syncedLyrics, best.plainLyrics, best.instrumental)
+        }
+
+        private fun durationDistance(recordSec: Double?, wantMs: Long?): Double {
+            if (recordSec == null || wantMs == null) return Double.MAX_VALUE / 2
+            return kotlin.math.abs(recordSec - wantMs / 1000.0)
+        }
+
+        /**
+         * Folds case, Turkish letters and accents to ASCII and drops punctuation, so that
+         * "Öyle Sarhoş Olsam ki" and "Oyle Sarhos Olsam" compare equal (lrclib's own search is fuzzy in the same way).
+         */
+        internal fun normalize(value: String): String {
+            val folded = value
+                .replace('İ', 'I').replace('ı', 'i')
+                .replace('ş', 's').replace('Ş', 'S')
+                .replace('ğ', 'g').replace('Ğ', 'G')
+                .replace('ç', 'c').replace('Ç', 'C')
+                .replace('ö', 'o').replace('Ö', 'O')
+                .replace('ü', 'u').replace('Ü', 'U')
+            val decomposed = java.text.Normalizer.normalize(folded, java.text.Normalizer.Form.NFD)
+                .replace(Regex("\\p{M}+"), "")
+            return decomposed.lowercase().filter { it.isLetterOrDigit() }
         }
 
         private fun JSONObject.optStringOrNull(key: String): String? {

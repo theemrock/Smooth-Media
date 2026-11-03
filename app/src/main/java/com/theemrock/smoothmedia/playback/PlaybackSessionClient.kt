@@ -121,6 +121,8 @@ class PlaybackSessionClient(
 
     fun equalizerBands(): List<EqualizerBand> = PlaybackEngineRegistry.engine?.equalizerBands().orEmpty()
 
+    fun applyAutoEq(text: String?): Boolean = PlaybackEngineRegistry.engine?.applyAutoEq(text) == true
+
     fun applyManualEqualizer(levels: Map<Short, Int>): Boolean =
         PlaybackEngineRegistry.engine?.applyManualEqualizer(levels) == true
 
