@@ -5,6 +5,7 @@ import androidx.room.Query
 import androidx.room.RawQuery
 import androidx.sqlite.db.SupportSQLiteQuery
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
+import com.theemrock.smoothmedia.library.GenreRootRow
 import com.theemrock.smoothmedia.library.LibraryArtworkCandidate
 import com.theemrock.smoothmedia.library.LibraryArtistAlbumPreview
 import com.theemrock.smoothmedia.library.LibraryTrackRow
@@ -192,30 +193,7 @@ interface LibraryDao {
     @Query(
         """
         WITH RECURSIVE
-        track_scope AS (
-            SELECT t.track_id AS trackId,
-                   COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
-                   COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
-            FROM tracks AS t
-            LEFT JOIN track_locations AS l ON l.track_id = t.track_id
-            LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
-            GROUP BY t.track_id
-        ),
-        scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
-            SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
-            UNION ALL
-            SELECT trackId, sourceId, locator, position + 1,
-                   CASE WHEN substr(locator, position, 1) = '/' OR substr(locator, position, 3) = '%2F'
-                        THEN position ELSE lastSlash END
-            FROM scope_chars
-            WHERE position <= length(locator)
-        ),
-        scopes AS (
-            SELECT trackId, sourceId,
-                   CASE WHEN MAX(lastSlash) > 0 THEN substr(locator, 1, MAX(lastSlash)) ELSE locator END AS folderPrefix
-            FROM scope_chars
-            GROUP BY trackId, sourceId, locator
-        ),
+        scopes AS (SELECT track_id AS trackId, source_id AS sourceId, folder_prefix AS folderPrefix FROM track_folder_scopes),
         album_rows AS (
             SELECT t.track_id AS trackId,
                    COALESCE(album_override.value, m.normalizedAlbum) AS album,
@@ -273,30 +251,7 @@ interface LibraryDao {
     @Query(
         """
         WITH RECURSIVE
-        track_scope AS (
-            SELECT t.track_id AS trackId,
-                   COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
-                   COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
-            FROM tracks AS t
-            LEFT JOIN track_locations AS l ON l.track_id = t.track_id
-            LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
-            GROUP BY t.track_id
-        ),
-        scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
-            SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
-            UNION ALL
-            SELECT trackId, sourceId, locator, position + 1,
-                   CASE WHEN substr(locator, position, 1) = '/' OR substr(locator, position, 3) = '%2F'
-                        THEN position ELSE lastSlash END
-            FROM scope_chars
-            WHERE position <= length(locator)
-        ),
-        scopes AS (
-            SELECT trackId, sourceId,
-                   CASE WHEN MAX(lastSlash) > 0 THEN substr(locator, 1, MAX(lastSlash)) ELSE locator END AS folderPrefix
-            FROM scope_chars
-            GROUP BY trackId, sourceId, locator
-        ),
+        scopes AS (SELECT track_id AS trackId, source_id AS sourceId, folder_prefix AS folderPrefix FROM track_folder_scopes),
         album_rows AS (
             SELECT t.track_id AS trackId,
                    COALESCE(album_override.value, m.normalizedAlbum) AS album,
@@ -406,30 +361,7 @@ interface LibraryDao {
     @Query(
         """
         WITH RECURSIVE
-        track_scope AS (
-            SELECT t.track_id AS trackId,
-                   COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
-                   COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
-            FROM tracks AS t
-            LEFT JOIN track_locations AS l ON l.track_id = t.track_id
-            LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
-            GROUP BY t.track_id
-        ),
-        scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
-            SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
-            UNION ALL
-            SELECT trackId, sourceId, locator, position + 1,
-                   CASE WHEN substr(locator, position, 1) = '/' OR substr(locator, position, 3) = '%2F'
-                        THEN position ELSE lastSlash END
-            FROM scope_chars
-            WHERE position <= length(locator)
-        ),
-        scopes AS (
-            SELECT trackId, sourceId,
-                   CASE WHEN MAX(lastSlash) > 0 THEN substr(locator, 1, MAX(lastSlash)) ELSE locator END AS folderPrefix
-            FROM scope_chars
-            GROUP BY trackId, sourceId, locator
-        )
+        scopes AS (SELECT track_id AS trackId, source_id AS sourceId, folder_prefix AS folderPrefix FROM track_folder_scopes)
         SELECT
             artist AS `key`,
             artist AS title,
@@ -488,30 +420,7 @@ interface LibraryDao {
     @Query(
         """
         WITH RECURSIVE
-        track_scope AS (
-            SELECT t.track_id AS trackId,
-                   COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
-                   COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
-            FROM tracks AS t
-            LEFT JOIN track_locations AS l ON l.track_id = t.track_id
-            LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
-            GROUP BY t.track_id
-        ),
-        scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
-            SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
-            UNION ALL
-            SELECT trackId, sourceId, locator, position + 1,
-                   CASE WHEN substr(locator, position, 1) = '/' OR substr(locator, position, 3) = '%2F'
-                        THEN position ELSE lastSlash END
-            FROM scope_chars
-            WHERE position <= length(locator)
-        ),
-        scopes AS (
-            SELECT trackId, sourceId,
-                   CASE WHEN MAX(lastSlash) > 0 THEN substr(locator, 1, MAX(lastSlash)) ELSE locator END AS folderPrefix
-            FROM scope_chars
-            GROUP BY trackId, sourceId, locator
-        ),
+        scopes AS (SELECT track_id AS trackId, source_id AS sourceId, folder_prefix AS folderPrefix FROM track_folder_scopes),
         artist_rows AS (
             SELECT
                 artist AS `key`,
@@ -735,30 +644,7 @@ interface LibraryDao {
     @Query(
         """
         WITH RECURSIVE
-        track_scope AS (
-            SELECT t.track_id AS trackId,
-                   COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
-                   COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
-            FROM tracks AS t
-            LEFT JOIN track_locations AS l ON l.track_id = t.track_id
-            LEFT JOIN locator_bindings AS b ON b.location_id = l.location_id
-            GROUP BY t.track_id
-        ),
-        scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
-            SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
-            UNION ALL
-            SELECT trackId, sourceId, locator, position + 1,
-                   CASE WHEN substr(locator, position, 1) = '/' OR substr(locator, position, 3) = '%2F'
-                        THEN position ELSE lastSlash END
-            FROM scope_chars
-            WHERE position <= length(locator)
-        ),
-        scopes AS (
-            SELECT trackId, sourceId,
-                   CASE WHEN MAX(lastSlash) > 0 THEN substr(locator, 1, MAX(lastSlash)) ELSE locator END AS folderPrefix
-            FROM scope_chars
-            GROUP BY trackId, sourceId, locator
-        )
+        scopes AS (SELECT track_id AS trackId, source_id AS sourceId, folder_prefix AS folderPrefix FROM track_folder_scopes)
         SELECT COUNT(*) FROM (
             SELECT COALESCE(album_override.value, m.normalizedAlbum) AS album,
                    COALESCE(scopes.sourceId, 'NO_SOURCE') AS sourceId,
@@ -837,5 +723,16 @@ interface LibraryDao {
         """,
     )
     fun countFolders(): Int
+
+    /** Genre nodes with no parent: the roots of the genre hierarchy, for automatic genre lists. */
+    @Query(
+        """
+        SELECT g.genreId AS genreId, g.displayName AS displayName
+        FROM genre_nodes AS g
+        WHERE NOT EXISTS (SELECT 1 FROM genre_edges AS e WHERE e.childGenreId = g.genreId)
+        ORDER BY g.normalizedName, g.genreId
+        """,
+    )
+    fun loadRootGenres(): List<GenreRootRow>
 
 }

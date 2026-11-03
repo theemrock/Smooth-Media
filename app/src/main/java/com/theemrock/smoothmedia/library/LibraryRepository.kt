@@ -263,6 +263,9 @@ sealed interface LibraryTrackFilter {
     data class GenreId(val genreId: String, val includeDescendants: Boolean = false) : LibraryTrackFilter
     data class Folder(val path: String) : LibraryTrackFilter
     data class SafFolder(val sourceId: String, val documentId: String) : LibraryTrackFilter
+
+    /** Tracks matched by a compiled Smart Playlist rule. */
+    data class SmartRuleMatch(val compiled: CompiledSmartRule) : LibraryTrackFilter
 }
 
 data class AlbumGroupingInput(
@@ -472,27 +475,7 @@ class RoomLibraryRepository(
         "artist" -> "SELECT artist AS `key`, artist AS title, NULL AS subtitle, COUNT(DISTINCT trackId) AS trackCount, 0 AS albumCount, 0 AS mp3Count, 0 AS flacCount FROM (SELECT t.track_id AS trackId, COALESCE(o.value,m.normalizedArtist) AS artist FROM tracks t LEFT JOIN track_metadata m ON m.trackId=t.track_id LEFT JOIN track_metadata_overrides o ON o.trackId=t.track_id AND o.fieldName='ARTIST' WHERE t.catalog_lifecycle='ACTIVE') WHERE artist IS NOT NULL AND trim(artist)<>'' AND instr(lower(artist),lower(?))>0 GROUP BY artist ORDER BY artist COLLATE NOCASE LIMIT ? OFFSET ?"
         "album" -> """
             WITH RECURSIVE
-            track_scope AS (
-                SELECT t.track_id AS trackId,
-                       COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
-                       COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
-                FROM tracks t
-                LEFT JOIN track_locations l ON l.track_id=t.track_id
-                LEFT JOIN locator_bindings b ON b.location_id=l.location_id
-                GROUP BY t.track_id
-            ),
-            scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
-                SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
-                UNION ALL
-                SELECT trackId, sourceId, locator, position+1,
-                       CASE WHEN substr(locator, position, 1)='/' OR substr(locator, position, 3)='%2F' THEN position ELSE lastSlash END
-                FROM scope_chars WHERE position <= length(locator)
-            ),
-            scopes AS (
-                SELECT trackId, sourceId,
-                       CASE WHEN MAX(lastSlash)>0 THEN substr(locator,1,MAX(lastSlash)) ELSE locator END AS folderPrefix
-                FROM scope_chars GROUP BY trackId, sourceId, locator
-            ),
+            scopes AS (SELECT track_id AS trackId, source_id AS sourceId, folder_prefix AS folderPrefix FROM track_folder_scopes),
             albums AS (
                 SELECT t.track_id AS trackId,
                        COALESCE(album_override.value,m.normalizedAlbum) AS album,
@@ -542,16 +525,20 @@ class RoomLibraryRepository(
 
     fun loadDashboard(limit: Int = 5): LibraryDashboardData {
         require(limit > 0) { "limit must be positive" }
+        fun <T> timed(label: String, block: () -> T): T {
+            val t = System.nanoTime()
+            return block().also { android.util.Log.i("SMOOTH_PERF", "dash.$label ms=${(System.nanoTime() - t) / 1_000_000}") }
+        }
         return LibraryDashboardData(
-            totalTracks = countTracks(),
-            albumCount = countCollections(LibraryCollectionType.ALBUMS),
-            artistCount = countCollections(LibraryCollectionType.ARTISTS),
-            genreCount = countCollections(LibraryCollectionType.GENRES),
-            folderCount = dashboardFolderCount(countCollections(LibraryCollectionType.FOLDERS)),
-            songs = loadPage(0, limit).songs,
-            albums = loadCollections(LibraryCollectionType.ALBUMS, 0, limit).collections,
-            artists = loadCollections(LibraryCollectionType.ARTISTS, 0, limit).collections,
-            genres = loadCollections(LibraryCollectionType.GENRES, 0, limit).collections,
+            totalTracks = timed("countTracks") { countTracks() },
+            albumCount = timed("countAlbums") { countCollections(LibraryCollectionType.ALBUMS) },
+            artistCount = timed("countArtists") { countCollections(LibraryCollectionType.ARTISTS) },
+            genreCount = timed("countGenres") { countCollections(LibraryCollectionType.GENRES) },
+            folderCount = timed("countFolders") { dashboardFolderCount(countCollections(LibraryCollectionType.FOLDERS)) },
+            songs = timed("songs") { loadPage(0, limit).songs },
+            albums = timed("albums") { loadCollections(LibraryCollectionType.ALBUMS, 0, limit).collections },
+            artists = timed("artists") { loadCollections(LibraryCollectionType.ARTISTS, 0, limit).collections },
+            genres = timed("genres") { loadCollections(LibraryCollectionType.GENRES, 0, limit).collections },
         )
     }
 
@@ -608,6 +595,48 @@ class RoomLibraryRepository(
 
     fun countSafFolderDirectTracks(sourceId: String, documentId: String): Int =
         safDocumentDao?.countDirectCatalogTracks(sourceId, documentId) ?: 0
+
+    /**
+     * Automatic genre lists (stage 1): one list per root genre plus a "no genre" list.
+     * Counts use the same rule compiler as Smart Playlists, so the numbers match the lists.
+     */
+    fun loadAutoGenreLists(): List<AutoGenreList> {
+        val roots = dao.loadRootGenres()
+            .filter { root -> root.displayName.any { it.isLetterOrDigit() } } // drops junk names such as "*****"
+            .map { root ->
+                val rule = SmartRule.Genre(root.genreId)
+                AutoGenreList(
+                    key = "genre:${root.genreId}",
+                    title = root.displayName,
+                    trackCount = countFilteredTracks(LibraryTrackFilter.SmartRuleMatch(SmartRuleCompiler.compile(rule))),
+                    rule = rule,
+                )
+            }
+            .filter { it.trackCount >= MIN_AUTO_LIST_TRACKS }
+            .sortedByDescending { it.trackCount }
+        val noGenre = SmartRule.NoGenre
+        val noGenreCount = countFilteredTracks(LibraryTrackFilter.SmartRuleMatch(SmartRuleCompiler.compile(noGenre)))
+        return roots + AutoGenreList(key = "genre:none", title = "Türsüz", trackCount = noGenreCount, rule = noGenre)
+    }
+
+    /** Top-level folders of every source, as a tree. Empty when the SAF graph is not available. */
+    fun loadFolderTreeRoots(): List<FolderTreeNode> = buildFolderTreeIndex()?.roots.orEmpty()
+
+    /** Available subfolders of one folder, sorted by name. */
+    fun loadFolderTreeChildren(sourceId: String, documentId: String): List<FolderTreeNode> =
+        buildFolderTreeIndex()?.childrenOf(folderTreeKey(sourceId, documentId)).orEmpty()
+
+    private fun buildFolderTreeIndex(): FolderTreeIndex? {
+        val dao = safDocumentDao ?: return null
+        return FolderTreeIndex(
+            dirs = dao.loadAvailableDirectories().map {
+                FolderDir(it.sourceId, it.documentId, it.parentDocumentId, it.displayName)
+            },
+            files = dao.loadAvailableFileTrackRefs().map {
+                FolderTrackRef(it.sourceId, it.parentDocumentId, it.trackId)
+            },
+        )
+    }
 
     fun loadArtistAlbumPreviews(artist: String, limit: Int = 3): List<LibraryArtistAlbumPreview> =
         dao.loadArtistAlbumPreviews(artist, limit).map { LibraryArtistAlbumPreview(it.album, it.albumArtist) }
@@ -714,33 +743,15 @@ class RoomLibraryRepository(
         is LibraryTrackFilter.GenreId -> arrayOf(filter.genreId)
         is LibraryTrackFilter.Folder -> arrayOf(filter.path, filter.path)
         is LibraryTrackFilter.SafFolder -> arrayOf(filter.sourceId, filter.documentId)
+        is LibraryTrackFilter.SmartRuleMatch -> filter.compiled.args.toTypedArray()
     }
 
     private companion object {
+        /** Root genres with fewer tracks than this do not get an automatic list. */
+        const val MIN_AUTO_LIST_TRACKS = 5
         const val ARTIST_ALBUM_ROWS_SQL = """
             WITH RECURSIVE
-            track_scope AS (
-                SELECT t.track_id AS trackId,
-                       COALESCE(MIN(l.source_id), 'NO_SOURCE') AS sourceId,
-                       COALESCE(MIN(NULLIF(l.path, '')), MIN(b.locator), 'NO_FOLDER') AS locator
-                FROM tracks t
-                LEFT JOIN track_locations l ON l.track_id=t.track_id
-                LEFT JOIN locator_bindings b ON b.location_id=l.location_id
-                GROUP BY t.track_id
-            ),
-            scope_chars(trackId, sourceId, locator, position, lastSlash) AS (
-                SELECT trackId, sourceId, locator, 1, 0 FROM track_scope
-                UNION ALL
-                SELECT trackId, sourceId, locator, position+1,
-                       CASE WHEN substr(locator, position, 1)='/' OR substr(locator, position, 3)='%2F'
-                            THEN position ELSE lastSlash END
-                FROM scope_chars WHERE position <= length(locator)
-            ),
-            scopes AS (
-                SELECT trackId, sourceId,
-                       CASE WHEN MAX(lastSlash)>0 THEN substr(locator,1,MAX(lastSlash)) ELSE locator END AS folderPrefix
-                FROM scope_chars GROUP BY trackId, sourceId, locator
-            ),
+            scopes AS (SELECT track_id AS trackId, source_id AS sourceId, folder_prefix AS folderPrefix FROM track_folder_scopes),
             rows AS (
                 SELECT t.track_id AS trackId,
                        COALESCE(album_override.value,m.normalizedAlbum) AS album,
@@ -815,7 +826,8 @@ class RoomLibraryRepository(
                 "EXISTS (SELECT 1 FROM track_genre_assignments genre_assignment WHERE genre_assignment.trackId=t.track_id AND genre_assignment.genreId=?)"
             }
         is LibraryTrackFilter.Folder -> "EXISTS (SELECT 1 FROM track_locations filter_l LEFT JOIN locator_bindings filter_b ON filter_b.location_id=filter_l.location_id LEFT JOIN library_sources filter_s ON filter_s.source_id=filter_l.source_id LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_l.track_id=t.track_id AND (filter_b.locator=? OR COALESCE(NULLIF(filter_l.path,''),filter_s.volume_name,filter_b.locator)=?) AND filter_e.exclusion_id IS NULL)"
-        is LibraryTrackFilter.SafFolder -> "EXISTS (SELECT 1 FROM saf_documents filter_f JOIN folder_scope filter_scope ON filter_scope.sourceId=filter_f.sourceId AND filter_scope.documentId=filter_f.parentDocumentId JOIN track_locations filter_l ON filter_l.source_id=filter_f.sourceId JOIN locator_bindings filter_b ON filter_b.source_id=filter_l.source_id AND filter_b.location_id=filter_l.location_id AND filter_b.locator=filter_f.uri LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_f.isDirectory=0 AND filter_f.available=1 AND filter_l.track_id=t.track_id AND filter_e.exclusion_id IS NULL)"
+        is LibraryTrackFilter.SmartRuleMatch -> filter.compiled.sql
+        is LibraryTrackFilter.SafFolder -> "t.track_id IN (SELECT filter_l.track_id FROM saf_documents filter_f JOIN folder_scope filter_scope ON filter_scope.sourceId=filter_f.sourceId AND filter_scope.documentId=filter_f.parentDocumentId JOIN track_locations filter_l ON filter_l.source_id=filter_f.sourceId JOIN locator_bindings filter_b ON filter_b.source_id=filter_l.source_id AND filter_b.location_id=filter_l.location_id AND filter_b.locator=filter_f.uri LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_f.isDirectory=0 AND filter_f.available=1 AND filter_e.exclusion_id IS NULL)"
         }
         return "t.catalog_lifecycle='ACTIVE' AND ($criterion) AND (NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id=t.track_id) OR EXISTS (SELECT 1 FROM track_locations visible_l LEFT JOIN locator_bindings visible_b ON visible_b.location_id=visible_l.location_id LEFT JOIN catalog_exclusions visible_e ON visible_e.source_id=visible_l.source_id AND visible_e.locator=visible_b.locator WHERE visible_l.track_id=t.track_id AND visible_e.exclusion_id IS NULL))"
     }

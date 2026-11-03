@@ -86,6 +86,7 @@ fun LibraryCollectionScreen(
     artistAlbumPreviews: Map<String, List<LibraryArtistAlbumPreview>> = emptyMap(),
     genreArtworkPreviews: Map<String, List<LibraryGenreArtworkPreview>> = emptyMap(),
     artworkResolver: AndroidArtworkResolver? = null,
+    topContent: (@Composable () -> Unit)? = null,
 ) {
     var selectionMode by remember(state.type) { mutableStateOf(false) }
     var selectedKeys by remember(state.type) { mutableStateOf(emptySet<String>()) }
@@ -119,6 +120,7 @@ fun LibraryCollectionScreen(
                 onSongs = onSongs,
                 onCollection = onCollection,
             )
+            topContent?.invoke()
             when {
                 state.errorMessage != null -> CollectionError(state.errorMessage, onRetry)
                 !state.loaded || (state.loading && state.collections.isEmpty()) -> CollectionLoading()

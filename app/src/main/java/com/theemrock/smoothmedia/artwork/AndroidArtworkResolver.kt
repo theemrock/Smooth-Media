@@ -27,7 +27,7 @@ sealed interface ArtworkRequest {
 class AndroidArtworkResolver(
     private val contentResolver: ContentResolver,
     private val candidates: LibraryArtworkCandidateRepository,
-    maxCacheBytes: Int = 4 * 1024 * 1024,
+    maxCacheBytes: Int = 24 * 1024 * 1024,
     private val diskCache: ArtworkDiskCache? = null,
     private val artworkRepository: ArtworkRepository? = null,
 ) {

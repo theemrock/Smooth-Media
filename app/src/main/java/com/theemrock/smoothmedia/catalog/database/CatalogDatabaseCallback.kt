@@ -29,5 +29,6 @@ object CatalogDatabaseCallback : RoomDatabase.Callback() {
             END
             """.trimIndent(),
         )
+        TrackFolderScopeSql.installTriggers(db)
     }
 }

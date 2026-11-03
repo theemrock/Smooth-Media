@@ -37,8 +37,9 @@ import com.theemrock.smoothmedia.catalog.database.dao.ArtworkDao
 import com.theemrock.smoothmedia.catalog.database.dao.PlaylistDao
 import com.theemrock.smoothmedia.catalog.database.entity.PlaylistEntity
 import com.theemrock.smoothmedia.catalog.database.entity.PlaylistEntryEntity
+import com.theemrock.smoothmedia.catalog.database.entity.TrackFolderScopeEntity
 
-private const val CATALOG_SCHEMA_VERSION = 11
+private const val CATALOG_SCHEMA_VERSION = 12
 
 @Database(
     entities = [
@@ -69,6 +70,7 @@ private const val CATALOG_SCHEMA_VERSION = 11
         ArtworkOverrideEntity::class,
         PlaylistEntity::class,
         PlaylistEntryEntity::class,
+        TrackFolderScopeEntity::class,
     ],
     version = CATALOG_SCHEMA_VERSION,
     exportSchema = true,

@@ -103,4 +103,47 @@ interface SafDocumentDao {
         """,
     )
     fun countRecursiveCatalogTracks(sourceId: String, documentId: String): Int
+
+    /** Of the given folders, the ones that have at least one available subfolder. */
+    @Query(
+        """
+        SELECT DISTINCT parentDocumentId FROM saf_documents
+        WHERE sourceId = :sourceId
+          AND isDirectory = 1
+          AND available = 1
+          AND parentDocumentId IN (:parentDocumentIds)
+        """,
+    )
+    fun parentIdsWithDirectoryChildren(sourceId: String, parentDocumentIds: List<String>): List<String>
+
+    @Query("SELECT sourceId, documentId, parentDocumentId, displayName FROM saf_documents WHERE isDirectory = 1 AND available = 1")
+    fun loadAvailableDirectories(): List<SafDirectoryRow>
+
+    @Query(
+        """
+        SELECT f.sourceId AS sourceId, f.parentDocumentId AS parentDocumentId, l.track_id AS trackId
+        FROM saf_documents f
+        INNER JOIN locator_bindings b
+          ON b.source_id = f.sourceId AND b.locator = f.uri
+        INNER JOIN track_locations l
+          ON l.location_id = b.location_id AND l.source_id = f.sourceId
+        WHERE f.isDirectory = 0
+          AND f.available = 1
+          AND f.parentDocumentId IS NOT NULL
+        """,
+    )
+    fun loadAvailableFileTrackRefs(): List<SafFileTrackRow>
 }
+
+data class SafDirectoryRow(
+    val sourceId: String,
+    val documentId: String,
+    val parentDocumentId: String?,
+    val displayName: String,
+)
+
+data class SafFileTrackRow(
+    val sourceId: String,
+    val parentDocumentId: String,
+    val trackId: String,
+)

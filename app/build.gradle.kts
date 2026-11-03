@@ -17,8 +17,8 @@ android {
         applicationId = "com.theemrock.smoothmedia"
         minSdk = 33
         targetSdk = 35
-        versionCode = 1013
-        versionName = "v0.0.01.013"
+        versionCode = 1014
+        versionName = "v0.0.01.014"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }

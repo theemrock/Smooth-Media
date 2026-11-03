@@ -36,6 +36,9 @@ fun LyricsScreen(
     cachedLyrics: CachedLyrics? = null,
     positionMs: Long = 0L,
     onSeek: (Long) -> Unit = {},
+    onFetch: () -> Unit = {},
+    fetchStatus: String? = null,
+    fetching: Boolean = false,
 ) {
     var synced by remember { mutableStateOf(false) }
     Column(
@@ -60,8 +63,19 @@ fun LyricsScreen(
                 if (synced) "Bu parça için senkronize söz verisi bulunmuyor." else "Bu parça için yerel söz verisi bulunmuyor.",
                 color = SmoothMediaColors.TextMuted,
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(top = 64.dp),
+                modifier = Modifier.padding(top = 48.dp),
             )
+            if (cachedLyrics == null) {
+                TextButton(onClick = onFetch, enabled = !fetching) {
+                    Text(
+                        if (fetching) "Söz aranıyor…" else "Söz getir (internet)",
+                        color = SmoothMediaColors.Accent,
+                    )
+                }
+            }
+            fetchStatus?.let {
+                Text(it, color = SmoothMediaColors.TextMuted, textAlign = TextAlign.Center, fontSize = 13.sp)
+            }
         } else if (synced) {
             val parsed = LrcParser.parse(cachedLyrics.text)
             val active = parsed.activeLineAt(positionMs)

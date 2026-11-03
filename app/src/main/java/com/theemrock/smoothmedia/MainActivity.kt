@@ -68,6 +68,13 @@ import com.theemrock.smoothmedia.artwork.ArtworkRepository
 import com.theemrock.smoothmedia.ui.LibraryScreen
 import com.theemrock.smoothmedia.ui.LibraryDashboardScreen
 import com.theemrock.smoothmedia.ui.LibraryCollectionScreen
+import com.theemrock.smoothmedia.ui.FolderTreeScreen
+import com.theemrock.smoothmedia.library.FolderTreeFlattener
+import com.theemrock.smoothmedia.library.FolderTreeNode
+import com.theemrock.smoothmedia.library.AutoGenreList
+import com.theemrock.smoothmedia.library.SmartRuleCompiler
+import com.theemrock.smoothmedia.ui.AutoGenreStrip
+import com.theemrock.smoothmedia.ui.LyricsBulkScreen
 import com.theemrock.smoothmedia.ui.LibraryAlbumDetailData
 import com.theemrock.smoothmedia.ui.LibraryAlbumDetailScreen
 import com.theemrock.smoothmedia.ui.LibraryDetailScreen
@@ -76,6 +83,11 @@ import com.theemrock.smoothmedia.ui.LyricsScreen
 import com.theemrock.smoothmedia.lyrics.CachedLyrics
 import com.theemrock.smoothmedia.lyrics.RoomLyricsCache
 import com.theemrock.smoothmedia.lyrics.LyricsNavigationPolicy
+import com.theemrock.smoothmedia.lyrics.LyricsMode
+import com.theemrock.smoothmedia.lyrics.LyricsFetchOutcome
+import com.theemrock.smoothmedia.lyrics.LyricsFetchUseCase
+import com.theemrock.smoothmedia.lyrics.LrclibClient
+import com.theemrock.smoothmedia.lyrics.LyricsBulkFetcher
 import com.theemrock.smoothmedia.metadata.AndroidAudioMetadataReader
 import com.theemrock.smoothmedia.metadata.MetadataBatchProgress
 import com.theemrock.smoothmedia.metadata.MetadataBatchCoordinator
@@ -245,6 +257,17 @@ class MainActivity : ComponentActivity() {
     private lateinit var collectionViewModel: LibraryCollectionViewModel
     private lateinit var libraryRepository: RoomLibraryRepository
     private lateinit var lyricsCache: RoomLyricsCache
+    private lateinit var lyricsFetch: LyricsFetchUseCase
+    private lateinit var lyricsBulk: LyricsBulkFetcher
+    private lateinit var lyricsExecutor: ExecutorService
+    private val lyricsBulkCancel = AtomicBoolean(false)
+    private var lyricsBulkRunning by mutableStateOf(false)
+    private var lyricsBulkStatus by mutableStateOf<String?>(null)
+    private var lyricsBulkProgress by mutableStateOf<String?>(null)
+    private var lyricsBulkLog by mutableStateOf<List<LyricsBulkFetcher.LogEntry>>(emptyList())
+    private var showLyricsBulk by mutableStateOf(false)
+    private var lyricsFetching by mutableStateOf(false)
+    private var lyricsFetchStatus by mutableStateOf<String?>(null)
     private lateinit var artworkResolver: AndroidArtworkResolver
     private lateinit var searchViewModel: LibrarySearchViewModel
     private lateinit var playbackClient: PlaybackSessionClient
@@ -260,6 +283,15 @@ class MainActivity : ComponentActivity() {
     private var libraryDetailGenreChildren by mutableStateOf<List<LibraryCollectionRow>>(emptyList())
     private var libraryDetailGenreAssignments by mutableStateOf<Map<String, LibraryGenreAssignmentUi>>(emptyMap())
     private var artistAlbumPreviews by mutableStateOf<Map<String, List<LibraryArtistAlbumPreview>>>(emptyMap())
+    private var folderTreeActive by mutableStateOf(false)
+    private var autoGenreLists by mutableStateOf<List<AutoGenreList>>(emptyList())
+    private val autoGenreTopContent: @Composable () -> Unit = {
+        AutoGenreStrip(autoGenreLists, ::openAutoGenreList)
+    }
+    private var folderTreeLoaded by mutableStateOf(false)
+    private var folderTreeRoots by mutableStateOf<List<FolderTreeNode>>(emptyList())
+    private var folderTreeChildren by mutableStateOf<Map<String, List<FolderTreeNode>>>(emptyMap())
+    private var folderTreeExpanded by mutableStateOf<Set<String>>(emptySet())
     private var genreArtworkPreviews by mutableStateOf<Map<String, List<LibraryGenreArtworkPreview>>>(emptyMap())
     private var libraryBackTarget by mutableStateOf(LibraryBackTarget.DASHBOARD)
     private lateinit var libraryBackCallback: OnBackPressedCallback
@@ -347,6 +379,10 @@ class MainActivity : ComponentActivity() {
         )
         libraryBackCallback = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (showLyricsBulk) {
+                    showLyricsBulk = false
+                    return
+                }
                 if (showMetadataEditor) {
                     closeMetadataEditor()
                     return
@@ -455,6 +491,9 @@ class MainActivity : ComponentActivity() {
             runtime.database.safDocumentDao(),
         )
         lyricsCache = RoomLyricsCache(runtime.database.lyricsCacheDao())
+        lyricsFetch = LyricsFetchUseCase(lyricsCache, LrclibClient())
+        lyricsBulk = LyricsBulkFetcher(runtime.database.lyricsCacheDao(), lyricsFetch)
+        lyricsExecutor = Executors.newSingleThreadExecutor()
         artworkResolver = AndroidArtworkResolver(
             contentResolver = contentResolver,
             candidates = libraryRepository,
@@ -527,6 +566,7 @@ class MainActivity : ComponentActivity() {
                                 playbackClient.setRepeat(next)
                                 persistQueue()
                             },
+                            artworkResolver = artworkResolver,
                         )
                     } else if (showEqualizer) {
                         EqualizerScreen(
@@ -559,6 +599,9 @@ class MainActivity : ComponentActivity() {
                             positionMs = playbackState.positionMs,
                             onSeek = playbackClient::seekTo,
                             onBack = { showLyrics = false; showNowPlaying = true },
+                            onFetch = ::fetchLyricsForNowPlaying,
+                            fetchStatus = lyricsFetchStatus,
+                            fetching = lyricsFetching,
                         )
                     } else if (showNowPlaying && nowPlayingSong != null) {
                         NowPlayingScreen(
@@ -668,6 +711,20 @@ class MainActivity : ComponentActivity() {
                             onMiniPlayerNext = ::playNext,
                             artworkResolver = artworkResolver,
                         )
+                    } else if (showCollections && folderTreeActive) {
+                        FolderTreeScreen(
+                            rows = FolderTreeFlattener.flatten(folderTreeRoots, folderTreeChildren, folderTreeExpanded),
+                            loaded = folderTreeLoaded,
+                            onToggle = { row -> if (row.node.hasChildren) toggleFolderTreeNode(row.node) else openFolderTreeSongs(row.node) },
+                            onOpen = { row -> openFolderTreeSongs(row.node) },
+                            onSongs = ::showAllSongs,
+                            onCollection = ::openCollection,
+                            onSearch = { showSearch = true },
+                            onMenu = {},
+                            onDashboard = ::openDashboard,
+                            onSources = ::openSources,
+                            onSettings = ::openSettings,
+                        )
                     } else if (showCollections) {
                         LibraryCollectionScreen(
                             state = collectionViewModel.state.value,
@@ -713,6 +770,7 @@ class MainActivity : ComponentActivity() {
                             onSettings = ::openSettings,
                             artistAlbumPreviews = artistAlbumPreviews,
                             genreArtworkPreviews = genreArtworkPreviews,
+                            topContent = if (collectionViewModel.state.value.type == LibraryCollectionType.GENRES) autoGenreTopContent else null,
                             artworkResolver = artworkResolver,
                         )
                     } else if (showDashboard) {
@@ -840,11 +898,23 @@ class MainActivity : ComponentActivity() {
                             onHome = ::openDashboard,
                             onMusicSources = ::openSources,
                         )
+                    } else if (showLyricsBulk) {
+                        LyricsBulkScreen(
+                            running = lyricsBulkRunning,
+                            status = lyricsBulkStatus,
+                            progress = lyricsBulkProgress,
+                            log = lyricsBulkLog,
+                            onStart = ::startLyricsBulk,
+                            onStop = ::stopLyricsBulk,
+                            onMenu = ::openSettings,
+                            onHome = ::openDashboard,
+                        )
                     } else if (showSettings) {
                         SettingsScreen(
                             onMenu = ::openSettings,
                             onHome = ::openDashboard,
                             onLibraryManagement = ::openLibraryManagement,
+                            onLyricsBulk = { showLyricsBulk = true },
                         )
                     }
                     if (showPlaylistPicker) {
@@ -868,6 +938,8 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        lyricsBulkCancel.set(true)
+        if (::lyricsExecutor.isInitialized) lyricsExecutor.shutdownNow()
         metadataCancelRequested.set(true)
         metadataSessionCancelRequested.set(true)
         persistQueue()
@@ -1090,7 +1162,9 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun loadAndRefreshSources() {
+        val refreshStartedAt = System.nanoTime()
         executor.execute {
+            android.util.Log.i("SMOOTH_PERF", "sourceRefresh begin queueWaitMs=${(System.nanoTime() - refreshStartedAt) / 1_000_000}")
             val stored = runCatching { runtime.repository.listAll() }.getOrElse {
                 postState(emptyList(), R.string.source_storage_failed)
                 return@execute
@@ -1535,10 +1609,153 @@ class MainActivity : ComponentActivity() {
         artistAlbumPreviews = emptyMap()
         genreArtworkPreviews = emptyMap()
         updateLibraryBackCallback()
+        folderTreeActive = type == LibraryCollectionType.FOLDERS
         submitLatestNavigation { _ ->
+            if (type == LibraryCollectionType.FOLDERS) {
+                loadFolderTreeRoots()
+                return@submitLatestNavigation
+            }
             collectionViewModel.loadInitial(type)
             if (type == LibraryCollectionType.ARTISTS) refreshArtistAlbumPreviews()
-            if (type == LibraryCollectionType.GENRES) refreshGenreArtworkPreviews()
+            if (type == LibraryCollectionType.GENRES) {
+                refreshGenreArtworkPreviews()
+                loadAutoGenreLists()
+            }
+        }
+    }
+
+    private fun loadFolderTreeRoots() {
+        folderTreeLoaded = false
+        executor.execute {
+            val roots = runCatching { libraryRepository.loadFolderTreeRoots() }.getOrDefault(emptyList())
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                folderTreeRoots = roots
+                folderTreeChildren = emptyMap()
+                folderTreeExpanded = emptySet()
+                folderTreeLoaded = true
+            }
+        }
+    }
+
+    private fun startLyricsBulk() {
+        if (lyricsBulkRunning) return
+        lyricsBulkCancel.set(false)
+        lyricsBulkRunning = true
+        lyricsBulkStatus = "Başlıyor…"
+        lyricsBulkProgress = null
+        lyricsBulkLog = emptyList()
+        lyricsExecutor.execute {
+            val result = runCatching {
+                lyricsBulk.run(
+                    cancelled = lyricsBulkCancel::get,
+                    onProgress = { progress ->
+                        runOnUiThread {
+                            if (!isDestroyed) {
+                                lyricsBulkStatus = null
+                                lyricsBulkProgress = "${progress.processed}/${progress.total} · ${progress.stored} indirildi · ${progress.notFound} bulunamadı · ${progress.failed} hata"
+                            }
+                        }
+                    },
+                    onEntry = { entry ->
+                        runOnUiThread {
+                            if (!isDestroyed) lyricsBulkLog = (listOf(entry) + lyricsBulkLog).take(500)
+                        }
+                    },
+                )
+            }
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                lyricsBulkRunning = false
+                lyricsBulkStatus = result.fold(
+                    onSuccess = { progress ->
+                        when {
+                            progress.total == 0 -> "Sözsüz parça kalmadı."
+                            progress.cancelled -> "Durduruldu. ${progress.processed}/${progress.total} işlendi, ${progress.stored} söz indirildi. Tekrar başlatınca kaldığı yerden devam eder."
+                            progress.stoppedEarly -> "Servis art arda yanıt vermedi, durduruldu. Daha sonra tekrar başlatın."
+                            else -> "Tamamlandı: ${progress.stored} söz indirildi, ${progress.notFound} parça için söz bulunamadı, ${progress.failed} hata."
+                        }
+                    },
+                    onFailure = { "Toplu çekme başarısız: ${it.javaClass.simpleName}" },
+                )
+            }
+        }
+    }
+
+    private fun stopLyricsBulk() {
+        lyricsBulkCancel.set(true)
+        lyricsBulkStatus = "Durduruluyor…"
+    }
+
+    private fun fetchLyricsForNowPlaying() {
+        val song = nowPlayingSong ?: return
+        if (lyricsFetching) return
+        lyricsFetching = true
+        lyricsFetchStatus = null
+        executor.execute {
+            val outcome = runCatching {
+                lyricsFetch.fetch(song.trackId, song.title, song.artist, song.album, song.durationMs)
+            }.getOrElse { LyricsFetchOutcome.Failed(it.javaClass.simpleName) }
+            val cached = runCatching { lyricsCache.get(song.trackId) }.getOrNull()
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                lyricsFetching = false
+                if (cached != null) currentLyrics = cached
+                lyricsFetchStatus = when (outcome) {
+                    is LyricsFetchOutcome.Stored -> "Söz indirildi (${outcome.source}, ${if (outcome.mode == LyricsMode.SYNCED) "senkron" else "düz metin"})."
+                    is LyricsFetchOutcome.AlreadyCached -> "Bu parça için söz zaten kayıtlı."
+                    LyricsFetchOutcome.NotFound -> "Bu parça için söz bulunamadı."
+                    LyricsFetchOutcome.Instrumental -> "Bu parça enstrümantal."
+                    is LyricsFetchOutcome.Failed -> "Söz servisine ulaşılamadı (${outcome.reason}). Daha sonra tekrar deneyin."
+                }
+            }
+        }
+    }
+
+    private fun loadAutoGenreLists() {
+        executor.execute {
+            val lists = runCatching { libraryRepository.loadAutoGenreLists() }.getOrDefault(emptyList())
+            runOnUiThread {
+                if (!isDestroyed) autoGenreLists = lists
+            }
+        }
+    }
+
+    /** Opens an automatic genre list as a song list, using the same filter pipeline as other collections. */
+    private fun openAutoGenreList(list: AutoGenreList) {
+        libraryBackTarget = LibraryBackTarget.COLLECTIONS
+        showDashboard = false
+        showAlbumDetail = false
+        showLibraryDetail = false
+        showCollections = false
+        showLibrary = true
+        filteredCollectionType = LibraryCollectionType.GENRES
+        updateLibraryBackCallback()
+        val filter = LibraryTrackFilter.SmartRuleMatch(SmartRuleCompiler.compile(list.rule))
+        submitLatestNavigation { _ -> libraryViewModel.loadInitial(filter, list.title) }
+    }
+
+    private fun openFolderTreeSongs(node: FolderTreeNode) {
+        openLibraryDetail(
+            LibraryCollectionType.FOLDERS,
+            LibraryCollectionRow(key = node.key, title = node.name, subtitle = null, trackCount = node.trackCount),
+        )
+    }
+
+    private fun toggleFolderTreeNode(node: FolderTreeNode) {
+        val key = node.key
+        if (key in folderTreeExpanded) {
+            folderTreeExpanded = folderTreeExpanded - key
+            return
+        }
+        folderTreeExpanded = folderTreeExpanded + key
+        if (key in folderTreeChildren) return
+        executor.execute {
+            val children = runCatching { libraryRepository.loadFolderTreeChildren(node.sourceId, node.documentId) }
+                .getOrDefault(emptyList())
+            runOnUiThread {
+                if (!isDestroyed) folderTreeChildren = folderTreeChildren + (key to children)
+            }
         }
     }
 
@@ -1566,7 +1783,11 @@ class MainActivity : ComponentActivity() {
     private fun submitLatestNavigation(block: (Long) -> Unit) {
         val request = navigationGeneration.incrementAndGet()
         navigationExecutor.execute {
-            if (isLatestNavigation(request)) block(request)
+            try {
+                if (isLatestNavigation(request)) block(request)
+            } catch (failure: Throwable) {
+                android.util.Log.e("SMOOTH_PERF", "navigation block failed", failure)
+            }
         }
     }
 
@@ -1844,6 +2065,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openSettings() {
+        showLyricsBulk = false
         showDashboard = false
         showLibrary = false
         showCollections = false
@@ -1870,6 +2092,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openDashboard() {
+        showLyricsBulk = false
         libraryBackTarget = LibraryBackTarget.DASHBOARD
         showDashboard = true
         showLibrary = false
@@ -1891,9 +2114,14 @@ class MainActivity : ComponentActivity() {
 
     private fun loadDashboard() {
         if (!::libraryRepository.isInitialized || !::executor.isInitialized) return
+        val queuedAt = System.nanoTime()
         executor.execute {
+            val startedAt = System.nanoTime()
             runCatching { libraryRepository.loadDashboard() }
-                .onSuccess { data -> runOnUiThread { if (!isDestroyed) dashboardData = data } }
+                .onSuccess { data ->
+                    android.util.Log.i("SMOOTH_PERF", "dashboard queueMs=${(startedAt - queuedAt) / 1_000_000} loadMs=${(System.nanoTime() - startedAt) / 1_000_000}")
+                    runOnUiThread { if (!isDestroyed) dashboardData = data }
+                }
                 .onFailure { runOnUiThread { if (!isDestroyed) dashboardData = null } }
         }
     }

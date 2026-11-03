@@ -156,5 +156,23 @@ object CatalogMigrations {
         }
     }
 
-    val ALL: Array<Migration> = arrayOf(FROM_1_TO_2, FROM_2_TO_3, FROM_3_TO_4, FROM_4_TO_5, FROM_5_TO_6, FROM_6_TO_7, FROM_7_TO_8, FROM_8_TO_9, FROM_9_TO_10, FROM_10_TO_11)
+    val FROM_11_TO_12 = object : Migration(11, 12) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            TrackFolderScopeSql.migrate(db)
+        }
+    }
+
+    val ALL: Array<Migration> = arrayOf(
+        FROM_1_TO_2,
+        FROM_2_TO_3,
+        FROM_3_TO_4,
+        FROM_4_TO_5,
+        FROM_5_TO_6,
+        FROM_6_TO_7,
+        FROM_7_TO_8,
+        FROM_8_TO_9,
+        FROM_9_TO_10,
+        FROM_10_TO_11,
+        FROM_11_TO_12,
+    )
 }
