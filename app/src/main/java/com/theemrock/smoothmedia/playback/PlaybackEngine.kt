@@ -13,10 +13,11 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
-import com.theemrock.smoothmedia.eq.AndroidEqualizerBackend
 import com.theemrock.smoothmedia.eq.AutoEqAudioProcessor
+import com.theemrock.smoothmedia.eq.EqProfile
 import com.theemrock.smoothmedia.eq.EqualizerBand
 import com.theemrock.smoothmedia.eq.EqualizerProfileStore
+import com.theemrock.smoothmedia.eq.ManualEqBands
 import com.theemrock.smoothmedia.eq.ParametricEq
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.CountDownLatch
@@ -72,8 +73,8 @@ class Media3PlaybackEngine(
             ): AudioSink = DefaultAudioSink.Builder(audioContext).setAudioProcessors(arrayOf(autoEqProcessor)).build()
         })
         .build()
-    private val equalizerBackend = AndroidEqualizerBackend()
     private val equalizerProfile = EqualizerProfileStore(context)
+    private var autoEqProfile: EqProfile? = null
     @Volatile
     override var state: PlaybackEngineState = PlaybackEngineState()
         private set
@@ -81,7 +82,8 @@ class Media3PlaybackEngine(
     override val player: Player get() = exoPlayer
 
     init {
-        autoEqPrefs.getString(AUTOEQ_PREF_KEY, null)?.let { autoEqProcessor.setProfile(ParametricEq.parseAutoEq(it)) }
+        autoEqProfile = autoEqPrefs.getString(AUTOEQ_PREF_KEY, null)?.let { ParametricEq.parseAutoEq(it) }
+        refreshEqualizer()
         handler.post {
             exoPlayer.setAudioAttributes(
                 AudioAttributes.Builder()
@@ -138,11 +140,6 @@ class Media3PlaybackEngine(
                 publish(state.copy(status = PlaybackStatus.ERROR, errorMessage = error.message ?: error.errorCodeName))
             }
 
-            override fun onAudioSessionIdChanged(audioSessionId: Int) {
-                if (equalizerBackend.attach(audioSessionId) && equalizerProfile.isManualEnabled()) {
-                    equalizerBackend.applyManual(equalizerProfile.readLevels())
-                }
-            }
             })
         }
     }
@@ -195,22 +192,25 @@ class Media3PlaybackEngine(
         handler.post { exoPlayer.seekTo(positionMs.coerceAtLeast(0L)) }
     }
 
-    override fun applyManualEqualizer(levels: Map<Short, Int>): Boolean = onPlayerThreadBlocking {
+    override fun applyManualEqualizer(levels: Map<Short, Int>): Boolean {
         equalizerProfile.writeLevels(levels)
-        equalizerBackend.applyManual(levels)
+        refreshEqualizer()
+        return true
     }
 
-    override fun setEqualizerEnabled(enabled: Boolean): Boolean = onPlayerThreadBlocking {
+    override fun setEqualizerEnabled(enabled: Boolean): Boolean {
         equalizerProfile.writeManualEnabled(enabled)
-        equalizerBackend.setEnabled(enabled)
+        refreshEqualizer()
+        return true
     }
 
-    override fun equalizerBands(): List<EqualizerBand> = onPlayerThreadBlocking { equalizerBackend.bands() }
+    override fun equalizerBands(): List<EqualizerBand> = ManualEqBands.bands(equalizerProfile.readLevels())
 
     override fun applyAutoEq(text: String?): Boolean {
         val saved = text?.takeIf { it.isNotBlank() }
         autoEqPrefs.edit().putString(AUTOEQ_PREF_KEY, saved).apply()
-        autoEqProcessor.setProfile(saved?.let { ParametricEq.parseAutoEq(it) })
+        autoEqProfile = saved?.let { ParametricEq.parseAutoEq(it) }
+        refreshEqualizer()
         return true
     }
 
@@ -218,12 +218,18 @@ class Media3PlaybackEngine(
         val released = CountDownLatch(1)
         handler.post {
             exoPlayer.stop()
-            equalizerBackend.close()
             exoPlayer.release()
             thread.quitSafely()
             released.countDown()
         }
         released.await(2, TimeUnit.SECONDS)
+    }
+
+    /** Single source for the processor: AutoEQ correction plus enabled manual bands. */
+    private fun refreshEqualizer() {
+        val auto = autoEqProfile
+        val manual = ManualEqBands.peakBands(equalizerProfile.readLevels(), equalizerProfile.isManualEnabled())
+        autoEqProcessor.setProfile(EqProfile(preampDb = auto?.preampDb ?: 0.0, bands = auto?.bands.orEmpty() + manual))
     }
 
     private fun publish(next: PlaybackEngineState) {

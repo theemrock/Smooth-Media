@@ -21,6 +21,8 @@ class AutoEqAudioProcessor : BaseAudioProcessor() {
     private var configured: AudioProcessor.AudioFormat = AudioProcessor.AudioFormat.NOT_SET
     private var channels = 1
     private var isFloat = false
+    // False for encodings we cannot process (e.g. 24-bit FLAC): stay passive instead of failing playback.
+    private var supportedFormat = false
     // Per section and channel: x1, x2, y1, y2 (direct form I history).
     private var state: Array<Array<DoubleArray>> = emptyArray()
 
@@ -29,17 +31,14 @@ class AutoEqAudioProcessor : BaseAudioProcessor() {
         profileChanged = true
     }
 
-    override fun isActive(): Boolean {
-        val current = profile ?: return false
-        return super.isActive() && (current.bands.isNotEmpty() || current.preampDb != 0.0)
-    }
+    // Stays active for supported formats so profile changes (EQ toggles) apply mid-track without a sink reconfigure.
+    override fun isActive(): Boolean = super.isActive() && supportedFormat
 
     override fun onConfigure(inputAudioFormat: AudioProcessor.AudioFormat): AudioProcessor.AudioFormat {
-        if (inputAudioFormat.encoding != C.ENCODING_PCM_16BIT && inputAudioFormat.encoding != C.ENCODING_PCM_FLOAT) {
-            throw AudioProcessor.UnhandledAudioFormatException(inputAudioFormat)
-        }
+        // Media3 calls this for every format, even when the processor ends up inactive, so it must not throw.
         configured = inputAudioFormat
-        rebuild(inputAudioFormat)
+        supportedFormat = inputAudioFormat.encoding == C.ENCODING_PCM_16BIT || inputAudioFormat.encoding == C.ENCODING_PCM_FLOAT
+        if (supportedFormat) rebuild(inputAudioFormat)
         return inputAudioFormat
     }
 

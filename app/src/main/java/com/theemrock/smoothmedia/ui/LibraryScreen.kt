@@ -2,7 +2,11 @@ package com.theemrock.smoothmedia.ui
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Box
@@ -218,6 +222,11 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
         selection = LibrarySongSelection()
         selectionMode = false
     }
+    // Long press starts selection mode with the pressed song already selected.
+    val startSelection: (LibrarySong) -> Unit = { song ->
+        selectionMode = true
+        if (song.trackId !in selection.trackIds) selection = selection.toggle(song.trackId)
+    }
     var gridMode by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState(initialScrollIndex, initialScrollOffset)
     val gridState = rememberLazyGridState()
@@ -240,21 +249,26 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
             }
     }
     Column(modifier = Modifier.fillMaxSize()) {
-        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(onClick = {
-                selectionMode = !selectionMode
-                if (!selectionMode) selection = selection.clear()
-            }) { Text(if (selectionMode) "Seçimi kapat" else "Seç") }
-            if (selectionMode) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (!selectionMode) {
+                OutlinedButton(onClick = { selectionMode = true }) { Text("Seç") }
+            } else {
                 val selectedSongs = selectedLibrarySongs(state.songs, selection.trackIds)
+                // Count stays fixed on the left; only the actions scroll.
                 Text("${selection.trackIds.size} seçildi", color = Muted, fontSize = 13.sp)
-                OutlinedButton(
-                    enabled = selection.trackIds.isNotEmpty(),
-                    onClick = { onEditSelectedSongs(selectedSongs) },
-                ) { Text("Seçilenleri düzenle") }
-                OutlinedButton(enabled = selectedSongs.isNotEmpty(), onClick = { onAddSelectedToPlaylist(selectedSongs) }) { Text("Playliste ekle") }
-                OutlinedButton(enabled = selectedSongs.isNotEmpty(), onClick = { onAddSelectedToQueue(selectedSongs) }) { Text("Kuyruğa ekle") }
-                TextButton(onClick = { selection = selection.clear() }) { Text("Temizle") }
+                Row(
+                    modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    OutlinedButton(enabled = selection.trackIds.isNotEmpty(), onClick = { onEditSelectedSongs(selectedSongs) }) { Text("Düzenle") }
+                    OutlinedButton(enabled = selectedSongs.isNotEmpty(), onClick = { onAddSelectedToPlaylist(selectedSongs) }) { Text("Playliste ekle") }
+                    OutlinedButton(enabled = selectedSongs.isNotEmpty(), onClick = { onAddSelectedToQueue(selectedSongs) }) { Text("Kuyruğa ekle") }
+                }
             }
         }
         LibraryViewModeToggle(gridMode = gridMode, onGridModeChanged = { gridMode = it })
@@ -278,7 +292,7 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        gridItems(state.songs, key = { it.trackId }) { song -> SongGridCard(song = song, artworkResolver = artworkResolver, onSong = { if (selectionMode) selection = selection.toggle(song.trackId) else onSong(song) }, onEditSong = onEditSong, onAddToQueue = onAddToQueue, onPlayNext = onPlayNext, selected = song.trackId in selection.trackIds, selectionMode = selectionMode) }
+                        gridItems(state.songs, key = { it.trackId }) { song -> SongGridCard(song = song, artworkResolver = artworkResolver, onSong = { if (selectionMode) selection = selection.toggle(song.trackId) else onSong(song) }, onLongPress = { startSelection(song) }, onEditSong = onEditSong, onAddToQueue = onAddToQueue, onPlayNext = onPlayNext, selected = song.trackId in selection.trackIds, selectionMode = selectionMode) }
                         item { if (state.loading) CircularProgressIndicator(color = Cyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp) }
                     }
                     LibraryGridScrollbar(gridState, Modifier.padding(top = 8.dp, bottom = 8.dp))
@@ -291,7 +305,7 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
                         verticalArrangement = Arrangement.spacedBy(2.dp),
                     ) {
-                        items(state.songs, key = { it.trackId }) { song -> SongRow(song = song, artworkResolver = artworkResolver, artworkSize = artworkSize, onSong = { if (selectionMode) selection = selection.toggle(song.trackId) else onSong(song) }, onEditSong = onEditSong, onAddToQueue = onAddToQueue, onPlayNext = onPlayNext, selected = song.trackId in selection.trackIds, selectionMode = selectionMode) }
+                        items(state.songs, key = { it.trackId }) { song -> SongRow(song = song, artworkResolver = artworkResolver, artworkSize = artworkSize, onSong = { if (selectionMode) selection = selection.toggle(song.trackId) else onSong(song) }, onLongPress = { startSelection(song) }, onEditSong = onEditSong, onAddToQueue = onAddToQueue, onPlayNext = onPlayNext, onAddToPlaylist = { onAddSelectedToPlaylist(listOf(it)) }, selected = song.trackId in selection.trackIds, selectionMode = selectionMode) }
                         item {
                             if (state.loading) Box(modifier = Modifier.fillMaxWidth().padding(20.dp), contentAlignment = Alignment.Center) {
                                 CircularProgressIndicator(color = Cyan, modifier = Modifier.size(24.dp), strokeWidth = 2.dp)
@@ -305,18 +319,20 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun SongGridCard(
     song: LibrarySong,
     artworkResolver: AndroidArtworkResolver?,
     onSong: (LibrarySong) -> Unit,
+    onLongPress: () -> Unit,
     onEditSong: (LibrarySong) -> Unit,
     onAddToQueue: (LibrarySong) -> Unit,
     onPlayNext: (LibrarySong) -> Unit,
     selected: Boolean,
     selectionMode: Boolean,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().border(if (selectionMode && selected) 1.dp else 0.dp, Cyan, RoundedCornerShape(8.dp)).alpha(if (song.isAccessible) 1f else .58f).clickable(enabled = song.isAccessible) { onSong(song) }) {
+    Column(modifier = Modifier.fillMaxWidth().border(if (selectionMode && selected) 1.dp else 0.dp, Cyan, RoundedCornerShape(8.dp)).alpha(if (song.isAccessible) 1f else .58f).combinedClickable(enabled = song.isAccessible, onClick = { onSong(song) }, onLongClick = onLongPress)) {
         if (artworkResolver != null) {
             LibraryArtwork(ArtworkRequest.Track(song.trackId), artworkResolver, Modifier.fillMaxWidth().aspectRatio(1f), "Album artwork", 192)
         } else {
@@ -331,8 +347,9 @@ private fun SongGridCard(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?, artworkSize: androidx.compose.ui.unit.Dp, onSong: (LibrarySong) -> Unit, onEditSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit, selected: Boolean, selectionMode: Boolean) {
+private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?, artworkSize: androidx.compose.ui.unit.Dp, onSong: (LibrarySong) -> Unit, onLongPress: () -> Unit, onEditSong: (LibrarySong) -> Unit, onAddToQueue: (LibrarySong) -> Unit, onPlayNext: (LibrarySong) -> Unit, onAddToPlaylist: (LibrarySong) -> Unit, selected: Boolean, selectionMode: Boolean) {
     var actionsExpanded by remember { mutableStateOf(false) }
     Row(
         modifier = Modifier
@@ -340,7 +357,7 @@ private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?,
             .border(if (selectionMode && selected) 1.dp else 0.dp, Cyan, RoundedCornerShape(8.dp))
             .alpha(if (song.isAccessible) 1f else .58f)
             .semantics { contentDescription = song.accessibilityDescription }
-            .clickable(enabled = song.isAccessible) { onSong(song) }
+            .combinedClickable(enabled = song.isAccessible, onClick = { onSong(song) }, onLongClick = onLongPress)
             .padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -373,6 +390,7 @@ private fun SongRow(song: LibrarySong, artworkResolver: AndroidArtworkResolver?,
             DropdownMenu(expanded = actionsExpanded, onDismissRequest = { actionsExpanded = false }, modifier = Modifier.width(180.dp)) {
                 DropdownMenuItem(text = { Text("Sonraki çal") }, onClick = { actionsExpanded = false; onPlayNext(song) })
                 DropdownMenuItem(text = { Text("Kuyruğa ekle") }, onClick = { actionsExpanded = false; onAddToQueue(song) })
+                DropdownMenuItem(text = { Text("Playliste ekle") }, onClick = { actionsExpanded = false; onAddToPlaylist(song) })
                 DropdownMenuItem(text = { Text("Düzenle") }, onClick = { actionsExpanded = false; onEditSong(song) })
             }
         }

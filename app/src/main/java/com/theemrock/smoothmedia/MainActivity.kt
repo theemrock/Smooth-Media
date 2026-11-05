@@ -686,6 +686,8 @@ class MainActivity : ComponentActivity() {
                             },
                             onNext = ::playNext,
                             onPrevious = ::playPrevious,
+                            shuffleEnabled = queueController.state.value.shuffle,
+                            repeatMode = queueController.state.value.repeat,
                             onShuffle = {
                                 queueController.setShuffle(!queueController.state.value.shuffle)
                                 playbackClient.setShuffle(queueController.state.value.shuffle)
