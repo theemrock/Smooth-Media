@@ -9,6 +9,11 @@ sealed interface LyricsFetchOutcome {
     data class Failed(val reason: String) : LyricsFetchOutcome
 }
 
+/** One-track lyrics lookup, as used by the bulk fetcher. */
+fun interface LyricsTrackFetch {
+    fun fetch(trackId: String, title: String, artist: String, album: String?, durationMs: Long?): LyricsFetchOutcome
+}
+
 /**
  * Looks up lyrics for one track and stores them in the local cache.
  *
@@ -22,8 +27,8 @@ class LyricsFetchUseCase(
     private val nowEpochMs: () -> Long = System::currentTimeMillis,
     private val recordMiss: (trackId: String, checkedAtEpochMs: Long, kind: String) -> Unit = { _, _, _ -> },
     private val clearMiss: (trackId: String) -> Unit = {},
-) {
-    fun fetch(
+) : LyricsTrackFetch {
+    override fun fetch(
         trackId: String,
         title: String,
         artist: String,
