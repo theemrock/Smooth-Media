@@ -110,8 +110,8 @@ class LrclibClient(
         const val USER_AGENT = "SmoothMedia/1014 (Android; https://github.com/theemrock/Smooth-Media)"
         const val CONNECT_TIMEOUT_MS = 8_000
         const val READ_TIMEOUT_MS = 12_000
-        /** Shared spacing between real HTTP requests, across all threads (about 3.3 requests per second at most). */
-        const val MIN_REQUEST_INTERVAL_MS = 300L
+        /** Shared spacing between real HTTP requests, across all threads (about 6.7 requests per second at most). lrclib answers in about 0.3–0.7 s, so 300 ms left the workers idle. 429 is still retried with backoff. */
+        const val MIN_REQUEST_INTERVAL_MS = 150L
         /** Retry waits for 503/429/network errors, the sequence used in the approved test (2 s, 5 s, 10 s, 20 s). */
         val BACKOFF_MS = longArrayOf(2_000L, 5_000L, 10_000L, 20_000L)
 
