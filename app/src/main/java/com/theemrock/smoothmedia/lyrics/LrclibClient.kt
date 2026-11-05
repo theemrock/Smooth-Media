@@ -15,6 +15,31 @@ sealed interface LrclibResult {
 }
 
 /**
+ * Spaces requests at least [minIntervalMs] apart across all threads. Each caller reserves its own
+ * slot, so parallel workers queue up instead of bursting together.
+ */
+class RequestGate(
+    private val minIntervalMs: Long,
+    private val nowMs: () -> Long = { System.nanoTime() / 1_000_000L },
+    private val sleepMs: (Long) -> Unit = { Thread.sleep(it) },
+) {
+    private var nextSlotMs: Long? = null
+
+    fun await() {
+        val wait = reserve()
+        if (wait > 0) sleepMs(wait)
+    }
+
+    @Synchronized
+    private fun reserve(): Long {
+        val now = nowMs()
+        val slot = maxOf(now, nextSlotMs ?: now)
+        nextSlotMs = slot + minIntervalMs
+        return slot - now
+    }
+}
+
+/**
  * Minimal client for the public lrclib.net search endpoint (no API key).
  *
  * Uses /api/search with artist and title only, like the approved test script did. The strict
@@ -30,6 +55,7 @@ class LrclibClient(
         URL(url).openConnection() as HttpURLConnection
     },
     private val sleepMs: (Long) -> Unit = { Thread.sleep(it) },
+    private val requestGate: RequestGate = RequestGate(MIN_REQUEST_INTERVAL_MS),
 ) {
     fun lookup(trackName: String, artistName: String, albumName: String?, durationMs: Long?): LrclibResult {
         val url = buildSearchUrl(trackName, artistName)
@@ -60,6 +86,7 @@ class LrclibClient(
 
     private fun fetchOnce(url: String): Fetch {
         return try {
+            requestGate.await()
             val connection = openConnection(url)
             connection.requestMethod = "GET"
             connection.connectTimeout = CONNECT_TIMEOUT_MS
@@ -83,6 +110,8 @@ class LrclibClient(
         const val USER_AGENT = "SmoothMedia/1014 (Android; https://github.com/theemrock/Smooth-Media)"
         const val CONNECT_TIMEOUT_MS = 8_000
         const val READ_TIMEOUT_MS = 12_000
+        /** Shared spacing between real HTTP requests, across all threads (about 3.3 requests per second at most). */
+        const val MIN_REQUEST_INTERVAL_MS = 300L
         /** Retry waits for 503/429/network errors, the sequence used in the approved test (2 s, 5 s, 10 s, 20 s). */
         val BACKOFF_MS = longArrayOf(2_000L, 5_000L, 10_000L, 20_000L)
 
