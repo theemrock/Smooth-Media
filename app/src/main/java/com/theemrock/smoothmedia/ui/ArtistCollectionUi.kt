@@ -33,7 +33,6 @@ fun sortArtistRows(
     return if (ascending) sorted else sorted.asReversed()
 }
 
-fun groupArtistRows(rows: List<LibraryCollectionRow>): List<ArtistLetterGroup> =
-    sortArtistRows(rows).groupBy { row ->
-        row.title.trim().firstOrNull()?.uppercase() ?: "#"
-    }.map { (letter, artists) -> ArtistLetterGroup(letter, artists) }
+fun groupArtistRows(rows: List<LibraryCollectionRow>, ascending: Boolean = true): List<ArtistLetterGroup> =
+    sortArtistRows(rows, ascending).groupBy { row -> AlphabetIndex.bucket(row.title) }
+        .map { (letter, artists) -> ArtistLetterGroup(letter, artists) }

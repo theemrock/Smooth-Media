@@ -27,6 +27,12 @@ interface PlaylistDao {
     @Query("SELECT track_id FROM playlist_entries WHERE playlist_id = :playlistId AND track_id IN (:trackIds)")
     fun existingTrackIds(playlistId: String, trackIds: List<String>): List<String>
 
+    @Query("UPDATE playlist_entries SET position = :position WHERE playlist_id = :playlistId AND track_id = :trackId")
+    fun updatePosition(playlistId: String, trackId: String, position: Int)
+
+    @Query("UPDATE playlists SET updated_at_epoch_ms = :now WHERE playlist_id = :playlistId")
+    fun touch(playlistId: String, now: Long)
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     fun insertPlaylist(playlist: PlaylistEntity)
 

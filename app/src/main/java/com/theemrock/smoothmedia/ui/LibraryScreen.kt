@@ -1,6 +1,7 @@
 package com.theemrock.smoothmedia.ui
 
 import androidx.compose.foundation.background
+import kotlinx.coroutines.launch
 import androidx.compose.foundation.border
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
@@ -106,11 +107,13 @@ fun LibraryScreen(
     initialScrollIndex: Int = 0,
     initialScrollOffset: Int = 0,
     onScrollPositionChanged: (Int, Int) -> Unit = { _, _ -> },
+    counts: LibraryCategoryCounts = LibraryCategoryCounts(),
 ) {
     Surface(color = Ink, modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            LibraryNavigationBar(
-                onMenu = onMenu,
+            LibraryChrome(
+                counts = counts,
+                selected = LibraryChromeTab.SONGS,
                 onSearch = onSearch,
                 onDashboard = onDashboard,
                 onSongs = onSongs,
@@ -118,6 +121,9 @@ fun LibraryScreen(
                 onSources = onSources,
                 onSettings = onSettings,
             )
+            val shownState = remember(state.songs, state.isFiltered) {
+                if (state.isFiltered) state.songs else sortSongsByTitle(state.songs)
+            }.let { state.copy(songs = it) }
             LibraryHeader(
                 heading = state.heading,
                 isFiltered = state.isFiltered,
@@ -130,7 +136,7 @@ fun LibraryScreen(
                 !state.loaded || (state.loading && state.songs.isEmpty()) -> LoadingState()
                 state.songs.isEmpty() -> EmptyState()
                 else -> Box(modifier = Modifier.weight(1f)) {
-                    SongsList(state, onNearEnd, artworkResolver, onSong, onEditSong, onAddToQueue, onPlayNext, onEditSelectedSongs, onAddSelectedToPlaylist, onAddSelectedToQueue, initialScrollIndex, initialScrollOffset, onScrollPositionChanged)
+                    SongsList(shownState, onNearEnd, artworkResolver, onSong, onEditSong, onAddToQueue, onPlayNext, onEditSelectedSongs, onAddSelectedToPlaylist, onAddSelectedToQueue, initialScrollIndex, initialScrollOffset, onScrollPositionChanged)
                 }
             }
             if (playbackState != null && miniPlayerSong != null) {
@@ -156,17 +162,13 @@ private fun LibraryHeader(
     onSongs: () -> Unit,
     onCollection: (LibraryCollectionType) -> Unit,
 ) {
-    Column(modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(if (isFiltered) "Filtrelenmiş şarkılar" else "Şarkılar", color = Color.White, fontSize = 26.sp, fontWeight = FontWeight.Bold, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text("$totalTracks şarkı", color = Muted, fontSize = 14.sp)
+    if (isFiltered || (heading.isNotBlank() && heading != "Your library")) {
+        Column(modifier = Modifier.padding(start = 16.dp, end = 12.dp)) {
+            if (isFiltered) Text("Filtrelenmiş şarkılar · $totalTracks şarkı", color = Color.White, fontSize = 16.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            if (heading.isNotBlank() && heading != "Your library") {
+                Text(heading, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
         }
-        if (heading.isNotBlank() && heading != "Your library") {
-            Text(heading, color = Muted, fontSize = 12.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        LibrarySectionTabs(selected = null, onSongs = onSongs, onCollection = onCollection)
     }
 }
 
@@ -230,6 +232,10 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
     var gridMode by rememberSaveable { mutableStateOf(false) }
     val listState = rememberLazyListState(initialScrollIndex, initialScrollOffset)
     val gridState = rememberLazyGridState()
+    val showIndex = !state.isFiltered
+    val firstIndexByBucket = remember(state.songs) { AlphabetIndex.firstIndexByBucket(state.songs.map { AlphabetIndex.bucket(it.title) }) }
+    var activeLetter by remember { mutableStateOf<String?>(null) }
+    val indexScope = androidx.compose.runtime.rememberCoroutineScope()
     val latestNearEnd = rememberUpdatedState(onNearEnd)
     val latestState = rememberUpdatedState(state)
     val latestScrollCallback = rememberUpdatedState(onScrollPositionChanged)
@@ -254,9 +260,7 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            if (!selectionMode) {
-                OutlinedButton(onClick = { selectionMode = true }) { Text("Seç") }
-            } else {
+            if (selectionMode) {
                 val selectedSongs = selectedLibrarySongs(state.songs, selection.trackIds)
                 // Count stays fixed on the left; only the actions scroll.
                 Text("${selection.trackIds.size} seçildi", color = Muted, fontSize = 13.sp)
@@ -296,6 +300,10 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
                         item { if (state.loading) CircularProgressIndicator(color = Cyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp) }
                     }
                     LibraryGridScrollbar(gridState, Modifier.padding(top = 8.dp, bottom = 8.dp))
+                    if (showIndex) AlphabetIndexBar(activeLetter, { letter ->
+                        activeLetter = letter
+                        AlphabetIndex.resolve(letter, firstIndexByBucket)?.let { target -> indexScope.launch { gridState.scrollToItem(target) } }
+                    })
                 }
             } else {
                 Row(modifier = Modifier.fillMaxSize()) {
@@ -313,6 +321,10 @@ private fun SongsList(state: LibraryUiState, onNearEnd: () -> Unit, artworkResol
                         }
                     }
                     LibraryListScrollbar(listState, Modifier.padding(top = 8.dp, bottom = 8.dp))
+                    if (showIndex) AlphabetIndexBar(activeLetter, { letter ->
+                        activeLetter = letter
+                        AlphabetIndex.resolve(letter, firstIndexByBucket)?.let { target -> indexScope.launch { listState.scrollToItem(target) } }
+                    })
                 }
             }
         }
@@ -453,4 +465,12 @@ private fun formatDuration(durationMs: Long?): String {
     if (durationMs == null || durationMs <= 0L) return "--:--"
     val totalSeconds = durationMs / 1000L
     return "%d:%02d".format(totalSeconds / 60L, totalSeconds % 60L)
+}
+
+/** Whole-library title order (Turkish collation, symbols first, blank titles last). */
+internal fun sortSongsByTitle(songs: List<LibrarySong>): List<LibrarySong> {
+    val collator = AlphabetIndex.newCollator()
+    return songs.sortedWith { a, b ->
+        AlphabetIndex.compareTitles(a.title, b.title, collator).takeIf { it != 0 } ?: a.trackId.compareTo(b.trackId)
+    }
 }

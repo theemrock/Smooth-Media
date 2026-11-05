@@ -100,7 +100,12 @@ fun LibraryDashboardScreen(
                     verticalArrangement = Arrangement.spacedBy(22.dp),
                 ) {
                     item {
-                        CategoryStrip(data, onSongs, onCollection)
+                        CategoryStrip(
+                            LibraryCategoryCounts(data.totalTracks, data.albumCount, data.artistCount, data.genreCount, data.folderCount),
+                            LibraryChromeTab.NONE,
+                            onSongs,
+                            onCollection,
+                        )
                     }
                     item {
                         DashboardSection(
@@ -168,7 +173,7 @@ fun LibraryDashboardScreen(
 }
 
 @Composable
-private fun DashboardTopBar(
+internal fun DashboardTopBar(
     menuExpanded: Boolean,
     onMenuChange: (Boolean) -> Unit,
     onSearch: () -> Unit,
@@ -176,6 +181,7 @@ private fun DashboardTopBar(
     onCollection: (LibraryCollectionType) -> Unit,
     onSources: () -> Unit,
     onSettings: () -> Unit,
+    onDashboard: (() -> Unit)? = null,
 ) {
     Row(
         modifier = Modifier
@@ -196,6 +202,7 @@ private fun DashboardTopBar(
                     onSearch = onSearch,
                     onSources = onSources,
                     onSettings = onSettings,
+                    onDashboard = onDashboard,
                 )
             }
         }
@@ -217,7 +224,9 @@ private fun DashboardTopBar(
                 Text("Kütüphanede ara…", color = DashboardMuted, fontSize = 16.sp)
             }
         }
-        Text("⋮", color = Color.White, fontSize = 28.sp)
+        IconButton(onClick = { onDashboard?.invoke() }) {
+            Text("⌂", color = DashboardCyan, fontSize = 28.sp)
+        }
     }
 }
 
@@ -229,17 +238,19 @@ private fun DashboardMenu(
     onSearch: () -> Unit,
     onSources: () -> Unit,
     onSettings: () -> Unit,
+    onDashboard: (() -> Unit)? = null,
 ) {
     DropdownMenu(
         expanded = true,
         onDismissRequest = onDismiss,
         modifier = Modifier.width(220.dp).background(DashboardPanel),
     ) {
-        DashboardMenuItem(CategoryIconKind.LIBRARY, "Kütüphane", selected = true, onClick = onDismiss)
+        DashboardMenuItem(CategoryIconKind.LIBRARY, "Kütüphane", selected = onDashboard == null, onClick = { onDismiss(); onDashboard?.invoke() })
         DashboardMenuItem(CategoryIconKind.SONGS, "Tüm şarkılar", onClick = { onDismiss(); onSongs() })
         DashboardMenuItem(CategoryIconKind.ALBUMS, "Albümler", onClick = { onDismiss(); onCollection(LibraryCollectionType.ALBUMS) })
         DashboardMenuItem(CategoryIconKind.ARTISTS, "Sanatçılar", onClick = { onDismiss(); onCollection(LibraryCollectionType.ARTISTS) })
         DashboardMenuItem(CategoryIconKind.GENRES, "Türler", onClick = { onDismiss(); onCollection(LibraryCollectionType.GENRES) })
+        DashboardMenuItem(CategoryIconKind.PLAYLISTS, "Playlistler", onClick = { onDismiss(); onCollection(LibraryCollectionType.PLAYLISTS) })
         DashboardMenuItem(CategoryIconKind.FOLDERS, "Klasörler", onClick = { onDismiss(); onCollection(LibraryCollectionType.FOLDERS) })
         HorizontalDivider(color = DashboardLine)
         Text("Akıllı listeler", color = DashboardCyan, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
@@ -247,12 +258,6 @@ private fun DashboardMenu(
             DashboardMenuItem(CategoryIconKind.GENRES, "${list.title}  ${list.trackCount}", onClick = { onDismiss(); SmartListMenu.onOpen(list) })
         }
         DashboardMenuItem(CategoryIconKind.GENRES, "+ Akıllı liste", onClick = { onDismiss(); SmartListMenu.onCreate() })
-        HorizontalDivider(color = DashboardLine)
-        Text("Playlistler", color = DashboardCyan, fontSize = 12.sp, modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp))
-        PlaylistMenu.playlists.forEach { playlist ->
-            DashboardMenuItem(CategoryIconKind.SONGS, playlist.name, onClick = onDismiss)
-        }
-        DashboardMenuItem(CategoryIconKind.SONGS, "+ Playlist oluştur", onClick = { onDismiss(); PlaylistMenu.onCreate() })
         HorizontalDivider(color = DashboardLine)
         DashboardMenuItem(CategoryIconKind.SETTINGS, "Ayarlar", onClick = { onDismiss(); onSettings() })
     }
@@ -269,27 +274,43 @@ private fun DashboardMenuItem(icon: CategoryIconKind, label: String, selected: B
 }
 
 @Composable
-private fun CategoryStrip(
-    data: LibraryDashboardData,
+internal fun CategoryStrip(
+    counts: LibraryCategoryCounts,
+    selected: LibraryChromeTab,
     onSongs: () -> Unit,
     onCollection: (LibraryCollectionType) -> Unit,
 ) {
     BoxWithConstraints(modifier = Modifier.fillMaxWidth()) {
         val cardWidth = dashboardCategoryWidthDp(maxWidth.value).dp
+        val scroll = androidx.compose.foundation.rememberScrollState()
+        val density = androidx.compose.ui.platform.LocalDensity.current
+        // Bring the selected card into view; cards already visible keep the strip still.
+        androidx.compose.runtime.LaunchedEffect(selected, cardWidth, maxWidth) {
+            val index = selected.ordinal - 1
+            if (index >= 0) {
+                val leftEdge = 16.dp + (cardWidth + 6.dp) * index
+                val rightEdge = leftEdge + cardWidth
+                // Only scroll when more than half of the selected card is off-screen.
+                if (leftEdge + cardWidth / 2 > maxWidth) {
+                    scroll.scrollTo(with(density) { (rightEdge + 16.dp - maxWidth).roundToPx() })
+                }
+            }
+        }
         Row(
-            modifier = Modifier.horizontalScroll(androidx.compose.foundation.rememberScrollState()).padding(horizontal = 16.dp),
+            modifier = Modifier.horizontalScroll(scroll).padding(horizontal = 16.dp),
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            DashboardCategory(CategoryIconKind.SONGS, "Şarkılar", data.totalTracks, onSongs, cardWidth)
-            DashboardCategory(CategoryIconKind.ALBUMS, "Albümler", data.albumCount, { onCollection(LibraryCollectionType.ALBUMS) }, cardWidth)
-            DashboardCategory(CategoryIconKind.ARTISTS, "Sanatçılar", data.artistCount, { onCollection(LibraryCollectionType.ARTISTS) }, cardWidth)
-            DashboardCategory(CategoryIconKind.GENRES, "Türler", data.genreCount, { onCollection(LibraryCollectionType.GENRES) }, cardWidth)
-            DashboardCategory(CategoryIconKind.FOLDERS, "Klasörler", data.folderCount, { onCollection(LibraryCollectionType.FOLDERS) }, cardWidth)
+            DashboardCategory(CategoryIconKind.SONGS, "Şarkılar", counts.tracks, onSongs, cardWidth, selected == LibraryChromeTab.SONGS)
+            DashboardCategory(CategoryIconKind.ALBUMS, "Albümler", counts.albums, { onCollection(LibraryCollectionType.ALBUMS) }, cardWidth, selected == LibraryChromeTab.ALBUMS)
+            DashboardCategory(CategoryIconKind.ARTISTS, "Sanatçılar", counts.artists, { onCollection(LibraryCollectionType.ARTISTS) }, cardWidth, selected == LibraryChromeTab.ARTISTS)
+            DashboardCategory(CategoryIconKind.GENRES, "Türler", counts.genres, { onCollection(LibraryCollectionType.GENRES) }, cardWidth, selected == LibraryChromeTab.GENRES)
+            DashboardCategory(CategoryIconKind.PLAYLISTS, "Playlistler", counts.playlists ?: PlaylistMenu.playlists.size, { onCollection(LibraryCollectionType.PLAYLISTS) }, cardWidth, selected == LibraryChromeTab.PLAYLISTS)
+            DashboardCategory(CategoryIconKind.FOLDERS, "Klasörler", counts.folders, { onCollection(LibraryCollectionType.FOLDERS) }, cardWidth, selected == LibraryChromeTab.FOLDERS)
         }
     }
 }
 
-private enum class CategoryIconKind { LIBRARY, SONGS, ALBUMS, ARTISTS, GENRES, FOLDERS, SETTINGS }
+private enum class CategoryIconKind { LIBRARY, SONGS, ALBUMS, ARTISTS, GENRES, PLAYLISTS, FOLDERS, SETTINGS }
 
 @Composable
 private fun DashboardCategory(
@@ -298,14 +319,15 @@ private fun DashboardCategory(
     count: Int?,
     onClick: (() -> Unit)?,
     cardWidth: androidx.compose.ui.unit.Dp,
+    selected: Boolean = false,
 ) {
     Column(
         modifier = Modifier
             .width(cardWidth)
             .height(96.dp)
             .clip(RoundedCornerShape(10.dp))
-            .border(1.dp, if (onClick != null) DashboardCyan else DashboardLine, RoundedCornerShape(10.dp))
-            .background(Brush.linearGradient(listOf(DashboardPanel, DashboardInk)))
+            .border(if (selected) 2.dp else 1.dp, if (onClick != null) DashboardCyan else DashboardLine, RoundedCornerShape(10.dp))
+            .background(if (selected) Brush.linearGradient(listOf(DashboardCyan.copy(alpha = .22f), DashboardInk)) else Brush.linearGradient(listOf(DashboardPanel, DashboardInk)))
             .then(if (onClick != null) Modifier.clickable(onClick = onClick) else Modifier)
             .padding(horizontal = 4.dp, vertical = 7.dp),
         horizontalAlignment = Alignment.CenterHorizontally,
@@ -347,6 +369,13 @@ private fun CategoryIcon(kind: CategoryIconKind, color: Color) {
             CategoryIconKind.GENRES -> {
                 drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(3.dp.toPx(), 7.dp.toPx()), size = androidx.compose.ui.geometry.Size(13.dp.toPx(), 10.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()), style = Stroke(width = 2.dp.toPx()))
                 drawRoundRect(color, topLeft = androidx.compose.ui.geometry.Offset(10.dp.toPx(), 10.dp.toPx()), size = androidx.compose.ui.geometry.Size(13.dp.toPx(), 10.dp.toPx()), cornerRadius = androidx.compose.ui.geometry.CornerRadius(2.dp.toPx()), style = Stroke(width = 2.dp.toPx()))
+            }
+            CategoryIconKind.PLAYLISTS -> {
+                drawLine(color, androidx.compose.ui.geometry.Offset(3.dp.toPx(), 7.dp.toPx()), androidx.compose.ui.geometry.Offset(17.dp.toPx(), 7.dp.toPx()), strokeWidth = 2.dp.toPx())
+                drawLine(color, androidx.compose.ui.geometry.Offset(3.dp.toPx(), 13.dp.toPx()), androidx.compose.ui.geometry.Offset(17.dp.toPx(), 13.dp.toPx()), strokeWidth = 2.dp.toPx())
+                drawLine(color, androidx.compose.ui.geometry.Offset(3.dp.toPx(), 19.dp.toPx()), androidx.compose.ui.geometry.Offset(10.dp.toPx(), 19.dp.toPx()), strokeWidth = 2.dp.toPx())
+                drawCircle(color, radius = 3.dp.toPx(), center = androidx.compose.ui.geometry.Offset(19.dp.toPx(), 19.dp.toPx()))
+                drawLine(color, androidx.compose.ui.geometry.Offset(22.dp.toPx(), 19.dp.toPx()), androidx.compose.ui.geometry.Offset(22.dp.toPx(), 9.dp.toPx()), strokeWidth = 2.dp.toPx())
             }
             CategoryIconKind.FOLDERS -> {
                 val path = Path().apply {

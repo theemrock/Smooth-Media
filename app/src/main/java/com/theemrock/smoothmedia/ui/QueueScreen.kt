@@ -15,6 +15,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Text
@@ -96,11 +98,36 @@ fun QueueScreen(
             return@Column
         }
 
+        val listState = rememberLazyListState()
+        // Open on the playing song; the songs before it sit above and stay reachable by scrolling up.
+        LaunchedEffect(Unit) {
+            if (current != null && current > 0) listState.scrollToItem(current + 1)
+        }
         LazyColumn(
+            state = listState,
             modifier = Modifier.fillMaxSize(),
             contentPadding = PaddingValues(bottom = 24.dp),
             verticalArrangement = Arrangement.spacedBy(2.dp),
         ) {
+            if (current != null && current > 0) {
+                item(key = "header-prev") { SectionHeader("Önceki · $current") }
+                itemsIndexed(
+                    state.items.subList(0, current),
+                    key = { _, item -> item.entryId },
+                ) { index, item ->
+                    QueueRow(
+                        index = index,
+                        item = item,
+                        isCurrent = false,
+                        lastIndex = state.items.lastIndex,
+                        artworkResolver = artworkResolver,
+                        onSelect = onSelect,
+                        onMoveUp = onMoveUp,
+                        onMoveDown = onMoveDown,
+                        onRemove = onRemove,
+                    )
+                }
+            }
             if (current != null) {
                 item(key = "header-now") { SectionHeader("Şimdi çalıyor") }
                 item(key = state.items[current].entryId) {

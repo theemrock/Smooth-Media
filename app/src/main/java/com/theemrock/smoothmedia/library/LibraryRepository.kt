@@ -85,6 +85,7 @@ enum class LibraryCollectionType {
     ALBUMS,
     ARTISTS,
     GENRES,
+    PLAYLISTS,
     FOLDERS,
 }
 
@@ -262,6 +263,7 @@ sealed interface LibraryTrackFilter {
     data class Genre(val genre: String) : LibraryTrackFilter
     data class GenreId(val genreId: String, val includeDescendants: Boolean = false) : LibraryTrackFilter
     data class Folder(val path: String) : LibraryTrackFilter
+    data class Playlist(val playlistId: String) : LibraryTrackFilter
     data class SafFolder(val sourceId: String, val documentId: String) : LibraryTrackFilter
 
     /** Tracks matched by a compiled Smart Playlist rule. */
@@ -548,6 +550,7 @@ class RoomLibraryRepository(
         val rows = when (type) {
             LibraryCollectionType.ALBUMS -> dao.loadAlbums(offset, limit + 1)
             LibraryCollectionType.ARTISTS -> dao.loadArtists(offset, limit + 1)
+            LibraryCollectionType.PLAYLISTS -> dao.loadPlaylists(offset, limit + 1)
             LibraryCollectionType.GENRES -> {
                 val canonicalAvailable = dao.countCanonicalGenres() > 0
                 chooseCanonicalGenresOrLegacy(
@@ -571,6 +574,7 @@ class RoomLibraryRepository(
     override fun countCollections(type: LibraryCollectionType): Int = when (type) {
         LibraryCollectionType.ALBUMS -> dao.countAlbums()
         LibraryCollectionType.ARTISTS -> dao.countArtists()
+        LibraryCollectionType.PLAYLISTS -> dao.countPlaylists()
         LibraryCollectionType.GENRES -> if (dao.countCanonicalGenres() > 0) dao.countCanonicalGenres() else dao.countGenres()
         LibraryCollectionType.FOLDERS -> {
             val graphCount = safDocumentDao?.countDirectories()
@@ -740,6 +744,7 @@ class RoomLibraryRepository(
         is LibraryTrackFilter.Folder -> arrayOf(filter.path, filter.path)
         is LibraryTrackFilter.SafFolder -> arrayOf(filter.sourceId, filter.documentId)
         is LibraryTrackFilter.SmartRuleMatch -> filter.compiled.args.toTypedArray()
+        is LibraryTrackFilter.Playlist -> arrayOf(filter.playlistId)
     }
 
     private companion object {
@@ -823,6 +828,7 @@ class RoomLibraryRepository(
             }
         is LibraryTrackFilter.Folder -> "EXISTS (SELECT 1 FROM track_locations filter_l LEFT JOIN locator_bindings filter_b ON filter_b.location_id=filter_l.location_id LEFT JOIN library_sources filter_s ON filter_s.source_id=filter_l.source_id LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_l.track_id=t.track_id AND (filter_b.locator=? OR COALESCE(NULLIF(filter_l.path,''),filter_s.volume_name,filter_b.locator)=?) AND filter_e.exclusion_id IS NULL)"
         is LibraryTrackFilter.SmartRuleMatch -> filter.compiled.sql
+        is LibraryTrackFilter.Playlist -> "EXISTS (SELECT 1 FROM playlist_entries pl_e WHERE pl_e.playlist_id=? AND pl_e.track_id=t.track_id)"
         is LibraryTrackFilter.SafFolder -> "t.track_id IN (SELECT filter_l.track_id FROM saf_documents filter_f JOIN folder_scope filter_scope ON filter_scope.sourceId=filter_f.sourceId AND filter_scope.documentId=filter_f.parentDocumentId JOIN track_locations filter_l ON filter_l.source_id=filter_f.sourceId JOIN locator_bindings filter_b ON filter_b.source_id=filter_l.source_id AND filter_b.location_id=filter_l.location_id AND filter_b.locator=filter_f.uri LEFT JOIN catalog_exclusions filter_e ON filter_e.source_id=filter_l.source_id AND filter_e.locator=filter_b.locator WHERE filter_f.isDirectory=0 AND filter_f.available=1 AND filter_e.exclusion_id IS NULL)"
         }
         return "t.catalog_lifecycle='ACTIVE' AND ($criterion) AND (NOT EXISTS (SELECT 1 FROM track_locations any_l WHERE any_l.track_id=t.track_id) OR EXISTS (SELECT 1 FROM track_locations visible_l LEFT JOIN locator_bindings visible_b ON visible_b.location_id=visible_l.location_id LEFT JOIN catalog_exclusions visible_e ON visible_e.source_id=visible_l.source_id AND visible_e.locator=visible_b.locator WHERE visible_l.track_id=t.track_id AND visible_e.exclusion_id IS NULL))"
@@ -963,8 +969,8 @@ class LibraryViewModel(
         var offset = 0
         do {
             val page = currentFilter?.let { filter ->
-                (filteredPageLoader ?: error("Filtered library is unavailable"))(filter, offset, pageSize)
-            } ?: pageLoader(offset, pageSize)
+                (filteredPageLoader ?: error("Filtered library is unavailable"))(filter, offset, SNAPSHOT_PAGE_SIZE)
+            } ?: pageLoader(offset, SNAPSHOT_PAGE_SIZE)
             result += page.songs
             offset += page.songs.size
             if (page.songs.isEmpty() || !page.hasMore) break
@@ -985,6 +991,8 @@ class LibraryViewModel(
 
     companion object {
         const val DEFAULT_PAGE_SIZE = 50
+        /** Snapshots read the whole list; big pages avoid ~140 slow OFFSET queries on a 7k library. */
+        const val SNAPSHOT_PAGE_SIZE = 2000
     }
 }
 

@@ -10,6 +10,8 @@ import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.padding
+import androidx.compose.ui.unit.dp
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.safeDrawingPadding
 import androidx.compose.material3.MaterialTheme
@@ -19,6 +21,7 @@ import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -39,6 +42,7 @@ import com.theemrock.smoothmedia.library.LibraryCollectionViewModel
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryTrackFilter
 import com.theemrock.smoothmedia.library.AlbumGroupingKey
+import com.theemrock.smoothmedia.ui.LibraryCategoryCounts
 import com.theemrock.smoothmedia.library.RoomLibraryRepository
 import com.theemrock.smoothmedia.library.LibrarySearchViewModel
 import com.theemrock.smoothmedia.library.LibrarySong
@@ -78,6 +82,7 @@ import com.theemrock.smoothmedia.library.SmartRuleCompiler
 import com.theemrock.smoothmedia.ui.AutoGenreStrip
 import com.theemrock.smoothmedia.ui.SMART_KEY_PREFIX
 import com.theemrock.smoothmedia.ui.NewPlaylistDialog
+import com.theemrock.smoothmedia.ui.PlaylistDetailScreen
 import com.theemrock.smoothmedia.ui.PlaylistMenu
 import com.theemrock.smoothmedia.ui.SmartListMenu
 import com.theemrock.smoothmedia.ui.SmartEditorState
@@ -239,6 +244,10 @@ class MainActivity : ComponentActivity() {
     private var showSourceManagement by mutableStateOf(false)
     private var showAlbumDetail by mutableStateOf(false)
     private var showLibraryDetail by mutableStateOf(false)
+    private var showPlaylistDetail by mutableStateOf(false)
+    private var playlistDetailRow by mutableStateOf<LibraryCollectionRow?>(null)
+    private var playlistDetailSongs by mutableStateOf<List<LibrarySong>>(emptyList())
+    private var playlistDetailLoading by mutableStateOf(false)
     private var showSearch by mutableStateOf(false)
     private var showNowPlaying by mutableStateOf(false)
     private var showLyrics by mutableStateOf(false)
@@ -308,6 +317,12 @@ class MainActivity : ComponentActivity() {
     private var autoGenreLists by mutableStateOf<List<AutoGenreList>>(emptyList())
     private val autoGenreTopContent: @Composable () -> Unit = {
         AutoGenreStrip(autoGenreLists, ::openAutoGenreList)
+    }
+    private val playlistTopContent: @Composable () -> Unit = {
+        androidx.compose.material3.OutlinedButton(
+            onClick = { showNewPlaylistDialog = true },
+            modifier = Modifier.padding(horizontal = 16.dp),
+        ) { androidx.compose.material3.Text("+ Yeni playlist") }
     }
     private var smartEditor by mutableStateOf<SmartEditorState?>(null)
     private var showNewPlaylistDialog by mutableStateOf(false)
@@ -400,7 +415,7 @@ class MainActivity : ComponentActivity() {
                     val domainOrder = queueController.orderedForPlayback()
                     val hasFollowingDomainItem = domainOrder.indexOfFirst { it.entryId == entryId } < domainOrder.lastIndex
                     if (queueController.state.value.mode == QueueMode.GHOST && PlaybackWindow.needsRefresh(activeGhostPlaybackWindowEntryIds, entryId, hasFollowingDomainItem)) {
-                        syncQueueToSession(playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true)
+                        syncQueueToSession(playWhenReady = playbackClient.wantsToPlay(), preservePosition = true)
                     }
                 }
                 if (entryChanged || abs(position - lastPersistedPlaybackPosition) >= 5_000L) {
@@ -429,6 +444,10 @@ class MainActivity : ComponentActivity() {
                 }
                 if (showSettings) {
                     openDashboard()
+                    return
+                }
+                if (showPlaylistDetail && !showNowPlaying && !showQueue && !showEqualizer && !showSearch && !showLyrics) {
+                    navigateBackFromPlaylistDetail()
                     return
                 }
                 if (showAlbumDetail) {
@@ -606,7 +625,7 @@ class MainActivity : ComponentActivity() {
                                 queueController.setShuffle(!queueController.state.value.shuffle)
                                 playbackClient.setShuffle(queueController.state.value.shuffle)
                                 persistQueue()
-                                syncQueueToSession(playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true)
+                                syncQueueToSession(playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true, inPlace = true)
                             },
                             onRepeat = {
                                 val next = when (queueController.state.value.repeat) {
@@ -661,7 +680,15 @@ class MainActivity : ComponentActivity() {
                             fetching = lyricsFetching,
                         )
                     } else if (showNowPlaying && nowPlayingSong != null) {
+                        val nowPlayingIsFlac by produceState(false, nowPlayingSong?.trackId) {
+                            value = nowPlayingSong?.trackId?.let { id ->
+                                kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    CatalogPlaybackLocationResolver(runtime.database).resolve(id).firstOrNull()?.format == com.theemrock.smoothmedia.playback.PlaybackFormat.FLAC
+                                }
+                            } ?: false
+                        }
                         NowPlayingScreen(
+                            isFlac = nowPlayingIsFlac,
                             song = nowPlayingSong!!,
                             state = playbackState,
                             onBack = { showNowPlaying = false },
@@ -684,6 +711,30 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
+                            onArtist = {
+                                nowPlayingSong?.let { song ->
+                                    showNowPlaying = false
+                                    openLibraryDetail(LibraryCollectionType.ARTISTS, LibraryCollectionRow(song.artist, song.artist, null, 0))
+                                }
+                            },
+                            onAlbum = {
+                                nowPlayingSong?.let { song ->
+                                    executor.execute {
+                                        // Resolve the song's real album group (artist/source/folder scoped) via its artist's album rows.
+                                        val row = libraryRepository.loadArtistAlbumRows(song.artist).firstOrNull { it.title == song.album }
+                                            ?: LibraryCollectionRow(
+                                                AlbumGroupingKey(song.album, song.artist, AlbumGroupingKey.UNKNOWN_SOURCE, AlbumGroupingKey.UNKNOWN_FOLDER).encoded(),
+                                                song.album, song.artist, 0,
+                                            )
+                                        runOnUiThread {
+                                            if (!isDestroyed) {
+                                                showNowPlaying = false
+                                                openAlbumDetail(row)
+                                            }
+                                        }
+                                    }
+                                }
+                            },
                             onNext = ::playNext,
                             onPrevious = ::playPrevious,
                             shuffleEnabled = queueController.state.value.shuffle,
@@ -692,7 +743,7 @@ class MainActivity : ComponentActivity() {
                                 queueController.setShuffle(!queueController.state.value.shuffle)
                                 playbackClient.setShuffle(queueController.state.value.shuffle)
                                 persistQueue()
-                                syncQueueToSession(playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true)
+                                syncQueueToSession(playWhenReady = playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true, inPlace = true)
                             },
                             onRepeat = {
                                 val next = when (queueController.state.value.repeat) {
@@ -716,6 +767,30 @@ class MainActivity : ComponentActivity() {
                                 playSong(song, visibleSongs, com.theemrock.smoothmedia.library.LibrarySearchQuery.snapshotKey(searchViewModel.state.value.query, visibleSongs))
                             },
                             onBack = { showSearch = false },
+                        )
+                    } else if (showPlaylistDetail) {
+                        val detailRow = playlistDetailRow
+                        PlaylistDetailScreen(
+                            title = detailRow?.title.orEmpty(),
+                            songs = playlistDetailSongs,
+                            loading = playlistDetailLoading,
+                            activeTrackId = nowPlayingSong?.trackId,
+                            onSong = { song -> detailRow?.let { playSong(song, playlistDetailSongs, "Playlist:" + it.key) } },
+                            onReorder = { songs -> detailRow?.let { reorderPlaylist(it.key, songs) } },
+                            counts = dashboardData?.let { LibraryCategoryCounts(it.totalTracks, it.albumCount, it.artistCount, it.genreCount, it.folderCount) } ?: LibraryCategoryCounts(),
+                            onSearch = { showSearch = true },
+                            onDashboard = ::openDashboard,
+                            onSongs = ::showAllSongs,
+                            onCollection = ::openCollection,
+                            onSources = ::openSources,
+                            onSettings = ::openSettings,
+                            playbackState = playbackState.takeIf { nowPlayingSong != null },
+                            miniPlayerSong = nowPlayingSong,
+                            onMiniPlayerOpen = { showNowPlaying = true },
+                            onMiniPlayerPause = playbackClient::pause,
+                            onMiniPlayerResume = playbackClient::resume,
+                            onMiniPlayerNext = ::playNext,
+                            artworkResolver = artworkResolver,
                         )
                     } else if (showAlbumDetail && albumDetailData != null) {
                         LibraryAlbumDetailScreen(
@@ -783,9 +858,24 @@ class MainActivity : ComponentActivity() {
                             onDashboard = ::openDashboard,
                             onSources = ::openSources,
                             onSettings = ::openSettings,
+                            counts = dashboardData?.let { LibraryCategoryCounts(it.totalTracks, it.albumCount, it.artistCount, it.genreCount, it.folderCount) } ?: LibraryCategoryCounts(),
+                            playbackState = playbackState.takeIf { nowPlayingSong != null },
+                            miniPlayerSong = nowPlayingSong,
+                            onMiniPlayerOpen = { showNowPlaying = true },
+                            onMiniPlayerPause = playbackClient::pause,
+                            onMiniPlayerResume = playbackClient::resume,
+                            onMiniPlayerNext = ::playNext,
+                            artworkResolver = artworkResolver,
                         )
                     } else if (showCollections) {
                         LibraryCollectionScreen(
+                            counts = dashboardData?.let { LibraryCategoryCounts(it.totalTracks, it.albumCount, it.artistCount, it.genreCount, it.folderCount) } ?: LibraryCategoryCounts(),
+                            playbackState = playbackState.takeIf { nowPlayingSong != null },
+                            miniPlayerSong = nowPlayingSong,
+                            onMiniPlayerOpen = { showNowPlaying = true },
+                            onMiniPlayerPause = playbackClient::pause,
+                            onMiniPlayerResume = playbackClient::resume,
+                            onMiniPlayerNext = ::playNext,
                             state = collectionViewModel.state.value,
                             onNearEnd = {
                                 val requestedType = collectionViewModel.state.value.type
@@ -816,10 +906,15 @@ class MainActivity : ComponentActivity() {
                             },
                             onCollection = ::openCollection,
                             onCollectionSelected = { row ->
-                                if (collectionViewModel.state.value.type == LibraryCollectionType.ALBUMS) openAlbumDetail(row)
-                                else openLibraryDetail(collectionViewModel.state.value.type, row)
+                                when (collectionViewModel.state.value.type) {
+                                    LibraryCollectionType.ALBUMS -> openAlbumDetail(row)
+                                    LibraryCollectionType.PLAYLISTS -> openPlaylistDetail(row)
+                                    else -> openLibraryDetail(collectionViewModel.state.value.type, row)
+                                }
                             },
                             onEditSelectedCollections = ::openMetadataEditorForCollections,
+                            onAddSelectedCollectionsToPlaylist = ::openPlaylistPickerForCollections,
+                            onAddSelectedCollectionsToQueue = ::addCollectionsToQueue,
                             onSources = {
                                 openSources()
                             },
@@ -829,7 +924,11 @@ class MainActivity : ComponentActivity() {
                             onSettings = ::openSettings,
                             artistAlbumPreviews = artistAlbumPreviews,
                             genreArtworkPreviews = genreArtworkPreviews,
-                            topContent = if (collectionViewModel.state.value.type == LibraryCollectionType.GENRES) autoGenreTopContent else null,
+                            topContent = when (collectionViewModel.state.value.type) {
+                                LibraryCollectionType.GENRES -> autoGenreTopContent
+                                LibraryCollectionType.PLAYLISTS -> playlistTopContent
+                                else -> null
+                            },
                             artworkResolver = artworkResolver,
                         )
                     } else if (showDashboard) {
@@ -866,6 +965,7 @@ class MainActivity : ComponentActivity() {
                         }
                     } else if (showLibrary) {
                         LibraryScreen(
+                            counts = dashboardData?.let { LibraryCategoryCounts(it.totalTracks, it.albumCount, it.artistCount, it.genreCount, it.folderCount) } ?: LibraryCategoryCounts(),
                             state = libraryViewModel.state.value,
                             onNearEnd = { executor.execute { libraryViewModel.loadNextPage() } },
                             onRetry = { executor.execute { libraryViewModel.retry() } },
@@ -995,6 +1095,7 @@ class MainActivity : ComponentActivity() {
             }
         }
         loadAndRefreshSources()
+        refreshPlaylistMenu()
         loadMetadataRecoveryState()
         loadMetadataMissingCount()
         loadDashboard()
@@ -1032,7 +1133,8 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-        executor.execute { syncQueueToSession(playWhenReady = false) }
+        // Restores the saved queue paused, unless playback was already started by then (the executor can be busy for a while at launch).
+        executor.execute { if (!playbackStartedByUser) syncQueueToSession(playWhenReady = false, onlyIfIdle = true) }
     }
 
     override fun onDestroy() {
@@ -1212,7 +1314,10 @@ class MainActivity : ComponentActivity() {
         syncQueueToSession(playWhenReady = true)
     }
 
-    private fun syncQueueToSession(playWhenReady: Boolean, preservePosition: Boolean = false) {
+    @Volatile private var playbackStartedByUser = false
+
+    private fun syncQueueToSession(playWhenReady: Boolean, preservePosition: Boolean = false, inPlace: Boolean = false, onlyIfIdle: Boolean = false) {
+        if (playWhenReady) playbackStartedByUser = true
         val items = queueController.orderedForPlayback()
         if (items.isEmpty()) return
         val currentEntryId = queueController.state.value.current?.entryId
@@ -1230,8 +1335,9 @@ class MainActivity : ComponentActivity() {
                 ?: resolvedItems.mapNotNull { item -> resolver.resolve(item.trackId).firstOrNull()?.let { item.entryId to it } }.toMap()
             val resolvedStartIndex = resolution?.startIndex ?: startIndex
             runOnUiThread {
+                if (onlyIfIdle && playbackStartedByUser) return@runOnUiThread
                 activeGhostPlaybackWindowEntryIds = if (isGhostContext) resolvedItems.map { it.entryId } else emptyList()
-                playbackClient.loadQueue(resolvedItems, locations, startIndex = resolvedStartIndex, startPositionMs = if (preservePosition) playbackState.positionMs else 0L, playWhenReady = playWhenReady)
+                if (inPlace) playbackClient.reorderQueue(resolvedItems, locations, resolvedStartIndex, playWhenReady) else playbackClient.loadQueue(resolvedItems, locations, startIndex = resolvedStartIndex, startPositionMs = if (preservePosition) playbackState.positionMs else 0L, playWhenReady = playWhenReady)
             }
         }
     }
@@ -1765,6 +1871,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openCollection(type: LibraryCollectionType) {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         libraryBackTarget = when {
             showLibrary -> LibraryBackTarget.LIBRARY
             showCollections -> LibraryBackTarget.COLLECTIONS
@@ -1783,7 +1890,7 @@ class MainActivity : ComponentActivity() {
                 loadFolderTreeRoots()
                 return@submitLatestNavigation
             }
-            collectionViewModel.loadInitial(type)
+            collectionViewModel.loadInitial(type, WHOLE_LIST_PAGE_SIZE)
             if (type == LibraryCollectionType.ARTISTS) refreshArtistAlbumPreviews()
             if (type == LibraryCollectionType.GENRES) {
                 refreshGenreArtworkPreviews()
@@ -1931,6 +2038,9 @@ class MainActivity : ComponentActivity() {
                 result.onSuccess {
                     showNewPlaylistDialog = false
                     loadAutoGenreLists()
+                    if (showCollections && collectionViewModel.state.value.type == LibraryCollectionType.PLAYLISTS) {
+                        submitLatestNavigation { _ -> collectionViewModel.loadInitial(LibraryCollectionType.PLAYLISTS, WHOLE_LIST_PAGE_SIZE) }
+                    }
                 }.onFailure {
                     Toast.makeText(this, it.message ?: "Playlist oluşturulamadı", Toast.LENGTH_SHORT).show()
                 }
@@ -2075,30 +2185,106 @@ class MainActivity : ComponentActivity() {
         }
     }
 
+    private fun openPlaylistDetail(row: LibraryCollectionRow) {
+        playlistDetailRow = row
+        playlistDetailSongs = emptyList()
+        playlistDetailLoading = true
+        showPlaylistDetail = true
+        submitLatestNavigation { request ->
+            val songs = runCatching { loadPlaylistSongs(row.key) }.getOrDefault(emptyList())
+            runOnUiThread {
+                if (!isDestroyed && isLatestNavigation(request) && playlistDetailRow?.key == row.key) {
+                    playlistDetailSongs = songs
+                    playlistDetailLoading = false
+                }
+            }
+        }
+    }
+
+    /** Whole playlist in playlist order; call off the UI thread. */
+    private fun loadPlaylistSongs(playlistId: String): List<LibrarySong> {
+        val songs = mutableListOf<LibrarySong>()
+        var offset = 0
+        do {
+            val page = libraryRepository.loadFilteredPage(LibraryTrackFilter.Playlist(playlistId), offset, 2000)
+            songs += page.songs
+            offset += page.songs.size
+        } while (page.hasMore && page.songs.isNotEmpty())
+        val byId = songs.associateBy { it.trackId }
+        return playlistRepository.orderedTrackIds(playlistId).mapNotNull { byId[it] }
+    }
+
+    private fun reorderPlaylist(playlistId: String, songs: List<LibrarySong>) {
+        playlistDetailSongs = songs
+        executor.execute { runCatching { playlistRepository.reorder(playlistId, songs.map { it.trackId }) } }
+    }
+
+    private fun navigateBackFromPlaylistDetail() {
+        showPlaylistDetail = false
+        playlistDetailRow = null
+        playlistDetailSongs = emptyList()
+        playlistDetailLoading = false
+    }
+
+    private fun refreshPlaylistMenu() {
+        executor.execute {
+            val playlists = runCatching { playlistRepository.listAll() }.getOrDefault(emptyList())
+            runOnUiThread { if (!isDestroyed) PlaylistMenu.playlists = playlists }
+        }
+    }
+
     private fun openMetadataEditorForCollections(
         type: LibraryCollectionType,
         rows: List<LibraryCollectionRow>,
     ) {
         if (rows.isEmpty() || (type != LibraryCollectionType.ALBUMS && type != LibraryCollectionType.ARTISTS)) return
         submitLatestNavigation { request ->
-            val songPages = mutableListOf<List<LibrarySong>>()
-            rows.forEach { row ->
-                val filter = if (type == LibraryCollectionType.ALBUMS) {
-                    AlbumGroupingKey.decode(row.key, row.title, row.subtitle.orEmpty()).toFilter()
-                } else {
-                    LibraryTrackFilter.Artist(row.title)
-                }
-                var offset = 0
-                do {
-                    val page = libraryRepository.loadFilteredPage(filter, offset, 200)
-                    songPages += page.songs
-                    offset += page.songs.size
-                } while (page.hasMore && page.songs.isNotEmpty())
-            }
+            val songs = collectionSongs(type, rows)
             runOnUiThread {
-                if (!isDestroyed && isLatestNavigation(request)) openMetadataEditor(deduplicateLibrarySongs(songPages))
+                if (!isDestroyed && isLatestNavigation(request)) openMetadataEditor(songs)
             }
         }
+    }
+
+    private fun openPlaylistPickerForCollections(type: LibraryCollectionType, rows: List<LibraryCollectionRow>) {
+        if (rows.isEmpty() || type == LibraryCollectionType.FOLDERS) return
+        submitLatestNavigation { request ->
+            val songs = collectionSongs(type, rows)
+            runOnUiThread {
+                if (!isDestroyed && isLatestNavigation(request)) openPlaylistPicker(songs)
+            }
+        }
+    }
+
+    private fun addCollectionsToQueue(type: LibraryCollectionType, rows: List<LibraryCollectionRow>) {
+        if (rows.isEmpty() || type == LibraryCollectionType.FOLDERS) return
+        submitLatestNavigation { request ->
+            val songs = collectionSongs(type, rows)
+            runOnUiThread {
+                if (!isDestroyed && isLatestNavigation(request)) addSelectedSongsToQueue(songs)
+            }
+        }
+    }
+
+    /** Every song of the given albums, artists or genres, de-duplicated; call off the UI thread. */
+    private fun collectionSongs(type: LibraryCollectionType, rows: List<LibraryCollectionRow>): List<LibrarySong> {
+        val songPages = mutableListOf<List<LibrarySong>>()
+        rows.forEach { row ->
+            val filter = when (type) {
+                LibraryCollectionType.ALBUMS -> AlbumGroupingKey.decode(row.key, row.title, row.subtitle.orEmpty()).toFilter()
+                LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
+                LibraryCollectionType.GENRES -> LibraryTrackFilter.GenreId(row.key, includeDescendants = true)
+                LibraryCollectionType.PLAYLISTS -> LibraryTrackFilter.Playlist(row.key)
+                LibraryCollectionType.FOLDERS -> return@forEach
+            }
+            var offset = 0
+            do {
+                val page = libraryRepository.loadFilteredPage(filter, offset, 200)
+                songPages += page.songs
+                offset += page.songs.size
+            } while (page.hasMore && page.songs.isNotEmpty())
+        }
+        return deduplicateLibrarySongs(songPages)
     }
 
     private fun saveMetadataEditor() {
@@ -2151,6 +2337,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openAlbumDetail(row: LibraryCollectionRow) {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         libraryBackTarget = when {
             showLibraryDetail -> LibraryBackTarget.DETAIL
             showCollections -> LibraryBackTarget.COLLECTIONS
@@ -2179,6 +2366,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openLibraryDetail(type: LibraryCollectionType, row: LibraryCollectionRow) {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         libraryBackTarget = if (showCollections) LibraryBackTarget.COLLECTIONS else LibraryBackTarget.DASHBOARD
         showDashboard = false
         showLibrary = false
@@ -2201,7 +2389,7 @@ class MainActivity : ComponentActivity() {
                 LibraryCollectionType.FOLDERS -> if (folderParts.size == 2) {
                     LibraryTrackFilter.SafFolder(folderParts[0], folderParts[1])
                 } else LibraryTrackFilter.Folder(row.key)
-                LibraryCollectionType.ALBUMS -> return@submitLatestNavigation
+                LibraryCollectionType.ALBUMS, LibraryCollectionType.PLAYLISTS -> return@submitLatestNavigation
             }
             val songs = mutableListOf<LibrarySong>()
             var offset = 0
@@ -2249,6 +2437,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openCollectionSongs(type: LibraryCollectionType, row: LibraryCollectionRow) {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         libraryBackTarget = LibraryBackTarget.COLLECTIONS
         showDashboard = false
         showAlbumDetail = false
@@ -2256,6 +2445,7 @@ class MainActivity : ComponentActivity() {
             LibraryCollectionType.ALBUMS -> AlbumGroupingKey.decode(row.key, row.title, row.subtitle.orEmpty()).toFilter()
             LibraryCollectionType.ARTISTS -> LibraryTrackFilter.Artist(row.title)
             LibraryCollectionType.GENRES -> LibraryTrackFilter.GenreId(row.key, includeDescendants = true)
+            LibraryCollectionType.PLAYLISTS -> LibraryTrackFilter.Playlist(row.key)
             LibraryCollectionType.FOLDERS -> row.key.split('\u001E').takeIf { it.size == 2 }
                 ?.let { LibraryTrackFilter.SafFolder(it[0], it[1]) }
                 ?: LibraryTrackFilter.Folder(row.key)
@@ -2269,6 +2459,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun showAllSongs() {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         if (showLibrary && filteredCollectionType == null && libraryViewModel.state.value.loaded) {
             updateLibraryBackCallback()
             return
@@ -2281,10 +2472,11 @@ class MainActivity : ComponentActivity() {
         showLibrary = true
         filteredCollectionType = null
         updateLibraryBackCallback()
-        submitLatestNavigation { _ -> libraryViewModel.loadInitial(null, "Your library") }
+        submitLatestNavigation { _ -> libraryViewModel.loadInitial(null, "Your library", WHOLE_LIST_PAGE_SIZE) }
     }
 
     private fun returnToCollections(type: LibraryCollectionType) {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         showDashboard = false
         showCollections = true
         showAlbumDetail = false
@@ -2293,11 +2485,12 @@ class MainActivity : ComponentActivity() {
         filteredCollectionType = null
         updateLibraryBackCallback()
         if (collectionViewModel.state.value.type != type || !collectionViewModel.state.value.loaded) {
-            submitLatestNavigation { _ -> collectionViewModel.loadInitial(type) }
+            submitLatestNavigation { _ -> collectionViewModel.loadInitial(type, WHOLE_LIST_PAGE_SIZE) }
         }
     }
 
     private fun openSources() {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         showDashboard = false
         showLibrary = false
         showCollections = false
@@ -2312,6 +2505,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openSettings() {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         showLyricsBulk = false
         showDashboard = false
         showLibrary = false
@@ -2326,6 +2520,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openLibraryManagement() {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         showDashboard = false
         showLibrary = false
         showCollections = false
@@ -2339,6 +2534,7 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun openDashboard() {
+        if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         showLyricsBulk = false
         libraryBackTarget = LibraryBackTarget.DASHBOARD
         showDashboard = true
@@ -2535,3 +2731,6 @@ private fun SmoothMediaTheme(content: @Composable () -> Unit) {
         content = content,
     )
 }
+
+/** Lists the whole library lets the A-Z strip and Turkish sorting work on complete data. */
+private const val WHOLE_LIST_PAGE_SIZE = 8000

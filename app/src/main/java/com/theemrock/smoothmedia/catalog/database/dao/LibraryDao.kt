@@ -43,6 +43,22 @@ interface LibraryDao {
     @RawQuery
     fun searchTracksRaw(query: SupportSQLiteQuery): List<LibraryTrackRow>
 
+    @Query(
+        """
+        SELECT p.playlist_id AS `key`, p.name AS title, NULL AS subtitle, COUNT(e.track_id) AS trackCount,
+               0 AS albumCount, 0 AS mp3Count, 0 AS flacCount
+        FROM playlists AS p
+        LEFT JOIN playlist_entries AS e ON e.playlist_id = p.playlist_id
+        GROUP BY p.playlist_id, p.name
+        ORDER BY p.normalized_name, p.playlist_id
+        LIMIT :limit OFFSET :offset
+        """,
+    )
+    fun loadPlaylists(offset: Int, limit: Int): List<LibraryCollectionRow>
+
+    @Query("SELECT COUNT(*) FROM playlists")
+    fun countPlaylists(): Int
+
     @RawQuery
     fun searchCollectionsRaw(query: SupportSQLiteQuery): List<LibraryCollectionRow>
 

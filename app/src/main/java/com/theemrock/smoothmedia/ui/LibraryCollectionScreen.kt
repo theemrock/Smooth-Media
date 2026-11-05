@@ -1,8 +1,11 @@
 package com.theemrock.smoothmedia.ui
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -12,6 +15,8 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
@@ -37,6 +42,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.snapshotFlow
@@ -78,6 +84,8 @@ fun LibraryCollectionScreen(
     onCollection: (LibraryCollectionType) -> Unit,
     onCollectionSelected: (LibraryCollectionRow) -> Unit = {},
     onEditSelectedCollections: (LibraryCollectionType, List<LibraryCollectionRow>) -> Unit = { _, _ -> },
+    onAddSelectedCollectionsToPlaylist: (LibraryCollectionType, List<LibraryCollectionRow>) -> Unit = { _, _ -> },
+    onAddSelectedCollectionsToQueue: (LibraryCollectionType, List<LibraryCollectionRow>) -> Unit = { _, _ -> },
     onSources: () -> Unit,
     onSearch: () -> Unit = {},
     onMenu: () -> Unit = {},
@@ -87,14 +95,24 @@ fun LibraryCollectionScreen(
     genreArtworkPreviews: Map<String, List<LibraryGenreArtworkPreview>> = emptyMap(),
     artworkResolver: AndroidArtworkResolver? = null,
     topContent: (@Composable () -> Unit)? = null,
+    counts: LibraryCategoryCounts = LibraryCategoryCounts(),
+    playbackState: com.theemrock.smoothmedia.playback.PlaybackEngineState? = null,
+    miniPlayerSong: com.theemrock.smoothmedia.library.LibrarySong? = null,
+    onMiniPlayerOpen: () -> Unit = {},
+    onMiniPlayerPause: () -> Unit = {},
+    onMiniPlayerResume: () -> Unit = {},
+    onMiniPlayerNext: () -> Unit = {},
 ) {
     var selectionMode by remember(state.type) { mutableStateOf(false) }
     var selectedKeys by remember(state.type) { mutableStateOf(emptySet<String>()) }
     LaunchedEffect(state.type) { selectedKeys = emptySet(); selectionMode = false }
+    // Back leaves selection mode first instead of leaving the screen.
+    BackHandler(enabled = selectionMode) { selectionMode = false; selectedKeys = emptySet() }
     Surface(color = CollectionInk, modifier = Modifier.fillMaxSize()) {
         Column(modifier = Modifier.fillMaxSize()) {
-            LibraryNavigationBar(
-                onMenu = onMenu,
+            LibraryChrome(
+                counts = counts,
+                selected = state.type.chromeTab(),
                 onSearch = onSearch,
                 onDashboard = onDashboard,
                 onSongs = onSongs,
@@ -107,20 +125,18 @@ fun LibraryCollectionScreen(
                 total = state.totalCollections,
                 selectionMode = selectionMode,
                 selectedCount = selectedKeys.size,
-                onToggleSelectionMode = {
-                    selectionMode = !selectionMode
-                    if (selectionMode) selectedKeys = emptySet()
-                },
                 onEditSelected = {
                     onEditSelectedCollections(state.type, selectedCollectionRows(state.collections, selectedKeys))
                 },
-            )
-            LibrarySectionTabs(
-                selected = state.type,
-                onSongs = onSongs,
-                onCollection = onCollection,
+                onAddToPlaylist = {
+                    onAddSelectedCollectionsToPlaylist(state.type, selectedCollectionRows(state.collections, selectedKeys))
+                },
+                onAddToQueue = {
+                    onAddSelectedCollectionsToQueue(state.type, selectedCollectionRows(state.collections, selectedKeys))
+                },
             )
             topContent?.invoke()
+            Box(modifier = Modifier.weight(1f)) {
             when {
                 state.errorMessage != null -> CollectionError(state.errorMessage, onRetry)
                 !state.loaded || (state.loading && state.collections.isEmpty()) -> CollectionLoading()
@@ -133,9 +149,28 @@ fun LibraryCollectionScreen(
                     selectionMode = selectionMode,
                     onToggleSelection = { row ->
                         selectedKeys = toggleCollectionSelection(selectedKeys, row.key)
+                        if (selectedKeys.isEmpty()) selectionMode = false
                     },
                     artistAlbumPreviews = artistAlbumPreviews,
                     genreArtworkPreviews = genreArtworkPreviews,
+                    artworkResolver = artworkResolver,
+                    onLongPress = { row ->
+                        if (state.type.supportsSelection()) {
+                            selectionMode = true
+                            selectedKeys = selectedKeys + row.key
+                        }
+                    },
+                )
+            }
+            }
+            if (playbackState != null && miniPlayerSong != null) {
+                MiniPlayer(
+                    song = miniPlayerSong,
+                    state = playbackState,
+                    onOpen = onMiniPlayerOpen,
+                    onPause = onMiniPlayerPause,
+                    onResume = onMiniPlayerResume,
+                    onNext = onMiniPlayerNext,
                     artworkResolver = artworkResolver,
                 )
             }
@@ -149,29 +184,28 @@ private fun CollectionHeader(
     total: Int?,
     selectionMode: Boolean,
     selectedCount: Int,
-    onToggleSelectionMode: () -> Unit,
     onEditSelected: () -> Unit,
+    onAddToPlaylist: () -> Unit,
+    onAddToQueue: () -> Unit,
 ) {
-    Column(modifier = Modifier.padding(start = 16.dp, end = 12.dp, top = 10.dp)) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(collectionLabel(type).lowercase().replaceFirstChar { it.uppercase() }, color = Color.White, fontSize = 26.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(
-                    text = total?.let { "$it koleksiyon" } ?: "Koleksiyon sayısı yükleniyor…",
-                    color = CollectionMuted,
-                    fontSize = 14.sp,
-                )
-            }
-            if (type == LibraryCollectionType.ALBUMS || type == LibraryCollectionType.ARTISTS) {
-                OutlinedButton(onClick = onToggleSelectionMode) {
-                    Text(if (selectionMode) "Seçimi kapat" else "Seç")
+    if (selectionMode && type.supportsSelection()) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            // Count stays fixed on the left; only the actions scroll.
+            Text("$selectedCount seçildi", color = CollectionMuted, fontSize = 13.sp)
+            Row(
+                modifier = Modifier.weight(1f).horizontalScroll(rememberScrollState()),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                if (type == LibraryCollectionType.ALBUMS || type == LibraryCollectionType.ARTISTS) {
+                    OutlinedButton(onClick = onEditSelected, enabled = selectedCount > 0) { Text("Düzenle") }
                 }
-            }
-        }
-        if (selectionMode && (type == LibraryCollectionType.ALBUMS || type == LibraryCollectionType.ARTISTS)) {
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("$selectedCount seçildi", color = CollectionMuted, fontSize = 13.sp)
-                OutlinedButton(onClick = onEditSelected, enabled = selectedCount > 0) { Text("Seçilenleri düzenle") }
+                OutlinedButton(onClick = onAddToPlaylist, enabled = selectedCount > 0) { Text("Playliste ekle") }
+                OutlinedButton(onClick = onAddToQueue, enabled = selectedCount > 0) { Text("Kuyruğa ekle") }
             }
         }
     }
@@ -188,6 +222,7 @@ private fun CollectionGrid(
     artistAlbumPreviews: Map<String, List<LibraryArtistAlbumPreview>>,
     genreArtworkPreviews: Map<String, List<LibraryGenreArtworkPreview>>,
     artworkResolver: AndroidArtworkResolver?,
+    onLongPress: (LibraryCollectionRow) -> Unit = {},
 ) {
     val latestNearEnd = rememberUpdatedState(onNearEnd)
     val latestState = rememberUpdatedState(state)
@@ -201,11 +236,22 @@ private fun CollectionGrid(
             selectionMode = selectionMode,
             artistAlbumPreviews = artistAlbumPreviews,
             artworkResolver = artworkResolver,
+            onLongPress = onLongPress,
         )
     } else {
         var gridMode by rememberSaveable(state.type) { mutableStateOf(true) }
         val gridState = rememberLazyGridState()
         val listState = rememberLazyListState()
+        val rows = remember(state.collections) { sortArtistRows(state.collections) }
+        val firstIndexByBucket = remember(rows) { AlphabetIndex.firstIndexByBucket(rows.map { AlphabetIndex.bucket(it.title) }) }
+        var activeLetter by remember(state.type) { mutableStateOf<String?>(null) }
+        val scope = rememberCoroutineScope()
+        val jumpToLetter: (String) -> Unit = { letter ->
+            activeLetter = letter
+            AlphabetIndex.resolve(letter, firstIndexByBucket)?.let { target ->
+                scope.launch { if (gridMode) gridState.scrollToItem(target) else listState.scrollToItem(target) }
+            }
+        }
         LaunchedEffect(gridState) {
             snapshotFlow { gridState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: -1 }
                 .distinctUntilChanged()
@@ -236,12 +282,13 @@ private fun CollectionGrid(
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        gridItems(state.collections, key = { it.key }) { collection ->
-                            CollectionCard(collection, state.type, genreArtworkPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode) { onCollection(collection) }
+                        gridItems(rows, key = { it.key }) { collection ->
+                            CollectionCard(collection, state.type, genreArtworkPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode, onLongClick = { onLongPress(collection) }) { if (selectionMode) onToggleSelection(collection) else onCollection(collection) }
                         }
                         item { if (state.loading) CircularProgressIndicator(color = CollectionCyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp) }
                     }
                     LibraryGridScrollbar(gridState, Modifier.padding(top = 8.dp, bottom = 8.dp))
+                    AlphabetIndexBar(activeLetter, jumpToLetter)
                 }
             } else {
                 Row(modifier = Modifier.fillMaxSize()) {
@@ -251,18 +298,20 @@ private fun CollectionGrid(
                         contentPadding = PaddingValues(horizontal = 16.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(4.dp),
                     ) {
-                        listItems(state.collections, key = { it.key }) { collection ->
-                            CollectionListRow(collection, state.type, genreArtworkPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode) { onCollection(collection) }
+                        listItems(rows, key = { it.key }) { collection ->
+                            CollectionListRow(collection, state.type, genreArtworkPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode, onLongClick = { onLongPress(collection) }) { if (selectionMode) onToggleSelection(collection) else onCollection(collection) }
                         }
                         item { if (state.loading) CircularProgressIndicator(color = CollectionCyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp) }
                     }
                     LibraryListScrollbar(listState, Modifier.padding(top = 8.dp, bottom = 8.dp))
+                    AlphabetIndexBar(activeLetter, jumpToLetter)
                 }
             }
         }
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CollectionListRow(
     collection: LibraryCollectionRow,
@@ -271,10 +320,11 @@ private fun CollectionListRow(
     artworkResolver: AndroidArtworkResolver?,
     selected: Boolean,
     selectionMode: Boolean,
+    onLongClick: () -> Unit = {},
     onClick: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(6.dp)).padding(vertical = 5.dp),
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(6.dp)).padding(vertical = 5.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -304,12 +354,13 @@ private fun ArtistCollectionContent(
     selectionMode: Boolean,
     artistAlbumPreviews: Map<String, List<LibraryArtistAlbumPreview>>,
     artworkResolver: AndroidArtworkResolver?,
+    onLongPress: (LibraryCollectionRow) -> Unit = {},
 ) {
     var ascending by rememberSaveable { mutableStateOf(true) }
     var gridMode by rememberSaveable { mutableStateOf(false) }
     var activeLetter by remember { mutableStateOf<String?>(null) }
     val sortedRows = remember(state.collections, ascending) { sortArtistRows(state.collections, ascending) }
-    val groups = remember(sortedRows) { groupArtistRows(sortedRows) }
+    val groups = remember(state.collections, ascending) { groupArtistRows(state.collections, ascending) }
     val listState = rememberLazyListState()
     val gridState = rememberLazyGridState()
     val scope = androidx.compose.runtime.rememberCoroutineScope()
@@ -320,6 +371,15 @@ private fun ArtistCollectionContent(
                 put(group.letter, index)
                 index += group.artists.size + 1
             }
+        }
+    }
+    val gridFirstIndex = remember(sortedRows) { AlphabetIndex.firstIndexByBucket(sortedRows.map { AlphabetIndex.bucket(it.title) }) }
+    val jumpToLetter: (String) -> Unit = { letter ->
+        activeLetter = letter
+        if (gridMode) {
+            AlphabetIndex.resolve(letter, gridFirstIndex)?.let { target -> scope.launch { gridState.scrollToItem(target) } }
+        } else {
+            AlphabetIndex.resolve(letter, groupIndexes)?.let { target -> scope.launch { listState.scrollToItem(target) } }
         }
     }
     LaunchedEffect(listState) {
@@ -345,6 +405,7 @@ private fun ArtistCollectionContent(
         if (gridMode) {
             Row(modifier = Modifier.fillMaxSize()) {
                 LazyVerticalGrid(
+                    state = gridState,
                     columns = GridCells.Fixed(2),
                     modifier = Modifier.weight(1f),
                     contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
@@ -352,13 +413,14 @@ private fun ArtistCollectionContent(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
                     gridItems(sortedRows, key = { it.key }) { collection ->
-                        ArtistGridCard(collection, artistAlbumPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode) { onCollection(collection) }
+                        ArtistGridCard(collection, artistAlbumPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode, onLongClick = { onLongPress(collection) }) { onCollection(collection) }
                     }
                     item {
                         if (state.loading) CircularProgressIndicator(color = CollectionCyan, modifier = Modifier.padding(20.dp).size(24.dp), strokeWidth = 2.dp)
                     }
                 }
                 LibraryGridScrollbar(gridState, Modifier.padding(top = 8.dp, bottom = 8.dp))
+                AlphabetIndexBar(activeLetter, jumpToLetter)
             }
         } else {
             Row(modifier = Modifier.fillMaxSize()) {
@@ -378,7 +440,7 @@ private fun ArtistCollectionContent(
                             )
                         }
                         listItems(group.artists, key = { it.key }) { collection ->
-                            ArtistListRow(collection, artistAlbumPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode) { onCollection(collection) }
+                            ArtistListRow(collection, artistAlbumPreviews[collection.title], artworkResolver, selected = collection.key in selectedKeys, selectionMode = selectionMode, onLongClick = { onLongPress(collection) }) { onCollection(collection) }
                         }
                     }
                     item {
@@ -388,37 +450,7 @@ private fun ArtistCollectionContent(
                     }
                 }
                 LibraryListScrollbar(listState, Modifier.padding(top = 8.dp, bottom = 8.dp))
-                Column(
-                    modifier = Modifier
-                        .padding(end = 5.dp, top = 8.dp, bottom = 20.dp)
-                        .pointerInput(groups) {
-                            detectDragGestures { change, _ ->
-                                change.consume()
-                                if (groups.isNotEmpty()) {
-                                    val index = ((change.position.y / size.height.toFloat()) * groups.size).toInt().coerceIn(0, groups.lastIndex)
-                                    val group = groups[index]
-                                    activeLetter = group.letter
-                                    groupIndexes[group.letter]?.let { target -> scope.launch { listState.animateScrollToItem(target) } }
-                                }
-                            }
-                        },
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
-                ) {
-                    groups.forEach { group ->
-                        Text(
-                            group.letter,
-                            color = if (activeLetter == group.letter) Color.White else CollectionCyan,
-                            fontSize = 10.sp,
-                            modifier = Modifier
-                                .background(if (activeLetter == group.letter) CollectionCyan else Color.Transparent, RoundedCornerShape(4.dp))
-                                .clickable {
-                                    activeLetter = group.letter
-                                    groupIndexes[group.letter]?.let { scope.launch { listState.animateScrollToItem(it) } }
-                                },
-                        )
-                    }
-                }
+                AlphabetIndexBar(activeLetter, jumpToLetter)
             }
         }
     }
@@ -431,6 +463,7 @@ private fun ArtistCollectionContent(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ArtistListRow(
     collection: LibraryCollectionRow,
@@ -438,10 +471,11 @@ private fun ArtistListRow(
     artworkResolver: AndroidArtworkResolver?,
     selected: Boolean,
     selectionMode: Boolean,
+    onLongClick: () -> Unit = {},
     onClick: () -> Unit,
 ) {
     Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(6.dp)).padding(vertical = 6.dp),
+        modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(6.dp)).padding(vertical = 6.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp),
     ) {
@@ -461,6 +495,7 @@ private fun ArtistListRow(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ArtistGridCard(
     collection: LibraryCollectionRow,
@@ -468,9 +503,10 @@ private fun ArtistGridCard(
     artworkResolver: AndroidArtworkResolver?,
     selected: Boolean,
     selectionMode: Boolean,
+    onLongClick: () -> Unit = {},
     onClick: () -> Unit,
 ) {
-    Column(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(8.dp)).padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+    Column(modifier = Modifier.fillMaxWidth().combinedClickable(onClick = onClick, onLongClick = onLongClick).border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(8.dp)).padding(6.dp), horizontalAlignment = Alignment.CenterHorizontally) {
         ArtistAvatar(previews?.firstOrNull(), artworkResolver, Modifier.size(92.dp))
         Text(collection.title, color = Color.White, fontSize = 14.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
         Text(collection.artistStatsLine, color = CollectionMuted, fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -498,6 +534,7 @@ private fun ArtistAvatar(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun CollectionCard(
     collection: LibraryCollectionRow,
@@ -506,12 +543,13 @@ private fun CollectionCard(
     artworkResolver: AndroidArtworkResolver?,
     selected: Boolean,
     selectionMode: Boolean,
+    onLongClick: () -> Unit = {},
     onClick: () -> Unit,
 ) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .border(if (selectionMode && selected) 1.dp else 0.dp, CollectionCyan, RoundedCornerShape(8.dp))
             .padding(4.dp),
     ) {
@@ -621,6 +659,7 @@ private fun collectionLabel(type: LibraryCollectionType): String = when (type) {
     LibraryCollectionType.ALBUMS -> "ALBUMS"
     LibraryCollectionType.ARTISTS -> "ARTISTS"
     LibraryCollectionType.GENRES -> "GENRES"
+    LibraryCollectionType.PLAYLISTS -> "PLAYLISTS"
     LibraryCollectionType.FOLDERS -> "FOLDERS"
 }
 
@@ -635,5 +674,6 @@ private fun collectionGlyph(type: LibraryCollectionType): String = when (type) {
     LibraryCollectionType.ALBUMS -> "●"
     LibraryCollectionType.ARTISTS -> "●"
     LibraryCollectionType.GENRES -> "◇"
+    LibraryCollectionType.PLAYLISTS -> "♫"
     LibraryCollectionType.FOLDERS -> "■"
 }

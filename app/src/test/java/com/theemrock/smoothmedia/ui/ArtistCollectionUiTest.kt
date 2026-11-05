@@ -16,8 +16,9 @@ class ArtistCollectionUiTest {
             ),
         )
 
-        assertEquals(listOf("#", "A", "B"), groups.map { it.letter })
+        assertEquals(listOf("0", "A", "B"), groups.map { it.letter })
         assertEquals(listOf("AC/DC", "Aerosmith"), groups[1].artists.map { it.title })
+        assertEquals(listOf("B", "A", "0"), groupArtistRows(listOf(artist("B.B. King"), artist("AC/DC"), artist("#Unknown")), ascending = false).map { it.letter })
     }
 
     @Test

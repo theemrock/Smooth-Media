@@ -14,6 +14,7 @@ class SettingsNavigationTest {
                 MainMenuDestination.ALBUMS,
                 MainMenuDestination.ARTISTS,
                 MainMenuDestination.GENRES,
+                MainMenuDestination.PLAYLISTS,
                 MainMenuDestination.FOLDERS,
                 MainMenuDestination.SETTINGS,
             ),

@@ -36,5 +36,27 @@ class PlaylistRepository(private val database: CatalogDatabase) {
         PlaylistAddResult(requestedIds.size, toAdd.size, requestedIds.count { it in existing }, requestedIds.count { it !in active })
     })
 
+    /** Track ids in playlist order. */
+    fun orderedTrackIds(playlistId: String): List<String> =
+        database.playlistDao().listEntries(playlistId).map { it.trackId }
+
+    /** Saves a new order; entries not named in [orderedTrackIds] (for example removed tracks) go last. */
+    fun reorder(playlistId: String, orderedTrackIds: List<String>) {
+        database.runInTransaction(Callable {
+            val dao = database.playlistDao()
+            val merged = mergePlaylistOrder(dao.listEntries(playlistId).map { it.trackId }, orderedTrackIds)
+            merged.forEachIndexed { index, trackId -> dao.updatePosition(playlistId, trackId, index) }
+            dao.touch(playlistId, System.currentTimeMillis())
+        })
+    }
+
     private fun normalize(value: String): String = value.trim().lowercase(Locale.ROOT)
+}
+
+/** Requested order first (known ids only, no duplicates), then every other existing id in its old order. */
+internal fun mergePlaylistOrder(existing: List<String>, requested: List<String>): List<String> {
+    val known = existing.toSet()
+    val first = orderedUniqueTrackIds(requested).filter { it in known }
+    val placed = first.toSet()
+    return first + existing.filter { it !in placed }
 }

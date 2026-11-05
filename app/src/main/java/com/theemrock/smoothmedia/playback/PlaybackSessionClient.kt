@@ -77,7 +77,7 @@ class PlaybackSessionClient(
                     }
                 })
                 publish()
-                pendingQueue?.let { (items, locations, startIndex) -> applyQueue(items, locations, startIndex, 0L, false) }
+                pendingQueue?.let { (items, locations, startIndex) -> applyQueue(items, locations, startIndex, 0L, pendingQueuePlay) }
                 pendingQueuePlay = false
                 progressHandler.post(progressTick)
             }
@@ -102,6 +102,9 @@ class PlaybackSessionClient(
             play()
         }
     }
+
+    /** The player's own intent to play, valid while a track is still loading. */
+    fun wantsToPlay(): Boolean = controller?.playWhenReady == true
 
     fun pause() { controller?.pause() }
     fun resume() { controller?.play() }
@@ -154,6 +157,28 @@ class PlaybackSessionClient(
             prepare()
             if (playWhenReady) play() else pause()
         }
+    }
+
+    /**
+     * Reorders the playlist around the playing item without reloading it, so audio never drops.
+     * Falls back to a full reload when the playing item is not in the new order.
+     */
+    fun reorderQueue(items: List<QueueItem>, locations: Map<String, PlaybackLocation>, startIndex: Int, playWhenReady: Boolean) {
+        val player = controller ?: return
+        val projection = PlaybackQueueProjection.project(items, locations, startIndex)
+        val pos = projection.items.indexOfFirst { it.entryId == player.currentMediaItem?.mediaId }
+        if (pos < 0) {
+            applyQueue(items, locations, startIndex, player.currentPosition, playWhenReady)
+            return
+        }
+        pendingQueue = Triple(items, locations, startIndex)
+        queueItems = projection.items
+        val media = projection.items.zip(projection.locations).map { (item, location) -> mediaItem(item, location) }
+        val current = player.currentMediaItemIndex
+        if (current + 1 < player.mediaItemCount) player.removeMediaItems(current + 1, player.mediaItemCount)
+        if (current > 0) player.removeMediaItems(0, current)
+        if (pos > 0) player.addMediaItems(0, media.subList(0, pos))
+        if (pos + 1 < media.size) player.addMediaItems(media.subList(pos + 1, media.size))
     }
 
     fun playFromQueue(index: Int) { controller?.apply { seekToDefaultPosition(index); play() } }

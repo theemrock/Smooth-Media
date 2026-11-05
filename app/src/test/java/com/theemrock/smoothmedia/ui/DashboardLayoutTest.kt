@@ -8,16 +8,16 @@ class DashboardLayoutTest {
     @Test
     fun dashboardCategoryStripUsesFiveRealLibraryCategories() {
         assertEquals(
-            listOf("Şarkılar", "Albümler", "Sanatçılar", "Türler", "Klasörler"),
+            listOf("Şarkılar", "Albümler", "Sanatçılar", "Türler", "Playlistler", "Klasörler"),
             dashboardCategoryLabels,
         )
-        assertEquals(5, dashboardCategoryLabels.size)
+        assertEquals(6, dashboardCategoryLabels.size)
     }
 
     @Test
     fun dashboardMenuKeepsApprovedOrderWithoutSourcesEntry() {
         assertEquals(
-            listOf("Kütüphane", "Tüm şarkılar", "Albümler", "Sanatçılar", "Türler", "Klasörler", "Ayarlar"),
+            listOf("Kütüphane", "Tüm şarkılar", "Albümler", "Sanatçılar", "Türler", "Playlistler", "Klasörler", "Ayarlar"),
             dashboardMenuLabels,
         )
         assertEquals(false, dashboardMenuLabels.contains("Kaynaklar"))

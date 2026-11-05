@@ -27,7 +27,7 @@ import com.theemrock.smoothmedia.library.LibraryCollectionType
 private val NavigationMuted = Color(0xFFAAB9C2)
 private val NavigationCyan = Color(0xFF19C3E6)
 
-internal enum class MainMenuDestination { DASHBOARD, SONGS, ALBUMS, ARTISTS, GENRES, FOLDERS, SETTINGS }
+internal enum class MainMenuDestination { DASHBOARD, SONGS, ALBUMS, ARTISTS, GENRES, PLAYLISTS, FOLDERS, SETTINGS }
 
 internal data class MainMenuItemSpec(
     val destination: MainMenuDestination,
@@ -41,6 +41,7 @@ internal val mainMenuItems = listOf(
     MainMenuItemSpec(MainMenuDestination.ALBUMS, "Albümler", "▦"),
     MainMenuItemSpec(MainMenuDestination.ARTISTS, "Sanatçılar", "●"),
     MainMenuItemSpec(MainMenuDestination.GENRES, "Türler", "◇"),
+    MainMenuItemSpec(MainMenuDestination.PLAYLISTS, "Playlistler", "♪"),
     MainMenuItemSpec(MainMenuDestination.FOLDERS, "Klasörler", "■"),
     MainMenuItemSpec(MainMenuDestination.SETTINGS, "Ayarlar", "⚙"),
 )
@@ -91,6 +92,7 @@ fun LibraryNavigationBar(
                             MainMenuDestination.ALBUMS -> onCollection(LibraryCollectionType.ALBUMS)
                             MainMenuDestination.ARTISTS -> onCollection(LibraryCollectionType.ARTISTS)
                             MainMenuDestination.GENRES -> onCollection(LibraryCollectionType.GENRES)
+                            MainMenuDestination.PLAYLISTS -> onCollection(LibraryCollectionType.PLAYLISTS)
                             MainMenuDestination.FOLDERS -> onCollection(LibraryCollectionType.FOLDERS)
                             MainMenuDestination.SETTINGS -> onSettings()
                         }
@@ -128,26 +130,6 @@ fun LibraryNavigationBar(
                 onClick = {
                     menuExpanded = false
                     SmartListMenu.onCreate()
-                },
-            )
-            HorizontalDivider(color = NavigationMuted.copy(alpha = .35f))
-            Text(
-                "Playlistler",
-                color = NavigationCyan,
-                fontSize = 12.sp,
-                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
-            )
-            PlaylistMenu.playlists.forEach { playlist ->
-                DropdownMenuItem(
-                    text = { Text(playlist.name) },
-                    onClick = { menuExpanded = false },
-                )
-            }
-            DropdownMenuItem(
-                text = { Text("+ Playlist oluştur", color = NavigationCyan) },
-                onClick = {
-                    menuExpanded = false
-                    PlaylistMenu.onCreate()
                 },
             )
         }

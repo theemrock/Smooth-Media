@@ -52,10 +52,19 @@ fun FolderTreeScreen(
     onDashboard: () -> Unit,
     onSources: () -> Unit,
     onSettings: () -> Unit,
+    counts: LibraryCategoryCounts = LibraryCategoryCounts(),
+    playbackState: com.theemrock.smoothmedia.playback.PlaybackEngineState? = null,
+    miniPlayerSong: com.theemrock.smoothmedia.library.LibrarySong? = null,
+    onMiniPlayerOpen: () -> Unit = {},
+    onMiniPlayerPause: () -> Unit = {},
+    onMiniPlayerResume: () -> Unit = {},
+    onMiniPlayerNext: () -> Unit = {},
+    artworkResolver: com.theemrock.smoothmedia.artwork.AndroidArtworkResolver? = null,
 ) {
     Column(Modifier.fillMaxSize().background(TreeInk)) {
-        LibraryNavigationBar(
-            onMenu = onMenu,
+        LibraryChrome(
+            counts = counts,
+            selected = LibraryChromeTab.FOLDERS,
             onSearch = onSearch,
             onDashboard = onDashboard,
             onSongs = onSongs,
@@ -63,38 +72,37 @@ fun FolderTreeScreen(
             onSources = onSources,
             onSettings = onSettings,
         )
-        Text(
-            "Klasörler",
-            color = Color.White,
-            fontSize = 28.sp,
-            fontWeight = FontWeight.Bold,
-            modifier = Modifier.padding(horizontal = 18.dp, vertical = 8.dp),
-        )
-        Text(
-            if (loaded) "${rows.count { it.depth == 0 }} kök klasör" else "Yükleniyor…",
-            color = TreeMuted,
-            fontSize = 14.sp,
-            modifier = Modifier.padding(horizontal = 18.dp),
-        )
-        LibrarySectionTabs(
-            selected = LibraryCollectionType.FOLDERS,
-            onSongs = onSongs,
-            onCollection = onCollection,
-        )
         if (loaded && rows.isEmpty()) {
-            Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                 Text("Henüz klasör yok", color = TreeMuted, fontSize = 16.sp)
             }
+            FolderMiniPlayer(playbackState, miniPlayerSong, onMiniPlayerOpen, onMiniPlayerPause, onMiniPlayerResume, onMiniPlayerNext, artworkResolver)
             return@Column
         }
         LazyColumn(
-            modifier = Modifier.fillMaxSize(),
+            modifier = Modifier.weight(1f).fillMaxWidth(),
             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
         ) {
             items(rows, key = { it.node.key }) { row ->
                 FolderTreeLine(row, onToggle = { onToggle(row) }, onOpen = { onOpen(row) })
             }
         }
+        FolderMiniPlayer(playbackState, miniPlayerSong, onMiniPlayerOpen, onMiniPlayerPause, onMiniPlayerResume, onMiniPlayerNext, artworkResolver)
+    }
+}
+
+@Composable
+private fun FolderMiniPlayer(
+    state: com.theemrock.smoothmedia.playback.PlaybackEngineState?,
+    song: com.theemrock.smoothmedia.library.LibrarySong?,
+    onOpen: () -> Unit,
+    onPause: () -> Unit,
+    onResume: () -> Unit,
+    onNext: () -> Unit,
+    artworkResolver: com.theemrock.smoothmedia.artwork.AndroidArtworkResolver?,
+) {
+    if (state != null && song != null) {
+        MiniPlayer(song = song, state = state, onOpen = onOpen, onPause = onPause, onResume = onResume, onNext = onNext, artworkResolver = artworkResolver)
     }
 }
 

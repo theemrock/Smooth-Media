@@ -299,7 +299,7 @@ class LibraryRepositoryTest {
         viewModel.loadInitial(LibraryTrackFilter.Artist("Artist"), "Artist", pageSize = 2)
 
         assertEquals(listOf("filtered-1", "filtered-2", "filtered-3"), viewModel.snapshotCurrentList().map { it.trackId })
-        assertEquals(listOf(0 to 2, 0 to 2, 2 to 2), calls)
+        assertEquals(listOf(0 to 2, 0 to LibraryViewModel.SNAPSHOT_PAGE_SIZE, 2 to LibraryViewModel.SNAPSHOT_PAGE_SIZE), calls)
     }
 
     @Test
