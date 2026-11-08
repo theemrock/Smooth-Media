@@ -33,15 +33,8 @@ import com.theemrock.smoothmedia.catalog.database.entity.LibrarySourceEntity
 import com.theemrock.smoothmedia.catalog.database.entity.SourceAvailability
 import com.theemrock.smoothmedia.catalog.database.entity.SourcePermissionState
 import com.theemrock.smoothmedia.catalog.database.entity.SourceSelectionState
-import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoverySessionEntity
-import com.theemrock.smoothmedia.catalog.database.entity.MetadataRecoverySessionStatus
 import com.theemrock.smoothmedia.catalog.scan.ManualScanProgress
 import com.theemrock.smoothmedia.catalog.scan.ScanPhase
-import com.theemrock.smoothmedia.metadata.MetadataBatchProgress
-import com.theemrock.smoothmedia.metadata.MetadataSessionProgress
-import com.theemrock.smoothmedia.metadata.MetadataSessionStatus
-import com.theemrock.smoothmedia.metadata.MetadataRefreshPreviewResult
-import com.theemrock.smoothmedia.metadata.RoomMetadataApplyDryRunSummary
 import com.theemrock.smoothmedia.source.SourceRefreshResult
 import com.theemrock.smoothmedia.source.SourceRegistrationResult
 import com.theemrock.smoothmedia.source.SourceRemovalResult
@@ -66,39 +59,6 @@ fun SourceManagementScreen(
     onResumeScan: () -> Unit = {},
     onStopScan: () -> Unit = {},
     onLibrary: () -> Unit = {},
-    metadataMissingCount: Int = 0,
-    metadataRunning: Boolean = false,
-    metadataProgress: MetadataBatchProgress? = null,
-    onMetadataStart: () -> Unit = {},
-    onMetadataStop: () -> Unit = {},
-    metadataSessionRunning: Boolean = false,
-    metadataSessionStatus: MetadataSessionStatus? = null,
-    metadataSessionProgress: MetadataSessionProgress? = null,
-    onMetadataSessionStart: () -> Unit = {},
-    onMetadataSessionStop: () -> Unit = {},
-    metadataPreviewRunning: Boolean = false,
-    metadataPreview: MetadataRefreshPreviewResult? = null,
-    onMetadataPreview: () -> Unit = {},
-    metadataRecoveryStatus: MetadataRecoverySessionStatus? = null,
-    metadataRecoveryProgress: MetadataRecoverySessionEntity? = null,
-    onMetadataRecoveryStart: () -> Unit = {},
-    onMetadataRecoveryPause: () -> Unit = {},
-    onMetadataRecoveryResume: () -> Unit = {},
-    onMetadataRecoveryStop: () -> Unit = {},
-    metadataApplyDryRun: RoomMetadataApplyDryRunSummary? = null,
-    metadataApplyDryRunRunning: Boolean = false,
-    onMetadataApplyDryRun: () -> Unit = {},
-    metadataApplyStatus: String? = null,
-    metadataApplyRunning: Boolean = false,
-    onMetadataApply: () -> Unit = {},
-    genreBackfillRunning: Boolean = false,
-    genreBackfillStatus: String? = null,
-    onGenreBackfill: () -> Unit = {},
-    autonomousApplyEnabled: Boolean = false,
-    autonomousApplyToggleEnabled: Boolean = false,
-    autonomousApplyStatus: String? = null,
-    onAutonomousApplyToggle: (Boolean) -> Unit = {},
-    showStandaloneMetadataControls: Boolean = true,
     catalogTrackCounts: Map<String, Int> = emptyMap(),
     onMenu: () -> Unit = {},
     onHome: () -> Unit = {},
@@ -127,44 +87,6 @@ fun SourceManagementScreen(
                         Text(it, color = SmoothMediaColors.TextMuted, style = MaterialTheme.typography.bodyMedium)
                     }
                 }
-                if (showStandaloneMetadataControls) {
-                    item {
-                        MetadataSection(
-                            missingCount = metadataMissingCount,
-                            running = metadataRunning,
-                            progress = metadataProgress,
-                            onStart = onMetadataStart,
-                            onStop = onMetadataStop,
-                            sessionRunning = metadataSessionRunning,
-                            sessionStatus = metadataSessionStatus,
-                            sessionProgress = metadataSessionProgress,
-                            onSessionStart = onMetadataSessionStart,
-                            onSessionStop = onMetadataSessionStop,
-                            previewRunning = metadataPreviewRunning,
-                            preview = metadataPreview,
-                            onPreview = onMetadataPreview,
-                            recoveryStatus = metadataRecoveryStatus,
-                            recoveryProgress = metadataRecoveryProgress,
-                            onRecoveryStart = onMetadataRecoveryStart,
-                            onRecoveryPause = onMetadataRecoveryPause,
-                            onRecoveryResume = onMetadataRecoveryResume,
-                            onRecoveryStop = onMetadataRecoveryStop,
-                            applyDryRun = metadataApplyDryRun,
-                            applyDryRunRunning = metadataApplyDryRunRunning,
-                            onApplyDryRun = onMetadataApplyDryRun,
-                            applyStatus = metadataApplyStatus,
-                            applyRunning = metadataApplyRunning,
-                            onApply = onMetadataApply,
-                            genreBackfillRunning = genreBackfillRunning,
-                            genreBackfillStatus = genreBackfillStatus,
-                            onGenreBackfill = onGenreBackfill,
-                            autonomousApplyEnabled = autonomousApplyEnabled,
-                            autonomousApplyToggleEnabled = autonomousApplyToggleEnabled,
-                            autonomousApplyStatus = autonomousApplyStatus,
-                            onAutonomousApplyToggle = onAutonomousApplyToggle,
-                        )
-                    }
-                }
                 item {
                     Text("Etkin kaynaklar", color = SmoothMediaColors.TextPrimary, style = MaterialTheme.typography.titleMedium)
                 }
@@ -185,128 +107,6 @@ fun SourceManagementScreen(
                         items(removedSources, key = { "removed-${it.sourceId}" }) { source ->
                             SourceCard(source, catalogTrackCounts[source.sourceId], scanningSourceId, scanPhase, scanProgress, scanExecutionAttached, onRemove, onScan, onPauseScan, onResumeScan, onStopScan)
                         }
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun MetadataSection(
-    missingCount: Int,
-    running: Boolean,
-    progress: MetadataBatchProgress?,
-    onStart: () -> Unit,
-    onStop: () -> Unit,
-    sessionRunning: Boolean,
-    sessionStatus: MetadataSessionStatus?,
-    sessionProgress: MetadataSessionProgress?,
-    onSessionStart: () -> Unit,
-    onSessionStop: () -> Unit,
-    previewRunning: Boolean,
-    preview: MetadataRefreshPreviewResult?,
-    onPreview: () -> Unit,
-    recoveryStatus: MetadataRecoverySessionStatus?,
-    recoveryProgress: MetadataRecoverySessionEntity?,
-    onRecoveryStart: () -> Unit,
-    onRecoveryPause: () -> Unit,
-    onRecoveryResume: () -> Unit,
-    onRecoveryStop: () -> Unit,
-    applyDryRun: RoomMetadataApplyDryRunSummary?,
-    applyDryRunRunning: Boolean,
-    onApplyDryRun: () -> Unit,
-    applyStatus: String?,
-    applyRunning: Boolean,
-    onApply: () -> Unit,
-    genreBackfillRunning: Boolean,
-    genreBackfillStatus: String?,
-    onGenreBackfill: () -> Unit,
-    autonomousApplyEnabled: Boolean,
-    autonomousApplyToggleEnabled: Boolean,
-    autonomousApplyStatus: String?,
-    onAutonomousApplyToggle: (Boolean) -> Unit,
-) {
-    Card(modifier = Modifier.fillMaxWidth()) {
-        Column(modifier = Modifier.padding(16.dp)) {
-            Text(stringResource(R.string.metadata_title), style = MaterialTheme.typography.titleMedium)
-            Text(stringResource(R.string.metadata_missing_count, missingCount))
-            OutlinedButton(onClick = onGenreBackfill, enabled = !genreBackfillRunning) {
-                Text(if (genreBackfillRunning) "Genre verisi oluşturuluyor..." else "Genres verisini oluştur")
-            }
-            genreBackfillStatus?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
-            Text("Dosya tag yazımı yalnız açık Tag Editor işlemiyle yapılır; tarama ve enrichment dosyaları değiştirmez.", style = MaterialTheme.typography.bodySmall)
-            when {
-                sessionRunning -> Text(stringResource(R.string.metadata_session_running))
-                sessionStatus == MetadataSessionStatus.COMPLETED ->
-                    Text(stringResource(R.string.metadata_session_completed))
-                sessionStatus == MetadataSessionStatus.STOPPED ->
-                    Text(stringResource(R.string.metadata_session_stopped))
-                sessionStatus == MetadataSessionStatus.ERROR ->
-                    Text(stringResource(R.string.metadata_session_error))
-            }
-            progress?.let {
-                Text(
-                    stringResource(
-                        R.string.metadata_progress,
-                        it.processed,
-                        it.total,
-                        it.succeeded,
-                        it.skipped,
-                        it.failed,
-                    ),
-                )
-            }
-            sessionProgress?.let {
-                Text(
-                    stringResource(
-                        R.string.metadata_session_progress,
-                        it.pages,
-                        it.processed,
-                        it.succeeded,
-                        it.skipped,
-                        it.failed,
-                    ),
-                )
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            OutlinedButton(onClick = onPreview, enabled = !previewRunning) {
-                Text(if (previewRunning) "Önizleme okunuyor..." else "Metadata önizlemesi (20)")
-            }
-            preview?.let { result ->
-                Text("Önizleme: ${result.items.size} kayıt; Room'a yazılmadı.")
-                result.items.forEach { item ->
-                    val title = item.displayTitle ?: item.trackId.take(8)
-                    item.rawSummary?.let { raw ->
-                        Text("ham: $raw", style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    item.normalizedSummary?.let { normalized ->
-                        Text("normalize: $normalized", style = MaterialTheme.typography.labelSmall, maxLines = 2, overflow = TextOverflow.Ellipsis)
-                    }
-                    val detail = when {
-                        item.status != com.theemrock.smoothmedia.metadata.MetadataPreviewStatus.READ -> item.status.name
-                        item.changes.isEmpty() -> "değişiklik yok"
-                        else -> item.changes.joinToString { "${it.field.name}: ${it.current ?: "∅"} → ${it.proposed ?: "∅"}" }
-                    }
-                    Text("$title — $detail", style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
-                }
-            }
-            Spacer(modifier = Modifier.height(8.dp))
-            if (sessionRunning) {
-                OutlinedButton(onClick = onSessionStop) {
-                    Text(stringResource(R.string.metadata_session_stop))
-                }
-            } else if (running) {
-                OutlinedButton(onClick = onStop) {
-                    Text(stringResource(R.string.metadata_stop))
-                }
-            } else {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Button(onClick = onSessionStart, enabled = missingCount > 0) {
-                        Text(stringResource(R.string.metadata_session_start))
-                    }
-                    OutlinedButton(onClick = onStart, enabled = missingCount > 0) {
-                        Text(stringResource(R.string.metadata_process_page))
                     }
                 }
             }

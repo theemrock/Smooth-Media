@@ -283,6 +283,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var lyricsBulk: LyricsBulkFetcher
     private lateinit var lyricsExecutor: ExecutorService
     private val lyricsBulkCancel = AtomicBoolean(false)
+    private var id3RefreshRunning by mutableStateOf(false)
+    private var id3RefreshStatus by mutableStateOf<String?>(null)
     private var lyricsBulkRunning by mutableStateOf(false)
     private var lyricsBulkStatus by mutableStateOf<String?>(null)
     private var lyricsBulkProgress by mutableStateOf<String?>(null)
@@ -610,11 +612,9 @@ class MainActivity : ComponentActivity() {
                             onBack = { showQueue = false },
                             onRemove = { queueController.remove(it); persistQueue(); syncQueueToSession(playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING) },
                             onClear = {
-                                queueController.clear()
-                                playbackClient.clearQueue()
+                                queueController.clearExceptCurrent()
+                                playbackClient.clearQueueExceptCurrent()
                                 persistQueue()
-                                nowPlayingSong = null
-                                playbackState = PlaybackEngineState()
                             },
                             onMoveUp = { index -> queueController.reorder(index, index - 1); persistQueue(); syncQueueToSession(playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true) },
                             onMoveDown = { index -> queueController.reorder(index, index + 1); persistQueue(); syncQueueToSession(playbackState.status == com.theemrock.smoothmedia.playback.PlaybackStatus.PLAYING, preservePosition = true) },
@@ -765,6 +765,10 @@ class MainActivity : ComponentActivity() {
                             onSong = { song ->
                                 val visibleSongs = searchViewModel.state.value.results.songs
                                 playSong(song, visibleSongs, com.theemrock.smoothmedia.library.LibrarySearchQuery.snapshotKey(searchViewModel.state.value.query, visibleSongs))
+                            },
+                            onLyricSong = { song ->
+                                val hits = searchViewModel.state.value.results.lyrics.map { it.song }
+                                playSong(song, hits, com.theemrock.smoothmedia.library.LibrarySearchQuery.snapshotKey(searchViewModel.state.value.query + "#lyrics", hits))
                             },
                             onBack = { showSearch = false },
                         )
@@ -1017,39 +1021,6 @@ class MainActivity : ComponentActivity() {
                             },
                             onMenu = ::openSettings,
                             onHome = ::openDashboard,
-                            metadataMissingCount = metadataMissingCount,
-                            metadataRunning = metadataRunning,
-                            metadataProgress = metadataProgress,
-                            onMetadataStart = { startMetadataPage() },
-                            onMetadataStop = { stopMetadataPage() },
-                            metadataSessionRunning = metadataSessionRunning,
-                            metadataSessionStatus = metadataSessionStatus,
-                            metadataSessionProgress = metadataSessionProgress,
-                            onMetadataSessionStart = { startMetadataSession() },
-                            onMetadataSessionStop = { stopMetadataSession() },
-                            metadataPreviewRunning = metadataPreviewRunning,
-                            metadataPreview = metadataPreview,
-                            onMetadataPreview = ::startMetadataPreview,
-                            metadataRecoveryStatus = metadataRecoveryStatus,
-                            metadataRecoveryProgress = metadataRecoveryProgress,
-                            onMetadataRecoveryStart = ::startMetadataRecovery,
-                            onMetadataRecoveryPause = ::pauseMetadataRecovery,
-                            onMetadataRecoveryResume = ::resumeMetadataRecovery,
-                            onMetadataRecoveryStop = ::stopMetadataRecovery,
-                            metadataApplyDryRun = metadataApplyDryRun,
-                            metadataApplyDryRunRunning = metadataApplyDryRunRunning,
-                            onMetadataApplyDryRun = ::startMetadataApplyDryRun,
-                            metadataApplyStatus = metadataApplyStatus,
-                            metadataApplyRunning = metadataApplyRunning,
-                            onMetadataApply = ::startApprovedMetadataApply,
-                            genreBackfillRunning = genreBackfillRunning,
-                            genreBackfillStatus = genreBackfillStatus,
-                            onGenreBackfill = ::startGenreBackfill,
-                            autonomousApplyEnabled = metadataAutonomousEnabled,
-                            autonomousApplyToggleEnabled = metadataAutonomousToggleEnabled,
-                            autonomousApplyStatus = metadataAutonomousStatus,
-                            onAutonomousApplyToggle = ::setMetadataAutonomousEnabledFromUi,
-                            showStandaloneMetadataControls = true,
                         )
                     } else if (showLibraryManagement) {
                         LibraryManagementScreen(
@@ -1074,6 +1045,9 @@ class MainActivity : ComponentActivity() {
                             onHome = ::openDashboard,
                             onLibraryManagement = ::openLibraryManagement,
                             onLyricsBulk = { showLyricsBulk = true },
+                            onRefreshId3 = ::startId3Refresh,
+                            id3RefreshRunning = id3RefreshRunning,
+                            id3RefreshStatus = id3RefreshStatus,
                         )
                     }
                     if (showNewPlaylistDialog) {
@@ -1909,6 +1883,31 @@ class MainActivity : ComponentActivity() {
                 folderTreeChildren = emptyMap()
                 folderTreeExpanded = emptySet()
                 folderTreeLoaded = true
+            }
+        }
+    }
+
+    /** Re-reads the tags of every track from its file; the normalizer repairs garbled text on the way in. */
+    private fun startId3Refresh() {
+        if (id3RefreshRunning) return
+        id3RefreshRunning = true
+        id3RefreshStatus = "Başlıyor…"
+        executor.execute {
+            val ids = runCatching {
+                val out = mutableListOf<String>()
+                runtime.database.openHelper.readableDatabase
+                    .query(androidx.sqlite.db.SimpleSQLiteQuery("SELECT track_id FROM tracks"))
+                    .use { while (it.moveToNext()) out += it.getString(0) }
+                out
+            }.getOrDefault(emptyList())
+            var failed = 0
+            ids.forEachIndexed { index, id ->
+                if (runCatching { metadataEnrichment.enrichTrack(id) }.isFailure) failed++
+                if (index % 25 == 0) runOnUiThread { id3RefreshStatus = "${index + 1}/${ids.size} yenileniyor…" }
+            }
+            runOnUiThread {
+                id3RefreshRunning = false
+                id3RefreshStatus = "Tamamlandı: ${ids.size - failed}/${ids.size} şarkı yenilendi" + if (failed > 0) ", $failed hata." else "."
             }
         }
     }
