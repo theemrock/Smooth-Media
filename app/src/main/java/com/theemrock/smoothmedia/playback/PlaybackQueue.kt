@@ -175,6 +175,12 @@ class PlaybackQueueController {
         state.value = state.value.copy(items = emptyList(), currentIndex = -1, positionMs = 0L, shuffleOrder = emptyList(), mode = QueueMode.USER, ghostContext = null)
     }
 
+    /** Drops everything except the playing item, so "clear queue" does not stop the current song. */
+    fun clearExceptCurrent() {
+        val current = state.value.current ?: return clear()
+        state.value = state.value.copy(items = listOf(current), currentIndex = 0, shuffleOrder = emptyList())
+    }
+
     fun reorder(from: Int, to: Int): Boolean {
         val current = state.value
         if (from !in current.items.indices || to !in current.items.indices || from == to) return false

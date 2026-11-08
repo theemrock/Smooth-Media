@@ -186,6 +186,15 @@ class PlaybackSessionClient(
         queueItems = emptyList()
         controller?.clearMediaItems()
     }
+    /** Removes every queued item except the one currently loaded in the player, without interrupting it. */
+    fun clearQueueExceptCurrent() {
+        val player = controller ?: return
+        val currentId = player.currentMediaItem?.mediaId ?: return clearQueue()
+        queueItems = queueItems.filter { it.entryId == currentId }
+        val current = player.currentMediaItemIndex
+        if (current + 1 < player.mediaItemCount) player.removeMediaItems(current + 1, player.mediaItemCount)
+        if (current > 0) player.removeMediaItems(0, current)
+    }
     fun removeQueueEntry(index: Int) { controller?.removeMediaItem(index); reconcileQueueItems() }
     fun moveQueueEntry(from: Int, to: Int) { controller?.moveMediaItem(from, to); reconcileQueueItems() }
     fun currentQueueItems(): List<QueueItem> = queueItems
