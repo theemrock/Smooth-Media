@@ -25,22 +25,31 @@ internal object TrackFolderScopeSql {
     }
 
     fun installTriggers(db: SupportSQLiteDatabase) {
+        // Room inserts with OR ABORT, and SQLite lets the outer statement's conflict clause override
+        // an OR REPLACE inside the trigger body, so the second trigger hit the track_id primary key.
+        // DELETE first, then plain INSERT, so no conflict clause is involved. DROP so existing DBs
+        // pick up the fixed definition on the next open.
+        db.execSQL("DROP TRIGGER IF EXISTS track_folder_scopes_after_location")
+        db.execSQL("DROP TRIGGER IF EXISTS track_folder_scopes_after_binding")
         db.execSQL(
             """
-            CREATE TRIGGER IF NOT EXISTS track_folder_scopes_after_location
+            CREATE TRIGGER track_folder_scopes_after_location
             AFTER INSERT ON track_locations
             BEGIN
-                INSERT OR REPLACE INTO $TABLE (track_id, source_id, folder_prefix)
+                DELETE FROM $TABLE WHERE track_id = NEW.track_id;
+                INSERT INTO $TABLE (track_id, source_id, folder_prefix)
                 ${selectScopes("t.track_id = NEW.track_id")};
             END
             """.trimIndent(),
         )
         db.execSQL(
             """
-            CREATE TRIGGER IF NOT EXISTS track_folder_scopes_after_binding
+            CREATE TRIGGER track_folder_scopes_after_binding
             AFTER INSERT ON locator_bindings
             BEGIN
-                INSERT OR REPLACE INTO $TABLE (track_id, source_id, folder_prefix)
+                DELETE FROM $TABLE
+                WHERE track_id = (SELECT tl.track_id FROM track_locations AS tl WHERE tl.location_id = NEW.location_id);
+                INSERT INTO $TABLE (track_id, source_id, folder_prefix)
                 ${selectScopes("t.track_id = (SELECT tl.track_id FROM track_locations AS tl WHERE tl.location_id = NEW.location_id)")};
             END
             """.trimIndent(),
