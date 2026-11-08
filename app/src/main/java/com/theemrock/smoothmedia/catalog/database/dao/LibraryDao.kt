@@ -60,6 +60,9 @@ interface LibraryDao {
     fun countPlaylists(): Int
 
     @RawQuery
+    fun lyricsTextsRaw(query: SupportSQLiteQuery): List<com.theemrock.smoothmedia.library.LyricsTextRow>
+
+    @RawQuery
     fun searchCollectionsRaw(query: SupportSQLiteQuery): List<LibraryCollectionRow>
 
     @RawQuery

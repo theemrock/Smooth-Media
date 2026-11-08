@@ -40,4 +40,21 @@ class LibrarySearchQueryTest {
         assertTrue(sql.contains("ORDER BY"))
         assertTrue(sql.contains("t.track_id"))
     }
+
+    @Test
+    fun lyricsSqlMatchesLyricsTextOnlyAndKeepsTrackColumnsAndPaging() {
+        val sql = LibrarySearchQuery.lyricsTracksSql()
+        assertTrue(sql.contains("JOIN lyrics_cache lc ON lc.trackId=t.track_id"))
+        assertTrue(sql.contains("instr(lower(lc.text),lower(?))>0"))
+        assertTrue(sql.contains("COALESCE(title_override.value,m.normalizedTitle) AS title"))
+        assertTrue(sql.trimEnd().endsWith("LIMIT ? OFFSET ?"))
+        assertEquals(3, sql.count { it == '?' })
+    }
+
+    @Test
+    fun lyricSnippetStripsTimestampsAndIgnoresTimestampOnlyMatches() {
+        val lrc = "[ar:Someone]\n[00:12.30]Aşk Yangını başladı\n[00:15.00]Yine de sev"
+        assertEquals("Aşk Yangını başladı", LibrarySearchQuery.lyricSnippet(lrc, "yangını"))
+        assertEquals(null, LibrarySearchQuery.lyricSnippet(lrc, "12"))
+    }
 }

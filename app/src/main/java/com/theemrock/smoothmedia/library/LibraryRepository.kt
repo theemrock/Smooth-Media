@@ -150,15 +150,21 @@ data class LibraryCollectionPage(
 
 enum class LibrarySearchCategory { SONGS, ARTISTS, ALBUMS, GENRES, FOLDERS }
 
+/** A song whose lyrics contain the query, with the matching lyric line. */
+data class LyricsSearchHit(val song: LibrarySong, val snippet: String)
+
+data class LyricsTextRow(val trackId: String, val text: String)
+
 data class LibrarySearchPage(
     val songs: List<LibrarySong> = emptyList(),
     val artists: List<LibraryCollectionRow> = emptyList(),
     val albums: List<LibraryCollectionRow> = emptyList(),
     val genres: List<LibraryCollectionRow> = emptyList(),
     val folders: List<LibraryCollectionRow> = emptyList(),
+    val lyrics: List<LyricsSearchHit> = emptyList(),
 ) {
     val isEmpty: Boolean
-        get() = songs.isEmpty() && artists.isEmpty() && albums.isEmpty() && genres.isEmpty() && folders.isEmpty()
+        get() = songs.isEmpty() && artists.isEmpty() && albums.isEmpty() && genres.isEmpty() && folders.isEmpty() && lyrics.isEmpty()
 }
 
 object LibrarySearchQuery {
@@ -168,6 +174,20 @@ object LibrarySearchQuery {
     fun snapshotKey(query: String, songs: List<LibrarySong>): String =
         "search:${query.trim()}:${songs.joinToString(",") { it.trackId }}"
     fun tracksSql(): String = TRACKS_SQL
+
+    /** Same columns, ordering and exclusion rules as [TRACKS_SQL], but matching the lyrics text only. Args: needle, limit, offset. */
+    fun lyricsTracksSql(): String =
+        TRACKS_SQL.substringBefore("WHERE t.catalog_lifecycle") +
+            "JOIN lyrics_cache lc ON lc.trackId=t.track_id\n" +
+            "WHERE t.catalog_lifecycle='ACTIVE' AND e.exclusion_id IS NULL AND instr(lower(lc.text),lower(?))>0\n" +
+            TRACKS_SQL.substring(TRACKS_SQL.indexOf("ORDER BY"))
+
+    private val LRC_TIMESTAMP = Regex("\\[\\d{1,3}:\\d{2}(?:[.:]\\d{1,3})?]")
+
+    /** The first lyric line containing [query], with LRC timestamps removed; null when only a timestamp matched. */
+    fun lyricSnippet(text: String, query: String): String? = text.lineSequence()
+        .map { LRC_TIMESTAMP.replace(it, "").trim() }
+        .firstOrNull { it.contains(query.trim(), ignoreCase = true) }
 
     const val TRACKS_SQL = """
         SELECT DISTINCT t.track_id AS trackId,
@@ -470,7 +490,22 @@ class RoomLibraryRepository(
             albums = dao.searchCollectionsRaw(SimpleSQLiteQuery(searchCollectionSql("album"), categoryArgs)),
             genres = dao.searchCollectionsRaw(SimpleSQLiteQuery(searchCollectionSql("genre"), categoryArgs)),
             folders = dao.searchCollectionsRaw(SimpleSQLiteQuery(searchCollectionSql("path"), categoryArgs)),
+            lyrics = searchLyrics(normalized, arg, limit, offset),
         )
+    }
+
+    private fun searchLyrics(query: String, arg: String, limit: Int, offset: Int): List<LyricsSearchHit> {
+        val songs = dao.searchTracksRaw(SimpleSQLiteQuery(LibrarySearchQuery.lyricsTracksSql(), arrayOf<Any?>(arg, limit, offset)))
+            .map(LibraryTrackRow::toLibrarySong)
+        if (songs.isEmpty()) return emptyList()
+        val placeholders = songs.joinToString(",") { "?" }
+        val texts = dao.lyricsTextsRaw(
+            SimpleSQLiteQuery("SELECT trackId, text FROM lyrics_cache WHERE trackId IN ($placeholders)", songs.map { it.trackId }.toTypedArray()),
+        ).associate { it.trackId to it.text }
+        // The SQL match may be a timestamp digit; keep only songs with a real lyric line match.
+        return songs.mapNotNull { song ->
+            texts[song.trackId]?.let { LibrarySearchQuery.lyricSnippet(it, query) }?.let { LyricsSearchHit(song, it) }
+        }
     }
 
     private fun searchCollectionSql(column: String): String = when (column) {
