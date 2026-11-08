@@ -23,6 +23,8 @@ object TurkishMojibakeTable {
         "windows-1252",
         "windows-1254",
         "Shift_JIS",
+        // Plain Latin-1 turns ş (C5 9F) into "Å" + U+009F, which windows-1252 would show as "ÅŸ"; last so it never wins a tie.
+        "ISO-8859-1",
     )
 
     /** Mojibake sequence → correct letter. Built once. */

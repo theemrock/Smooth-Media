@@ -24,6 +24,12 @@ class TurkishMojibakeTableTest {
     }
 
     @Test
+    fun latin1MisreadTurkishLettersAreRestored() {
+        assertEquals("Aşk Yangını", TurkishMojibakeTable.repair(misread("Aşk Yangını", "ISO-8859-1")))
+        assertEquals("Doğuş Çağrı", TurkishMojibakeTable.repair(misread("Doğuş Çağrı", "ISO-8859-1")))
+    }
+
+    @Test
     fun plainTurkishTextIsUnchanged() {
         assertEquals("Barış Manço", TurkishMojibakeTable.repair("Barış Manço"))
         assertEquals("Ezginin Günlüğü", TurkishMojibakeTable.repair("Ezginin Günlüğü"))
