@@ -13,12 +13,16 @@ class AndroidAudioMetadataReader(
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(context, uri)
+            // The platform guesses the text encoding of ID3 frames and turns e.g. latin1 "Yavuz Çetin" into CJK;
+            // TagLib (the same reader the tag editor uses) decodes them correctly, so its text wins when present.
+            val tags = tagLibText(uri)
             val raw = RawAudioMetadata(
-                title = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE),
-                artist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST),
-                album = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM),
-                albumArtist = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST),
-                genre = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE),
+                title = tags["TITLE"] ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_TITLE),
+                artist = tags["ARTIST"] ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ARTIST),
+                album = tags["ALBUM"] ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUM),
+                albumArtist = tags["ALBUMARTIST"]
+                    ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_ALBUMARTIST),
+                genre = tags["GENRE"] ?: retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_GENRE),
                 trackNumber = retriever.extractMetadata(
                     MediaMetadataRetriever.METADATA_KEY_CD_TRACK_NUMBER,
                 ),
@@ -40,4 +44,13 @@ class AndroidAudioMetadataReader(
             retriever.close()
         }
     }
+
+    /** Non-blank TagLib text properties joined with ";", empty when TagLib cannot read the file. */
+    private fun tagLibText(uri: Uri): Map<String, String> = runCatching {
+        context.contentResolver.openFileDescriptor(uri, "r")?.use { descriptor ->
+            KyantTagLibAdapter().read(descriptor).getOrNull()?.properties.orEmpty()
+                .mapValues { (_, values) -> values.filter { it.isNotBlank() }.joinToString(";") }
+                .filterValues { it.isNotEmpty() }
+        }
+    }.getOrNull().orEmpty()
 }
