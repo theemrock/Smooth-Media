@@ -39,6 +39,9 @@ fun SettingsScreen(
     onHome: () -> Unit,
     onLibraryManagement: () -> Unit,
     onLyricsBulk: () -> Unit = {},
+    onRefreshId3: () -> Unit = {},
+    id3RefreshRunning: Boolean = false,
+    id3RefreshStatus: String? = null,
 ) {
     SettingsScaffold(onMenu = onMenu, onHome = onHome) {
         SettingsRow(
@@ -52,6 +55,13 @@ fun SettingsScreen(
             title = "Şarkı sözlerini toplu çek",
             subtitle = "İnternet varken sözsüz parçalar için lrclib'den söz indirir",
             onClick = onLyricsBulk,
+        )
+        SettingsRow(
+            icon = "↻",
+            title = "ID3 etiketlerini yenile",
+            subtitle = id3RefreshStatus
+                ?: "Tüm şarkıların etiketlerini dosyalardan yeniden okur (bozuk karakterleri düzeltir)",
+            onClick = { if (!id3RefreshRunning) onRefreshId3() },
         )
     }
 }
