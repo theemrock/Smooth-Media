@@ -185,6 +185,22 @@ object CatalogMigrations {
         }
     }
 
+    val FROM_15_TO_16 = object : Migration(15, 16) {
+        override fun migrate(db: SupportSQLiteDatabase) {
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS eq_profiles (" +
+                    "trackId TEXT NOT NULL, analyzerVersion INTEGER NOT NULL, fileSignature TEXT NOT NULL, " +
+                    "windows BLOB NOT NULL, updatedAtEpochMs INTEGER NOT NULL, PRIMARY KEY(trackId), " +
+                    "FOREIGN KEY(trackId) REFERENCES tracks(track_id) ON UPDATE NO ACTION ON DELETE CASCADE)",
+            )
+            db.execSQL(
+                "CREATE TABLE IF NOT EXISTS eq_overrides (" +
+                    "trackId TEXT NOT NULL, levelsMb TEXT NOT NULL, updatedAtEpochMs INTEGER NOT NULL, PRIMARY KEY(trackId), " +
+                    "FOREIGN KEY(trackId) REFERENCES tracks(track_id) ON UPDATE NO ACTION ON DELETE CASCADE)",
+            )
+        }
+    }
+
     val ALL: Array<Migration> = arrayOf(
         FROM_1_TO_2,
         FROM_2_TO_3,
@@ -200,5 +216,6 @@ object CatalogMigrations {
         FROM_12_TO_13,
         FROM_13_TO_14,
         FROM_14_TO_15,
+        FROM_15_TO_16,
     )
 }

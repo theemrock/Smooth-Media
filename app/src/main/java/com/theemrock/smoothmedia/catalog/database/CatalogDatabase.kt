@@ -42,8 +42,11 @@ import com.theemrock.smoothmedia.catalog.database.entity.LyricsMissEntity
 import com.theemrock.smoothmedia.catalog.database.dao.LyricsMissDao
 import com.theemrock.smoothmedia.catalog.database.dao.SmartPlaylistDao
 import com.theemrock.smoothmedia.catalog.database.entity.SmartPlaylistEntity
+import com.theemrock.smoothmedia.catalog.database.dao.EqDao
+import com.theemrock.smoothmedia.catalog.database.entity.EqOverrideEntity
+import com.theemrock.smoothmedia.catalog.database.entity.EqProfileEntity
 
-private const val CATALOG_SCHEMA_VERSION = 15
+private const val CATALOG_SCHEMA_VERSION = 16
 
 @Database(
     entities = [
@@ -77,11 +80,15 @@ private const val CATALOG_SCHEMA_VERSION = 15
         TrackFolderScopeEntity::class,
         LyricsMissEntity::class,
         SmartPlaylistEntity::class,
+        EqProfileEntity::class,
+        EqOverrideEntity::class,
     ],
     version = CATALOG_SCHEMA_VERSION,
     exportSchema = true,
 )
 abstract class CatalogDatabase : RoomDatabase() {
+    abstract fun eqDao(): EqDao
+
     abstract fun smartPlaylistDao(): SmartPlaylistDao
 
     abstract fun lyricsMissDao(): LyricsMissDao
