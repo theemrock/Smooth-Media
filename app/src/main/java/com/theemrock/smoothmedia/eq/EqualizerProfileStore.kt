@@ -27,7 +27,8 @@ class EqualizerProfileStore(context: Context) {
     }
 
     companion object {
-        private const val KEY_LEVELS = "manual_levels"
+        // New key: the old 5-band indices do not map onto the 24 bands, so old values are ignored.
+        private const val KEY_LEVELS = "manual_levels_24"
         private const val KEY_ENABLED = "manual_enabled"
     }
 }

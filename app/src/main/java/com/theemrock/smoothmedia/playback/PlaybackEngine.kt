@@ -251,7 +251,9 @@ class Media3PlaybackEngine(
         if (songPlan !is SongEqPlan.Legacy) return
         val auto = autoEqProfile
         val manual = ManualEqBands.peakBands(equalizerProfile.readLevels(), equalizerProfile.isManualEnabled())
-        autoEqProcessor.setProfile(EqProfile(preampDb = auto?.preampDb ?: 0.0, bands = auto?.bands.orEmpty() + manual))
+        autoEqProcessor.setProfile(
+            EqProfile(preampDb = (auto?.preampDb ?: 0.0) + ManualEqBands.preampDb(manual), bands = auto?.bands.orEmpty() + manual),
+        )
     }
 
     /** Picks the song's EQ plan on the player thread; a failed lookup falls back to the legacy chain. */
