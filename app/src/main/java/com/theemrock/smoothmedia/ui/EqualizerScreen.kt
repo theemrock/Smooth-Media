@@ -19,6 +19,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
 import com.theemrock.smoothmedia.eq.AdaptiveEqState
+import com.theemrock.smoothmedia.eq.EqMode
 import com.theemrock.smoothmedia.eq.EqualizerBand
 import com.theemrock.smoothmedia.eq.ParametricEq
 
@@ -31,6 +32,8 @@ fun EqualizerScreen(
     onEnabledChanged: (Boolean) -> Unit,
     onReset: () -> Unit,
     onManualLevelChanged: (Short, Int) -> Unit,
+    songEqMode: EqMode,
+    onSongEqModeChanged: (EqMode) -> Unit,
     savedAutoEqText: String?,
     onApplyAutoEq: (String?) -> Unit,
     onBack: () -> Unit,
@@ -42,6 +45,15 @@ fun EqualizerScreen(
             Button(onClick = onBack) { Text("Back") }
             Text("EQUALIZER", color = Color(0xFF19C3E6), modifier = Modifier.padding(12.dp))
         }
+        Text("Song EQ mode", color = Color.White)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            Button(onClick = { onSongEqModeChanged(EqMode.AUTO) }, enabled = songEqMode != EqMode.AUTO) { Text("Auto (dynamic)") }
+            Button(onClick = { onSongEqModeChanged(EqMode.MANUAL) }, enabled = songEqMode != EqMode.MANUAL) { Text("Manual") }
+        }
+        Text(
+            if (songEqMode == EqMode.AUTO) "Scanned songs follow their own dynamic EQ; the headphone profile is off for them. Applies from the next song." else "Headphone profile and manual bands.",
+            color = Color(0xFFAAB9C2),
+        )
         Text("Adaptive EQ", color = Color.White)
         Text(
             if (adaptiveState.isAvailable) "Adaptive measured state active" else "Adaptive EQ is unavailable until measured audio input exists.",

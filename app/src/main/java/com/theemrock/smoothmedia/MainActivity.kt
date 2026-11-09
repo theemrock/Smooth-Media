@@ -151,6 +151,8 @@ import com.theemrock.smoothmedia.ui.NowPlayingScreen
 import com.theemrock.smoothmedia.ui.EqualizerScreen
 import com.theemrock.smoothmedia.ui.QueueScreen
 import com.theemrock.smoothmedia.eq.AdaptiveEqState
+import com.theemrock.smoothmedia.eq.EqMode
+import com.theemrock.smoothmedia.eq.EqModeStore
 import com.theemrock.smoothmedia.eq.EqualizerBand
 import com.theemrock.smoothmedia.eq.EqualizerProfileStore
 import com.theemrock.smoothmedia.ui.sourceRefreshMessage
@@ -271,6 +273,8 @@ class MainActivity : ComponentActivity() {
     private var manualEqualizerLevels by mutableStateOf<Map<Short, Int>>(emptyMap())
     private var manualEqualizerEnabled by mutableStateOf(true)
     private var autoEqText by mutableStateOf<String?>(null)
+    private var songEqMode by mutableStateOf(EqMode.MANUAL)
+    private lateinit var eqModeStore: EqModeStore
     private var lastPlaybackEntryId: String? = null
     private var lastPersistedPlaybackPosition = 0L
     private var activeGhostPlaybackWindowEntryIds: List<String> = emptyList()
@@ -389,6 +393,8 @@ class MainActivity : ComponentActivity() {
         equalizerProfileStore = EqualizerProfileStore(this)
         manualEqualizerLevels = equalizerProfileStore.readLevels()
         manualEqualizerEnabled = equalizerProfileStore.isManualEnabled()
+        eqModeStore = EqModeStore(this)
+        songEqMode = eqModeStore.mode()
         autoEqText = getSharedPreferences(AUTOEQ_PREF_NAME, MODE_PRIVATE).getString(AUTOEQ_PREF_KEY, null)
         queueStore = PlaybackQueueStore(this)
         queueController.restore(queueStore.read())
@@ -660,6 +666,11 @@ class MainActivity : ComponentActivity() {
                                 manualEqualizerLevels = next
                                 equalizerProfileStore.writeLevels(next)
                                 playbackClient.applyManualEqualizer(next)
+                            },
+                            songEqMode = songEqMode,
+                            onSongEqModeChanged = { mode ->
+                                songEqMode = mode
+                                eqModeStore.setMode(mode)
                             },
                             savedAutoEqText = autoEqText,
                             onApplyAutoEq = { text ->
