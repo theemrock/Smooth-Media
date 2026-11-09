@@ -155,6 +155,8 @@ import com.theemrock.smoothmedia.lyrics.ManualLyrics
 import com.theemrock.smoothmedia.eq.EqProfileCodec
 import com.theemrock.smoothmedia.eq.EqScanService
 import com.theemrock.smoothmedia.eq.EqScanState
+import com.theemrock.smoothmedia.ui.EqScanListRow
+import com.theemrock.smoothmedia.ui.EqScanScreen
 import com.theemrock.smoothmedia.eq.EqMode
 import com.theemrock.smoothmedia.eq.EqModeStore
 import com.theemrock.smoothmedia.eq.EqualizerBand
@@ -298,6 +300,7 @@ class MainActivity : ComponentActivity() {
     private var lyricsBulkProgress by mutableStateOf<String?>(null)
     private var lyricsBulkLog by mutableStateOf<List<LyricsBulkFetcher.LogEntry>>(emptyList())
     private var showLyricsBulk by mutableStateOf(false)
+    private var showEqScan by mutableStateOf(false)
     private var listenSignalEntryId: String? = null
     private var listenSignalTrackId: String? = null
     private var listenSignalPositionMs = 0L
@@ -453,6 +456,10 @@ class MainActivity : ComponentActivity() {
         )
         libraryBackCallback = object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
+                if (showEqScan) {
+                    showEqScan = false
+                    return
+                }
                 if (showLyricsBulk) {
                     showLyricsBulk = false
                     return
@@ -1084,6 +1091,43 @@ class MainActivity : ComponentActivity() {
                             onHome = ::openDashboard,
                             onMusicSources = ::openSources,
                         )
+                    } else if (showEqScan) {
+                        val rows by produceState(emptyList<EqScanListRow>()) {
+                            val dao = runtime.database.eqDao()
+                            val collator = java.text.Collator.getInstance(java.util.Locale("tr", "TR"))
+                            while (true) {
+                                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    runCatching {
+                                        dao.scannedSongs(EqProfileCodec.ANALYZER_VERSION)
+                                            .sortedWith { a, b -> collator.compare(a.title, b.title) }
+                                            .map { EqScanListRow(it.title, it.artist) }
+                                    }.getOrDefault(emptyList())
+                                }
+                                kotlinx.coroutines.delay(5_000)
+                            }
+                        }
+                        val scan by produceState(false to "") {
+                            val dao = runtime.database.eqDao()
+                            while (true) {
+                                value = if (EqScanState.running) {
+                                    true to "Taranıyor: ${EqScanState.done} / ${EqScanState.total}"
+                                } else {
+                                    val (done, total) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        runCatching { dao.scannedCount(EqProfileCodec.ANALYZER_VERSION) to dao.activeTrackCount() }.getOrDefault(0 to 0)
+                                    }
+                                    false to "$done / $total şarkı tarandı"
+                                }
+                                kotlinx.coroutines.delay(1_000)
+                            }
+                        }
+                        EqScanScreen(
+                            running = scan.first,
+                            progress = scan.second,
+                            rows = rows,
+                            onToggle = ::toggleEqScan,
+                            onMenu = ::openSettings,
+                            onHome = ::openDashboard,
+                        )
                     } else if (showLyricsBulk) {
                         LyricsBulkScreen(
                             running = lyricsBulkRunning,
@@ -1100,19 +1144,19 @@ class MainActivity : ComponentActivity() {
                             val dao = runtime.database.eqDao()
                             while (true) {
                                 value = if (EqScanState.running) {
-                                    "Taranıyor: ${EqScanState.done} / ${EqScanState.total} · durdurmak için dokun"
+                                    "Taranıyor: ${EqScanState.done} / ${EqScanState.total}"
                                 } else {
                                     val (done, total) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                                         runCatching { dao.scannedCount(EqProfileCodec.ANALYZER_VERSION) to dao.activeTrackCount() }.getOrDefault(0 to 0)
                                     }
-                                    "$done / $total şarkı tarandı · başlatmak için dokun"
+                                    "$done / $total şarkı tarandı"
                                 }
                                 kotlinx.coroutines.delay(1_000)
                             }
                         }
                         SettingsScreen(
                             eqScanSubtitle = eqScanSubtitle,
-                            onEqScan = ::toggleEqScan,
+                            onEqScan = { showEqScan = true },
                             onMenu = ::openSettings,
                             onHome = ::openDashboard,
                             onLibraryManagement = ::openLibraryManagement,
@@ -2591,6 +2635,7 @@ class MainActivity : ComponentActivity() {
     private fun openSettings() {
         if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         showLyricsBulk = false
+        showEqScan = false
         showDashboard = false
         showLibrary = false
         showCollections = false
@@ -2620,6 +2665,7 @@ class MainActivity : ComponentActivity() {
     private fun openDashboard() {
         if (showPlaylistDetail) navigateBackFromPlaylistDetail()
         showLyricsBulk = false
+        showEqScan = false
         libraryBackTarget = LibraryBackTarget.DASHBOARD
         showDashboard = true
         showLibrary = false

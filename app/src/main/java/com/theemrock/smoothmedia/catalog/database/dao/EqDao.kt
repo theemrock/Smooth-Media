@@ -33,6 +33,21 @@ interface EqDao {
     @Query("SELECT COUNT(*) FROM tracks WHERE catalog_lifecycle = 'ACTIVE'")
     fun activeTrackCount(): Int
 
+    /** Scanned active tracks with display title and artist; the caller sorts them. */
+    @Query(
+        """
+        SELECT COALESCE(title_o.value, m.normalizedTitle, '') AS title,
+               COALESCE(artist_o.value, m.normalizedArtist, '') AS artist
+        FROM eq_profiles AS p
+        JOIN tracks AS t ON t.track_id = p.trackId
+        LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
+        LEFT JOIN track_metadata_overrides AS title_o ON title_o.trackId = t.track_id AND title_o.fieldName = 'TITLE'
+        LEFT JOIN track_metadata_overrides AS artist_o ON artist_o.trackId = t.track_id AND artist_o.fieldName = 'ARTIST'
+        WHERE p.analyzerVersion = :analyzerVersion AND length(p.windows) > 4 AND t.catalog_lifecycle = 'ACTIVE'
+        """,
+    )
+    fun scannedSongs(analyzerVersion: Int): List<EqScannedSong>
+
     @Query("SELECT * FROM eq_overrides WHERE trackId = :trackId")
     fun findOverride(trackId: String): EqOverrideEntity?
 
@@ -42,3 +57,5 @@ interface EqDao {
     @Query("DELETE FROM eq_overrides WHERE trackId = :trackId")
     fun deleteOverride(trackId: String): Int
 }
+
+data class EqScannedSong(val title: String, val artist: String)
