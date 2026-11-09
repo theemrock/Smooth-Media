@@ -42,8 +42,16 @@ fun SettingsScreen(
     onRefreshId3: () -> Unit = {},
     id3RefreshRunning: Boolean = false,
     id3RefreshStatus: String? = null,
+    eqScanSubtitle: String = "",
+    onEqScan: () -> Unit = {},
 ) {
     SettingsScaffold(onMenu = onMenu, onHome = onHome) {
+        SettingsRow(
+            icon = "≋",
+            title = "EQ analizi (Auto EQ)",
+            subtitle = eqScanSubtitle.ifEmpty { "Şarkıları tarayıp Auto EQ için bant profili çıkarır" },
+            onClick = onEqScan,
+        )
         SettingsRow(
             icon = "▦",
             title = "Kütüphane Yönetimi",

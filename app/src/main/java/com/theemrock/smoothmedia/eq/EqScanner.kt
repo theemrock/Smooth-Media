@@ -30,12 +30,17 @@ class EqScanner(
     private val store: EqProfileStore,
     private val uriFor: (String) -> String?,
     private val signatureFor: (String) -> String = { "" },
+    /** Called per track with total and spectrum-analysis milliseconds; the rest of the total is file read plus decode. */
+    private val onTiming: (String, Long, Long) -> Unit = { _, _, _ -> },
 ) {
     /** Returns true when a usable profile was stored; a failed track gets an empty blob so it is not retried until the version changes. */
     fun scanTrack(trackId: String): Boolean {
+        val started = System.nanoTime()
+        val analyzeNanos = LongArray(1)
         val uri = uriFor(trackId)
-        val windows = if (uri == null) null else runCatching { analyze(uri) }.getOrNull()?.takeIf { it.isNotEmpty() }
+        val windows = if (uri == null) null else runCatching { analyze(uri, analyzeNanos) }.getOrNull()?.takeIf { it.isNotEmpty() }
         store.save(trackId, EqProfileCodec.ANALYZER_VERSION, signatureFor(trackId), EqProfileCodec.encode(windows.orEmpty()))
+        onTiming(trackId, (System.nanoTime() - started) / 1_000_000, analyzeNanos[0] / 1_000_000)
         return windows != null
     }
 
@@ -51,11 +56,13 @@ class EqScanner(
         return done
     }
 
-    private fun analyze(uri: String): List<SpectrumWindow> {
+    private fun analyze(uri: String, analyzeNanos: LongArray): List<SpectrumWindow> {
         var analyzer: SpectrumAnalyzer? = null
         decoder.decode(uri) { samples, count, rate ->
             val a = analyzer ?: SpectrumAnalyzer(rate).also { analyzer = it }
+            val t = System.nanoTime()
             a.feed(samples, count)
+            analyzeNanos[0] += System.nanoTime() - t
         }
         return analyzer?.finish().orEmpty()
     }

@@ -153,6 +153,8 @@ import com.theemrock.smoothmedia.ui.QueueScreen
 import com.theemrock.smoothmedia.eq.AdaptiveEqState
 import com.theemrock.smoothmedia.lyrics.ManualLyrics
 import com.theemrock.smoothmedia.eq.EqProfileCodec
+import com.theemrock.smoothmedia.eq.EqScanService
+import com.theemrock.smoothmedia.eq.EqScanState
 import com.theemrock.smoothmedia.eq.EqMode
 import com.theemrock.smoothmedia.eq.EqModeStore
 import com.theemrock.smoothmedia.eq.EqualizerBand
@@ -345,6 +347,21 @@ class MainActivity : ComponentActivity() {
     private val metadataCancelRequested = AtomicBoolean(false)
     private val metadataSessionCancelRequested = AtomicBoolean(false)
     private val metadataLaunchGate = MetadataSessionLaunchGate()
+
+    // The scan runs either way; the permission only decides whether its notification is visible.
+    private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {
+        EqScanService.start(this)
+    }
+
+    private fun toggleEqScan() {
+        if (EqScanState.running) {
+            EqScanService.stop(this)
+        } else if (checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            EqScanService.start(this)
+        } else {
+            notificationPermission.launch(android.Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
 
     private val treePicker = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode != Activity.RESULT_OK) return@registerForActivityResult
@@ -1079,7 +1096,23 @@ class MainActivity : ComponentActivity() {
                             onHome = ::openDashboard,
                         )
                     } else if (showSettings) {
+                        val eqScanSubtitle by produceState("") {
+                            val dao = runtime.database.eqDao()
+                            while (true) {
+                                value = if (EqScanState.running) {
+                                    "Taranıyor: ${EqScanState.done} / ${EqScanState.total} · durdurmak için dokun"
+                                } else {
+                                    val (done, total) = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                        runCatching { dao.scannedCount(EqProfileCodec.ANALYZER_VERSION) to dao.activeTrackCount() }.getOrDefault(0 to 0)
+                                    }
+                                    "$done / $total şarkı tarandı · başlatmak için dokun"
+                                }
+                                kotlinx.coroutines.delay(1_000)
+                            }
+                        }
                         SettingsScreen(
+                            eqScanSubtitle = eqScanSubtitle,
+                            onEqScan = ::toggleEqScan,
                             onMenu = ::openSettings,
                             onHome = ::openDashboard,
                             onLibraryManagement = ::openLibraryManagement,
