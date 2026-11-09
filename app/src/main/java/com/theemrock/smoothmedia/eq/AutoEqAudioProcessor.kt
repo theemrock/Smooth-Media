@@ -79,7 +79,9 @@ class AutoEqAudioProcessor : BaseAudioProcessor() {
         isFloat = format.encoding == C.ENCODING_PCM_FLOAT
         sections = current?.bands?.map { ParametricEq.peaking(it, rate) }.orEmpty()
         preampGain = 10.0.pow((current?.preampDb ?: 0.0) / 20.0)
-        state = Array(sections.size) { Array(channels) { DoubleArray(4) } }
+        // Keep filter history when only coefficients change, so dynamic EQ updates do not click.
+        val sameShape = state.size == sections.size && state.all { it.size == channels }
+        if (!sameShape) state = Array(sections.size) { Array(channels) { DoubleArray(4) } }
         profileChanged = false
     }
 
