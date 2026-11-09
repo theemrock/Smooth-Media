@@ -238,6 +238,25 @@ class CatalogMigrationTest {
     }
 
     @Test
+    fun versionFifteenToSixteen_addsEqTablesAndKeepsTracks() {
+        migrationHelper.createDatabase(databaseName, 15).apply {
+            insertVersionTwoFixture(this)
+            close()
+        }
+
+        val migrated = migrationHelper.runMigrationsAndValidate(databaseName, 16, true, *CatalogMigrations.ALL)
+        try {
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM tracks"))
+            migrated.execSQL("INSERT INTO eq_profiles VALUES ('track-1',1,'sig',x'00000000',5000)")
+            migrated.execSQL("INSERT INTO eq_overrides VALUES ('track-1','0,0,0',5000)")
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM eq_profiles"))
+            assertEquals(1, migrated.singleInt("SELECT COUNT(*) FROM eq_overrides"))
+        } finally {
+            migrated.close()
+        }
+    }
+
+    @Test
     fun versionNineToTen_addsArtworkTablesWithoutChangingCatalogOrAudit() {
         migrationHelper.createDatabase(databaseName, 9).apply {
             insertVersionTwoFixture(this)
