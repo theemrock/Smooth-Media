@@ -14,7 +14,12 @@ import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.audio.DefaultAudioSink
 import com.theemrock.smoothmedia.eq.AutoEqAudioProcessor
+import com.theemrock.smoothmedia.eq.DynamicSession
+import com.theemrock.smoothmedia.eq.EqMode
 import com.theemrock.smoothmedia.eq.EqProfile
+import com.theemrock.smoothmedia.eq.SongEqPlan
+import com.theemrock.smoothmedia.eq.SongEqResolver
+import com.theemrock.smoothmedia.eq.SongEqSource
 import com.theemrock.smoothmedia.eq.EqualizerBand
 import com.theemrock.smoothmedia.eq.EqualizerProfileStore
 import com.theemrock.smoothmedia.eq.ManualEqBands
@@ -55,6 +60,8 @@ internal const val AUTOEQ_PREF_KEY = "profile_text"
 class Media3PlaybackEngine(
     context: Context,
     private val locationsForTrack: (String) -> List<PlaybackLocation>,
+    private val songEq: SongEqSource? = null,
+    private val eqMode: () -> EqMode = { EqMode.MANUAL },
 ) : PlaybackEngine {
     private val thread = HandlerThread("smooth-media-playback").apply { start() }
     private val handler = Handler(thread.looper)
@@ -75,6 +82,15 @@ class Media3PlaybackEngine(
         .build()
     private val equalizerProfile = EqualizerProfileStore(context)
     private var autoEqProfile: EqProfile? = null
+    private var songPlan: SongEqPlan = SongEqPlan.Legacy
+    private var dynamic: DynamicSession? = null
+    private val ticker = object : Runnable {
+        override fun run() {
+            val session = dynamic ?: return
+            if (exoPlayer.isPlaying) autoEqProcessor.setProfile(session.profileAt(exoPlayer.currentPosition, TICK_MS / 1000.0))
+            handler.postDelayed(this, TICK_MS)
+        }
+    }
     @Volatile
     override var state: PlaybackEngineState = PlaybackEngineState()
         private set
@@ -113,7 +129,12 @@ class Media3PlaybackEngine(
                         .sortedWith(compareByDescending<PlaybackLocation> { it.format == PlaybackFormat.FLAC }.thenBy { it.locationId })
                     currentLocationIndex = currentLocations.indexOfFirst { it.contentUri == mediaItem?.localConfiguration?.uri.toString() }
                     publish(state.copy(trackId = trackId, locationId = currentLocations.getOrNull(currentLocationIndex)?.locationId))
+                    applySongEq(trackId)
                 }
+            }
+
+            override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+                dynamic?.reset()
             }
 
             override fun onIsPlayingChanged(isPlaying: Boolean) {
@@ -227,9 +248,27 @@ class Media3PlaybackEngine(
 
     /** Single source for the processor: AutoEQ correction plus enabled manual bands. */
     private fun refreshEqualizer() {
+        if (songPlan !is SongEqPlan.Legacy) return
         val auto = autoEqProfile
         val manual = ManualEqBands.peakBands(equalizerProfile.readLevels(), equalizerProfile.isManualEnabled())
         autoEqProcessor.setProfile(EqProfile(preampDb = auto?.preampDb ?: 0.0, bands = auto?.bands.orEmpty() + manual))
+    }
+
+    /** Picks the song's EQ plan on the player thread; a failed lookup falls back to the legacy chain. */
+    private fun applySongEq(trackId: String) {
+        val source = songEq ?: return
+        val plan = runCatching { SongEqResolver.resolve(eqMode(), source.load(trackId)) }.getOrDefault(SongEqPlan.Legacy)
+        songPlan = plan
+        dynamic = (plan as? SongEqPlan.Dynamic)?.let(::DynamicSession)
+        when (plan) {
+            SongEqPlan.Legacy -> refreshEqualizer()
+            is SongEqPlan.Override -> autoEqProcessor.setProfile(plan.profile)
+            is SongEqPlan.Dynamic -> {
+                handler.removeCallbacks(ticker)
+                dynamic?.let { autoEqProcessor.setProfile(it.profileAt(exoPlayer.currentPosition, TICK_MS / 1000.0)) }
+                handler.postDelayed(ticker, TICK_MS)
+            }
+        }
     }
 
     private fun publish(next: PlaybackEngineState) {
@@ -247,3 +286,4 @@ class Media3PlaybackEngine(
 }
 
 private const val EXTRA_TRACK_ID = "com.theemrock.smoothmedia.extra.TRACK_ID"
+private const val TICK_MS = 200L

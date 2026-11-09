@@ -9,22 +9,41 @@ import androidx.media3.session.LibraryResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
 import com.google.common.util.concurrent.ListenableFuture
+import com.theemrock.smoothmedia.catalog.database.dao.EqDao
+import com.theemrock.smoothmedia.eq.EqModeStore
+import com.theemrock.smoothmedia.eq.EqProfileCodec
+import com.theemrock.smoothmedia.eq.EqScanner
+import com.theemrock.smoothmedia.eq.MediaCodecPcmDecoder
+import com.theemrock.smoothmedia.eq.RoomEqProfileStore
+import com.theemrock.smoothmedia.eq.SongEqData
+import com.theemrock.smoothmedia.eq.SongEqSource
 import com.theemrock.smoothmedia.library.LibraryCollectionRow
 import com.theemrock.smoothmedia.library.LibraryTrackRow
 import com.theemrock.smoothmedia.source.SourceRegistryFactory
+import kotlin.concurrent.thread
 
 /** Single process-wide Media3 session owner. */
 class PlaybackService : MediaLibraryService() {
     private var session: MediaLibrarySession? = null
     private var engine: Media3PlaybackEngine? = null
     private var runtime: com.theemrock.smoothmedia.source.SourceRegistryRuntime? = null
+    @Volatile private var stopEqScan = false
 
     override fun onCreate() {
         super.onCreate()
         runtime = SourceRegistryFactory.create(this)
         val resolver = CatalogPlaybackLocationResolver(runtime!!.database)
-        engine = Media3PlaybackEngine(this, resolver::resolve)
+        val eqDao = runtime!!.database.eqDao()
+        val modeStore = EqModeStore(this)
+        val songEq = SongEqSource { id ->
+            SongEqData(
+                overrideMb = eqDao.findOverride(id)?.levelsMb?.let(EqProfileCodec::decodeLevels),
+                windows = eqDao.findProfile(id)?.windows?.let(EqProfileCodec::decode),
+            )
+        }
+        engine = Media3PlaybackEngine(this, resolver::resolve, songEq, modeStore::mode)
         PlaybackEngineRegistry.engine = engine
+        startEqScan(resolver, eqDao, modeStore)
         val libraryDao = runtime!!.database.libraryDao()
         session = engine!!.onPlayerThreadBlocking {
             MediaLibrarySession.Builder(
@@ -73,7 +92,22 @@ class PlaybackService : MediaLibraryService() {
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaLibrarySession? = session
 
+    /** shortcut: scan runs only while this service lives and restarts from the pending list; see EqScanner. */
+    private fun startEqScan(resolver: CatalogPlaybackLocationResolver, eqDao: EqDao, modeStore: EqModeStore) {
+        val store = RoomEqProfileStore(eqDao)
+        val scanner = EqScanner(MediaCodecPcmDecoder(this), store, uriFor = { id -> PlaybackLocationSelector.select(resolver.resolve(id))?.contentUri })
+        stopEqScan = false
+        thread(name = "eq-scan", priority = Thread.MIN_PRIORITY) {
+            // The database can close under this thread when the service is destroyed; that just ends the scan.
+            runCatching {
+                scanner.scanPending(shouldStop = { stopEqScan })
+                if (!stopEqScan && store.pendingTrackIds(EqProfileCodec.ANALYZER_VERSION).isEmpty()) modeStore.markFirstScanComplete()
+            }
+        }
+    }
+
     override fun onDestroy() {
+        stopEqScan = true
         session?.release()
         session = null
         engine?.close()
