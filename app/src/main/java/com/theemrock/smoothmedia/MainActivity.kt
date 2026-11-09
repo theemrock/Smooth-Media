@@ -151,6 +151,7 @@ import com.theemrock.smoothmedia.ui.NowPlayingScreen
 import com.theemrock.smoothmedia.ui.EqualizerScreen
 import com.theemrock.smoothmedia.ui.QueueScreen
 import com.theemrock.smoothmedia.eq.AdaptiveEqState
+import com.theemrock.smoothmedia.lyrics.ManualLyrics
 import com.theemrock.smoothmedia.eq.EqMode
 import com.theemrock.smoothmedia.eq.EqModeStore
 import com.theemrock.smoothmedia.eq.EqualizerBand
@@ -689,6 +690,7 @@ class MainActivity : ComponentActivity() {
                             onFetch = ::fetchLyricsForNowPlaying,
                             fetchStatus = lyricsFetchStatus,
                             fetching = lyricsFetching,
+                            onSaveManual = ::saveManualLyrics,
                         )
                     } else if (showNowPlaying && nowPlayingSong != null) {
                         val nowPlayingIsFlac by produceState(false, nowPlayingSong?.trackId) {
@@ -1971,6 +1973,19 @@ class MainActivity : ComponentActivity() {
     private fun stopLyricsBulk() {
         lyricsBulkCancel.set(true)
         lyricsBulkStatus = "Durduruluyor…"
+    }
+
+    private fun saveManualLyrics(text: String) {
+        val song = nowPlayingSong ?: return
+        val value = ManualLyrics.build(song.trackId, text, System.currentTimeMillis()) ?: return
+        executor.execute {
+            val saved = runCatching { lyricsCache.put(value) }.isSuccess
+            runOnUiThread {
+                if (isDestroyed) return@runOnUiThread
+                if (saved) currentLyrics = value
+                lyricsFetchStatus = if (saved) "Söz kaydedildi (${if (value.mode == LyricsMode.SYNCED) "senkron" else "düz metin"})." else "Söz kaydedilemedi."
+            }
+        }
     }
 
     private fun fetchLyricsForNowPlaying() {

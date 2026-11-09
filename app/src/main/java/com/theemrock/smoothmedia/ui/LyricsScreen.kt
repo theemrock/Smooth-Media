@@ -16,6 +16,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -50,8 +51,11 @@ fun LyricsScreen(
     onFetch: () -> Unit = {},
     fetchStatus: String? = null,
     fetching: Boolean = false,
+    onSaveManual: (String) -> Unit = {},
 ) {
     var synced by remember { mutableStateOf(false) }
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember { mutableStateOf("") }
     Column(
         modifier = Modifier.fillMaxSize().background(SmoothMediaColors.Background).padding(20.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
@@ -86,7 +90,26 @@ fun LyricsScreen(
             verticalArrangement = Arrangement.spacedBy(16.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
-        if (cachedLyrics == null || (synced && !hasSynced)) {
+        if (cachedLyrics == null && editing) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                label = { Text("Söz metni") },
+                modifier = Modifier.fillMaxWidth().weight(1f),
+            )
+            Text(
+                "Satırların başına [dk:sn.sn] yazarsan (örn. [01:23.45] söz) senkron olarak kaydedilir.",
+                color = SmoothMediaColors.TextMuted,
+                textAlign = TextAlign.Center,
+                fontSize = 13.sp,
+            )
+            Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                TextButton(onClick = { onSaveManual(draft); editing = false }, enabled = draft.isNotBlank()) {
+                    Text("Kaydet", color = SmoothMediaColors.Accent)
+                }
+                TextButton(onClick = { editing = false }) { Text("Vazgeç", color = SmoothMediaColors.TextMuted) }
+            }
+        } else if (cachedLyrics == null || (synced && !hasSynced)) {
             Text(
                 if (synced) "Bu parça için senkronize söz verisi bulunmuyor." else "Bu parça için yerel söz verisi bulunmuyor.",
                 color = SmoothMediaColors.TextMuted,
@@ -94,11 +117,16 @@ fun LyricsScreen(
                 modifier = Modifier.padding(top = 48.dp),
             )
             if (cachedLyrics == null) {
-                TextButton(onClick = onFetch, enabled = !fetching) {
-                    Text(
-                        if (fetching) "Söz aranıyor…" else "Söz getir (internet)",
-                        color = SmoothMediaColors.Accent,
-                    )
+                Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    TextButton(onClick = onFetch, enabled = !fetching) {
+                        Text(
+                            if (fetching) "Söz aranıyor…" else "Söz getir (internet)",
+                            color = SmoothMediaColors.Accent,
+                        )
+                    }
+                    TextButton(onClick = { editing = true }, enabled = !fetching) {
+                        Text("Elle gir", color = SmoothMediaColors.Accent)
+                    }
                 }
             }
             fetchStatus?.let {
