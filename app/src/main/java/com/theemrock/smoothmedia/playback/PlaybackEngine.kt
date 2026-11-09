@@ -51,6 +51,8 @@ interface PlaybackEngine : AutoCloseable {
     fun applyManualEqualizer(levels: Map<Short, Int>): Boolean = false
     fun setEqualizerEnabled(enabled: Boolean): Boolean = false
     fun applyAutoEq(text: String?): Boolean = false
+    fun songEqGainsDb(): List<Double>? = null
+    fun songEqScanned(): Boolean = false
     override fun close()
 }
 
@@ -84,10 +86,12 @@ class Media3PlaybackEngine(
     private var autoEqProfile: EqProfile? = null
     private var songPlan: SongEqPlan = SongEqPlan.Legacy
     private var dynamic: DynamicSession? = null
+    @Volatile private var liveGainsDb: List<Double>? = null
+    @Volatile private var songScanned = false
     private val ticker = object : Runnable {
         override fun run() {
             val session = dynamic ?: return
-            if (exoPlayer.isPlaying) autoEqProcessor.setProfile(session.profileAt(exoPlayer.currentPosition, TICK_MS / 1000.0))
+            if (exoPlayer.isPlaying) applyLive(session.profileAt(exoPlayer.currentPosition, TICK_MS / 1000.0))
             handler.postDelayed(this, TICK_MS)
         }
     }
@@ -259,19 +263,31 @@ class Media3PlaybackEngine(
     /** Picks the song's EQ plan on the player thread; a failed lookup falls back to the legacy chain. */
     private fun applySongEq(trackId: String) {
         val source = songEq ?: return
-        val plan = runCatching { SongEqResolver.resolve(eqMode(), source.load(trackId)) }.getOrDefault(SongEqPlan.Legacy)
+        val data = runCatching { source.load(trackId) }.getOrNull()
+        songScanned = data?.windows?.any { it.bandDb != null } == true
+        val plan = data?.let { runCatching { SongEqResolver.resolve(eqMode(), it) }.getOrNull() } ?: SongEqPlan.Legacy
         songPlan = plan
         dynamic = (plan as? SongEqPlan.Dynamic)?.let(::DynamicSession)
+        liveGainsDb = null
         when (plan) {
             SongEqPlan.Legacy -> refreshEqualizer()
-            is SongEqPlan.Override -> autoEqProcessor.setProfile(plan.profile)
+            is SongEqPlan.Override -> applyLive(plan.profile)
             is SongEqPlan.Dynamic -> {
                 handler.removeCallbacks(ticker)
-                dynamic?.let { autoEqProcessor.setProfile(it.profileAt(exoPlayer.currentPosition, TICK_MS / 1000.0)) }
+                dynamic?.let { applyLive(it.profileAt(exoPlayer.currentPosition, TICK_MS / 1000.0)) }
                 handler.postDelayed(ticker, TICK_MS)
             }
         }
     }
+
+    private fun applyLive(profile: EqProfile) {
+        liveGainsDb = profile.bands.map { it.gainDb }
+        autoEqProcessor.setProfile(profile)
+    }
+
+    override fun songEqGainsDb(): List<Double>? = liveGainsDb
+
+    override fun songEqScanned(): Boolean = songScanned
 
     private fun publish(next: PlaybackEngineState) {
         state = next

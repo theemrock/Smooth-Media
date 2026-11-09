@@ -126,6 +126,12 @@ class PlaybackSessionClient(
 
     fun applyAutoEq(text: String?): Boolean = PlaybackEngineRegistry.engine?.applyAutoEq(text) == true
 
+    /** The 24 band gains (dB) the song EQ is applying right now, or null when the song uses the legacy chain. */
+    fun songEqGainsDb(): List<Double>? = PlaybackEngineRegistry.engine?.songEqGainsDb()
+
+    /** True when the playing song has a usable scan, whatever the current mode. */
+    fun songEqScanned(): Boolean = PlaybackEngineRegistry.engine?.songEqScanned() == true
+
     fun applyManualEqualizer(levels: Map<Short, Int>): Boolean =
         PlaybackEngineRegistry.engine?.applyManualEqualizer(levels) == true
 

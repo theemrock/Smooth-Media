@@ -26,6 +26,13 @@ interface EqDao {
     )
     fun trackIdsToScan(analyzerVersion: Int): List<String>
 
+    /** Profiles that hold real data; empty blobs mark failed tracks. */
+    @Query("SELECT COUNT(*) FROM eq_profiles WHERE analyzerVersion = :analyzerVersion AND length(windows) > 4")
+    fun scannedCount(analyzerVersion: Int): Int
+
+    @Query("SELECT COUNT(*) FROM tracks WHERE catalog_lifecycle = 'ACTIVE'")
+    fun activeTrackCount(): Int
+
     @Query("SELECT * FROM eq_overrides WHERE trackId = :trackId")
     fun findOverride(trackId: String): EqOverrideEntity?
 

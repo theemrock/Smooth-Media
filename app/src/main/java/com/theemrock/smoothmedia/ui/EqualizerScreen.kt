@@ -54,6 +54,10 @@ fun EqualizerScreen(
     onManualLevelChanged: (Short, Int) -> Unit,
     songEqMode: EqMode,
     onSongEqModeChanged: (EqMode) -> Unit,
+    liveGainsDb: List<Double>? = null,
+    songScanned: Boolean = false,
+    scanDone: Int = 0,
+    scanTotal: Int = 0,
     savedAutoEqText: String?,
     onApplyAutoEq: (String?) -> Unit,
     onBack: () -> Unit,
@@ -81,6 +85,11 @@ fun EqualizerScreen(
             if (songEqMode == EqMode.AUTO) "Scanned songs follow their own dynamic EQ; the headphone profile is off for them. Applies from the next song." else "Headphone profile and manual bands.",
             color = Color(0xFFAAB9C2),
         )
+        Text(
+            if (songScanned) "✓ Auto available for this song" else "✗ This song is not scanned yet",
+            color = if (songScanned) Color(0xFF19C3E6) else Color(0xFFAAB9C2),
+        )
+        if (scanTotal > 0) Text("Library scan: $scanDone / $scanTotal", color = Color(0xFFAAB9C2))
         Text("Adaptive EQ", color = Color.White)
         Text(
             if (adaptiveState.isAvailable) "Adaptive measured state active" else "Adaptive EQ is unavailable until measured audio input exists.",
@@ -94,8 +103,11 @@ fun EqualizerScreen(
         if (bands.isEmpty()) {
             Text("Manual bands are not exposed by the current audio session.", color = Color(0xFFAAB9C2))
         } else {
-            Text("Tilt the phone sideways for the full 24-band view. Double-tap a band to zero it.", color = Color(0xFFAAB9C2))
-            BandSliders(bands, manualLevels, onManualLevelChanged)
+            Text(
+                if (liveGainsDb != null) "Auto is live: these bands move with the song (read-only)." else "Tilt the phone sideways for the full 24-band view. Double-tap a band to zero it.",
+                color = if (liveGainsDb != null) Color(0xFFFFB84D) else Color(0xFFAAB9C2),
+            )
+            BandSliders(bands, manualLevels, onManualLevelChanged, liveGainsDb)
         }
         Text("AutoEQ", color = Color.White)
         OutlinedTextField(
@@ -120,13 +132,14 @@ fun EqualizerScreen(
 }
 
 @Composable
-private fun BandSliders(bands: List<EqualizerBand>, levels: Map<Short, Int>, onChange: (Short, Int) -> Unit) {
+private fun BandSliders(bands: List<EqualizerBand>, levels: Map<Short, Int>, onChange: (Short, Int) -> Unit, liveDb: List<Double>?) {
     val landscape = LocalConfiguration.current.orientation == Configuration.ORIENTATION_LANDSCAPE
     BoxWithConstraints(Modifier.fillMaxWidth()) {
         val perBand = if (landscape) maxOf(maxWidth / bands.size, 28.dp) else 44.dp
         Row(Modifier.horizontalScroll(rememberScrollState())) {
             bands.forEach { band ->
-                val level = levels[band.id] ?: band.levelMb
+                val live = liveDb?.getOrNull(band.id.toInt())
+                val level = if (live != null) (live * 100).roundToInt().coerceIn(band.minLevelMb, band.maxLevelMb) else levels[band.id] ?: band.levelMb
                 val db = level / 100
                 Column(Modifier.width(perBand), horizontalAlignment = Alignment.CenterHorizontally) {
                     Text(if (db > 0) "+$db" else "$db", color = Color(0xFFAAB9C2), fontSize = 9.sp)
@@ -136,6 +149,7 @@ private fun BandSliders(bands: List<EqualizerBand>, levels: Map<Short, Int>, onC
                         max = band.maxLevelMb,
                         onChange = { onChange(band.id, it) },
                         modifier = Modifier.width(perBand).height(if (landscape) 150.dp else 200.dp),
+                        readOnly = live != null,
                     )
                     Text(frequencyLabel(band.centerFrequencyHz), color = Color(0xFFAAB9C2), fontSize = 9.sp)
                 }
@@ -146,28 +160,28 @@ private fun BandSliders(bands: List<EqualizerBand>, levels: Map<Short, Int>, onC
 
 /** Drag or tap sets the level in 0.5 dB steps; double-tap zeroes it. Custom drawing keeps touch mapping exact. */
 @Composable
-private fun VerticalBandSlider(level: Int, min: Int, max: Int, onChange: (Int) -> Unit, modifier: Modifier) {
+private fun VerticalBandSlider(level: Int, min: Int, max: Int, onChange: (Int) -> Unit, modifier: Modifier, readOnly: Boolean = false) {
     val current by rememberUpdatedState(onChange)
-    Canvas(
-        modifier
-            .pointerInput(min, max) {
-                detectTapGestures(onDoubleTap = { current(0) }, onTap = { current(levelAt(it.y, size.height, min, max)) })
+    val accent = if (readOnly) Color(0xFFFFB84D) else Color(0xFF19C3E6)
+    val touch = if (readOnly) modifier else modifier
+        .pointerInput(min, max) {
+            detectTapGestures(onDoubleTap = { current(0) }, onTap = { current(levelAt(it.y, size.height, min, max)) })
+        }
+        .pointerInput(min, max) {
+            detectVerticalDragGestures { change, _ ->
+                change.consume()
+                current(levelAt(change.position.y, size.height, min, max))
             }
-            .pointerInput(min, max) {
-                detectVerticalDragGestures { change, _ ->
-                    change.consume()
-                    current(levelAt(change.position.y, size.height, min, max))
-                }
-            },
-    ) {
+        }
+    Canvas(touch) {
         fun yFor(value: Int) = (max - value).toFloat() / (max - min) * size.height
         val x = size.width / 2
         val zeroY = yFor(0)
         val thumbY = yFor(level)
         drawLine(Color(0xFF3A4A54), Offset(x, 0f), Offset(x, size.height), strokeWidth = 4f)
         drawLine(Color(0xFF6B7C86), Offset(x - 10f, zeroY), Offset(x + 10f, zeroY), strokeWidth = 2f)
-        drawLine(Color(0xFF19C3E6), Offset(x, zeroY), Offset(x, thumbY), strokeWidth = 6f)
-        drawCircle(Color(0xFF19C3E6), radius = 10f, center = Offset(x, thumbY))
+        drawLine(accent, Offset(x, zeroY), Offset(x, thumbY), strokeWidth = 6f)
+        drawCircle(accent, radius = 10f, center = Offset(x, thumbY))
     }
 }
 

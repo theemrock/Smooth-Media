@@ -152,6 +152,7 @@ import com.theemrock.smoothmedia.ui.EqualizerScreen
 import com.theemrock.smoothmedia.ui.QueueScreen
 import com.theemrock.smoothmedia.eq.AdaptiveEqState
 import com.theemrock.smoothmedia.lyrics.ManualLyrics
+import com.theemrock.smoothmedia.eq.EqProfileCodec
 import com.theemrock.smoothmedia.eq.EqMode
 import com.theemrock.smoothmedia.eq.EqModeStore
 import com.theemrock.smoothmedia.eq.EqualizerBand
@@ -647,8 +648,33 @@ class MainActivity : ComponentActivity() {
                             artworkResolver = artworkResolver,
                         )
                     } else if (showEqualizer) {
+                        val liveGains by produceState<List<Double>?>(null) {
+                            while (true) {
+                                value = playbackClient.songEqGainsDb()
+                                kotlinx.coroutines.delay(200)
+                            }
+                        }
+                        val songScanned by produceState(false, nowPlayingSong?.trackId) {
+                            while (true) {
+                                value = playbackClient.songEqScanned()
+                                kotlinx.coroutines.delay(500)
+                            }
+                        }
+                        val scanCounts by produceState(0 to 0) {
+                            val dao = runtime.database.eqDao()
+                            while (true) {
+                                value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                                    runCatching { dao.scannedCount(EqProfileCodec.ANALYZER_VERSION) to dao.activeTrackCount() }.getOrDefault(0 to 0)
+                                }
+                                kotlinx.coroutines.delay(2_000)
+                            }
+                        }
                         EqualizerScreen(
                             adaptiveState = AdaptiveEqState.fromMeasuredLevels(emptyMap()),
+                            liveGainsDb = liveGains,
+                            songScanned = songScanned,
+                            scanDone = scanCounts.first,
+                            scanTotal = scanCounts.second,
                             manualLevels = manualEqualizerLevels,
                             bands = equalizerBands,
                             enabled = manualEqualizerEnabled,
