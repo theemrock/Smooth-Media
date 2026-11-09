@@ -37,7 +37,10 @@ interface EqDao {
     @Query(
         """
         SELECT COALESCE(title_o.value, m.normalizedTitle, '') AS title,
-               COALESCE(artist_o.value, m.normalizedArtist, '') AS artist
+               COALESCE(artist_o.value, m.normalizedArtist, '') AS artist,
+               (SELECT b.locator FROM track_locations AS l
+                JOIN locator_bindings AS b ON b.location_id = l.location_id
+                WHERE l.track_id = t.track_id LIMIT 1) AS locator
         FROM eq_profiles AS p
         JOIN tracks AS t ON t.track_id = p.trackId
         LEFT JOIN track_metadata AS m ON m.trackId = t.track_id
@@ -58,4 +61,4 @@ interface EqDao {
     fun deleteOverride(trackId: String): Int
 }
 
-data class EqScannedSong(val title: String, val artist: String)
+data class EqScannedSong(val title: String, val artist: String, val locator: String?)

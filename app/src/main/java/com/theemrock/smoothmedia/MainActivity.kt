@@ -155,6 +155,7 @@ import com.theemrock.smoothmedia.lyrics.ManualLyrics
 import com.theemrock.smoothmedia.eq.EqProfileCodec
 import com.theemrock.smoothmedia.eq.EqScanService
 import com.theemrock.smoothmedia.eq.EqScanState
+import com.theemrock.smoothmedia.eq.ScannedSongLabel
 import com.theemrock.smoothmedia.ui.EqScanListRow
 import com.theemrock.smoothmedia.ui.EqScanScreen
 import com.theemrock.smoothmedia.eq.EqMode
@@ -1099,8 +1100,8 @@ class MainActivity : ComponentActivity() {
                                 value = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
                                     runCatching {
                                         dao.scannedSongs(EqProfileCodec.ANALYZER_VERSION)
+                                            .map { EqScanListRow(ScannedSongLabel.title(it.title, it.locator), it.artist) }
                                             .sortedWith { a, b -> collator.compare(a.title, b.title) }
-                                            .map { EqScanListRow(it.title, it.artist) }
                                     }.getOrDefault(emptyList())
                                 }
                                 kotlinx.coroutines.delay(5_000)

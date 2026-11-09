@@ -142,7 +142,8 @@ class EqScanService : Service() {
         private const val CHANNEL = "eq_scan"
         private const val NOTIFICATION_ID = 4211
         private const val ACTION_STOP = "com.theemrock.smoothmedia.eq.STOP_SCAN"
-        private const val WORKERS = 2
+        // Measured: each worker sat at ~50% CPU (waiting on file reads and the codec) with most cores idle.
+        private const val WORKERS = 6
         private const val NOTIFY_EVERY = 5
         private const val WAKE_LOCK_MS = 8 * 60 * 60 * 1000L
 
