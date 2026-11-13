@@ -5,6 +5,7 @@ import androidx.media3.session.MediaLibraryService.MediaLibrarySession
 import androidx.media3.session.MediaSession
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MediaMetadata
+import androidx.media3.common.Player
 import androidx.media3.session.LibraryResult
 import com.google.common.collect.ImmutableList
 import com.google.common.util.concurrent.Futures
@@ -43,6 +44,21 @@ class PlaybackService : MediaLibraryService() {
                 this,
                 engine!!.player,
                 object : MediaLibrarySession.Callback {
+                    // Untrusted controllers (no MEDIA_CONTENT_CONTROL) get read-only player commands by default; without PLAY_PAUSE, widget play/pause is dropped by Media3.
+                    override fun onConnect(
+                        session: MediaSession,
+                        controller: MediaSession.ControllerInfo,
+                    ): MediaSession.ConnectionResult {
+                        val accepted = MediaSession.ConnectionResult.AcceptedResultBuilder(session, controller)
+                        if (controller.isTrusted) return accepted.build()
+                        return accepted.setAvailablePlayerCommands(
+                            Player.Commands.Builder()
+                                .addAll(MediaSession.ConnectionResult.DEFAULT_UNTRUSTED_PLAYER_COMMANDS)
+                                .add(Player.COMMAND_PLAY_PAUSE)
+                                .build(),
+                        ).build()
+                    }
+
                     override fun onGetLibraryRoot(
                         session: MediaLibrarySession,
                         browser: MediaSession.ControllerInfo,
