@@ -48,7 +48,7 @@ jobs:
           set -euo pipefail
           test -n "$SMOOTH_SIGNING_STORE_PASSWORD"
           test -n "$SMOOTH_SIGNING_KEY_PASSWORD"
-          EXPECTED_VERSION="${GITHUB_REF_NAME#smooth-media-p01-10c-interim-}"
+          EXPECTED_VERSION="${GITHUB_REF_NAME#*-interim-}"
           ACTUAL_VERSION="$(sed -n 's/.*versionName = "\([^"]*\)".*/\1/p' app/build.gradle.kts)"
           test "$ACTUAL_VERSION" = "$EXPECTED_VERSION"
           chmod +x ./gradlew
