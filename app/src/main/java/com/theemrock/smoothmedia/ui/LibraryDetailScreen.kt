@@ -25,6 +25,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -90,6 +91,9 @@ fun LibraryDetailScreen(
     }
     val albumListState = rememberLazyListState()
     val songListState = rememberLazyListState()
+    var artistTab by rememberSaveable { mutableStateOf(0) }
+    val artistHasAlbums = type == LibraryCollectionType.ARTISTS && albums.isNotEmpty()
+    val showAlbumTab = artistHasAlbums && artistTab == 0
     Column(modifier = Modifier.fillMaxSize().padding(horizontal = 16.dp)) {
         LibraryNavigationBar(onMenu = onMenu, onSearch = onSearch, onDashboard = onDashboard, onSettings = onSettings)
         Column(modifier = Modifier.padding(top = 14.dp, bottom = 10.dp)) {
@@ -106,9 +110,14 @@ fun LibraryDetailScreen(
                 OutlinedButton(onClick = { onEditSongs(songs) }) { Text("Seçili koleksiyonu düzenle") }
             }
         }
-        if (type == LibraryCollectionType.ARTISTS && albums.isNotEmpty()) {
-            DetailSectionTitle("Albümler")
-            Row(modifier = Modifier.weight(.34f)) {
+        if (artistHasAlbums) {
+            Row(modifier = Modifier.padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(18.dp)) {
+                ArtistTabLabel("Albümler · ${albums.size}", selected = artistTab == 0) { artistTab = 0 }
+                ArtistTabLabel("Şarkılar · ${songs.size}", selected = artistTab == 1) { artistTab = 1 }
+            }
+        }
+        if (showAlbumTab) {
+            Row(modifier = Modifier.weight(1f)) {
               LazyColumn(state = albumListState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                 items(albums, key = { it.key }) { album ->
                     Row(modifier = Modifier.fillMaxWidth().clickable { onAlbumSelected(album) }.padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -186,17 +195,19 @@ fun LibraryDetailScreen(
                 }
             }
         }
-        Text(if (type == LibraryCollectionType.GENRES) "Şarkılar" else "İçerik", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
-        if (songs.isEmpty()) {
-            Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Text("Bu koleksiyonda kayıt bulunamadı", color = Color(0xFFAAB9C2)) }
-        } else {
-            Row(modifier = Modifier.weight(1f)) {
-              LazyColumn(state = songListState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                items(detailSongsStableOrder(songs), key = { it.trackId }) { song ->
-                    DetailSongRow(song, artworkResolver, genreAssignments[song.trackId], onSong, onAddToQueue, onPlayNext)
+        if (!showAlbumTab) {
+            if (!artistHasAlbums) Text(if (type == LibraryCollectionType.GENRES) "Şarkılar" else "İçerik", color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold, modifier = Modifier.padding(top = 8.dp))
+            if (songs.isEmpty()) {
+                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) { Text("Bu koleksiyonda kayıt bulunamadı", color = Color(0xFFAAB9C2)) }
+            } else {
+                Row(modifier = Modifier.weight(1f)) {
+                  LazyColumn(state = songListState, modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    items(detailSongsStableOrder(songs), key = { it.trackId }) { song ->
+                        DetailSongRow(song, artworkResolver, genreAssignments[song.trackId], onSong, onAddToQueue, onPlayNext)
+                    }
+                  }
+                  LibraryListScrollbar(songListState, Modifier.padding(vertical = 4.dp))
                 }
-              }
-              LibraryListScrollbar(songListState, Modifier.padding(vertical = 4.dp))
             }
         }
         if (playbackState != null && miniPlayerSong != null) MiniPlayer(miniPlayerSong, playbackState, onMiniPlayerOpen, onMiniPlayerPause, onMiniPlayerResume, onMiniPlayerNext, artworkResolver)
@@ -206,6 +217,17 @@ fun LibraryDetailScreen(
 @Composable
 private fun DetailSectionTitle(title: String) {
     Text(title, color = Color.White, fontSize = 19.sp, fontWeight = FontWeight.SemiBold)
+}
+
+@Composable
+private fun ArtistTabLabel(text: String, selected: Boolean, onClick: () -> Unit) {
+    Text(
+        text,
+        color = if (selected) Color(0xFF19C3E6) else Color(0xFFAAB9C2),
+        fontSize = 17.sp,
+        fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+        modifier = Modifier.clickable(onClick = onClick).padding(vertical = 4.dp),
+    )
 }
 
 @Composable

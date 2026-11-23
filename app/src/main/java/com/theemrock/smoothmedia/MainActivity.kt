@@ -481,6 +481,11 @@ class MainActivity : ComponentActivity() {
                     openDashboard()
                     return
                 }
+                // Now playing is an overlay: close it before popping any detail screen behind it.
+                if (showNowPlaying && !showQueue && !showEqualizer) {
+                    showNowPlaying = false
+                    return
+                }
                 if (showPlaylistDetail && !showNowPlaying && !showQueue && !showEqualizer && !showSearch && !showLyrics) {
                     navigateBackFromPlaylistDetail()
                     return
@@ -945,6 +950,8 @@ class MainActivity : ComponentActivity() {
                             onMiniPlayerResume = playbackClient::resume,
                             onMiniPlayerNext = ::playNext,
                             state = collectionViewModel.state.value,
+                            listState = collectionViewModel.listState,
+                            gridState = collectionViewModel.gridState,
                             onNearEnd = {
                                 val requestedType = collectionViewModel.state.value.type
                                 if (collectionPageLoadInFlight.compareAndSet(false, true)) {
@@ -2496,7 +2503,8 @@ class MainActivity : ComponentActivity() {
 
     private fun openLibraryDetail(type: LibraryCollectionType, row: LibraryCollectionRow) {
         if (showPlaylistDetail) navigateBackFromPlaylistDetail()
-        libraryBackTarget = if (showCollections) LibraryBackTarget.COLLECTIONS else LibraryBackTarget.DASHBOARD
+        // Opening another detail from an open detail (e.g. artist link in now playing) keeps the original back target.
+        if (!showLibraryDetail) libraryBackTarget = if (showCollections) LibraryBackTarget.COLLECTIONS else LibraryBackTarget.DASHBOARD
         showDashboard = false
         showLibrary = false
         showCollections = false

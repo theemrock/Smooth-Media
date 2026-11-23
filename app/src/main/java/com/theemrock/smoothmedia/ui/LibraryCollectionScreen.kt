@@ -27,8 +27,10 @@ import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.lazy.grid.rememberLazyGridState
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items as listItems
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.lazy.grid.LazyGridState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.IconButton
@@ -91,6 +93,8 @@ fun LibraryCollectionScreen(
     onMenu: () -> Unit = {},
     onDashboard: () -> Unit = {},
     onSettings: () -> Unit = {},
+    listState: LazyListState = rememberLazyListState(),
+    gridState: LazyGridState = rememberLazyGridState(),
     artistAlbumPreviews: Map<String, List<LibraryArtistAlbumPreview>> = emptyMap(),
     genreArtworkPreviews: Map<String, List<LibraryGenreArtworkPreview>> = emptyMap(),
     artworkResolver: AndroidArtworkResolver? = null,
@@ -143,6 +147,8 @@ fun LibraryCollectionScreen(
                 state.collections.isEmpty() -> CollectionEmpty(state.type)
                 else -> CollectionGrid(
                     state = state,
+                    listState = listState,
+                    gridState = gridState,
                     onNearEnd = onNearEnd,
                     onCollection = onCollectionSelected,
                     selectedKeys = selectedKeys,
@@ -214,6 +220,8 @@ private fun CollectionHeader(
 @Composable
 private fun CollectionGrid(
     state: LibraryCollectionUiState,
+    listState: LazyListState,
+    gridState: LazyGridState,
     onNearEnd: () -> Unit,
     onCollection: (LibraryCollectionRow) -> Unit,
     selectedKeys: Set<String>,
@@ -230,6 +238,8 @@ private fun CollectionGrid(
     if (state.type == LibraryCollectionType.ARTISTS) {
         ArtistCollectionContent(
             state = state,
+            listState = listState,
+            gridState = gridState,
             onNearEnd = latestNearEnd.value,
             onCollection = { row -> if (selectionMode) onToggleSelection(row) else onCollection(row) },
             selectedKeys = selectedKeys,
@@ -240,8 +250,6 @@ private fun CollectionGrid(
         )
     } else {
         var gridMode by rememberSaveable(state.type) { mutableStateOf(true) }
-        val gridState = rememberLazyGridState()
-        val listState = rememberLazyListState()
         val rows = remember(state.collections) { sortArtistRows(state.collections) }
         val firstIndexByBucket = remember(rows) { AlphabetIndex.firstIndexByBucket(rows.map { AlphabetIndex.bucket(it.title) }) }
         var activeLetter by remember(state.type) { mutableStateOf<String?>(null) }
@@ -348,6 +356,8 @@ private fun CollectionListRow(
 @Composable
 private fun ArtistCollectionContent(
     state: LibraryCollectionUiState,
+    listState: LazyListState,
+    gridState: LazyGridState,
     onNearEnd: () -> Unit,
     onCollection: (LibraryCollectionRow) -> Unit,
     selectedKeys: Set<String>,
@@ -361,8 +371,6 @@ private fun ArtistCollectionContent(
     var activeLetter by remember { mutableStateOf<String?>(null) }
     val sortedRows = remember(state.collections, ascending) { sortArtistRows(state.collections, ascending) }
     val groups = remember(state.collections, ascending) { groupArtistRows(state.collections, ascending) }
-    val listState = rememberLazyListState()
-    val gridState = rememberLazyGridState()
     val scope = androidx.compose.runtime.rememberCoroutineScope()
     val groupIndexes = remember(groups) {
         buildMap {

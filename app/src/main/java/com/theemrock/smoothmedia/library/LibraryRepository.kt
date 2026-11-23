@@ -1048,6 +1048,12 @@ class LibraryCollectionViewModel(
 ) {
     val state: MutableState<LibraryCollectionUiState> = mutableStateOf(LibraryCollectionUiState())
 
+    // Kept here, not in composition, so scroll survives opening a collection detail and coming back.
+    var listState = androidx.compose.foundation.lazy.LazyListState()
+        private set
+    var gridState = androidx.compose.foundation.lazy.grid.LazyGridState()
+        private set
+
     private var pageSize = LibraryViewModel.DEFAULT_PAGE_SIZE
     private var nextOffset = 0
 
@@ -1055,6 +1061,10 @@ class LibraryCollectionViewModel(
         if (state.value.loading) return
         this.pageSize = pageSize
         nextOffset = 0
+        if (state.value.type != type) {
+            listState = androidx.compose.foundation.lazy.LazyListState()
+            gridState = androidx.compose.foundation.lazy.grid.LazyGridState()
+        }
         state.value = LibraryCollectionUiState(type = type, loading = true)
         runCatching {
             pageAndTotalLoader?.invoke(type, 0, pageSize)
