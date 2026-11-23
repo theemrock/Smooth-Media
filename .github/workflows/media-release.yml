@@ -3,7 +3,7 @@ name: Smooth Media Interim Release
 on:
   push:
     tags:
-      - 'smooth-media-p01-*-interim-v*'
+      - 'smooth-media-p10-*-interim-v*'
 
 permissions:
   contents: write
@@ -70,7 +70,7 @@ jobs:
           test -n "$AAPT"
           "$AAPT" dump badging "$APK" | grep -F "package: name='com.theemrock.smoothmedia'"
           mkdir -p dist
-          cp "$APK" "dist/Smooth-Media-${GITHUB_REF_NAME#smooth-media-p01-10c-interim-}.apk"
+          cp "$APK" "dist/Smooth-Media-${GITHUB_REF_NAME#smooth-media-}.apk"
           cd dist
           sha256sum *.apk > "$(basename *.apk).sha256"
 
@@ -82,15 +82,16 @@ jobs:
           cat > release-notes.md <<'EOF'
           # Smooth Media pre-release
 
-          Ara sürüm. Kapsam: şarkı sözleri (lrclib, toplu çekme), veritabanı şeması v12–v14,
-          klasör ağacı, otomatik tür listeleri, performans iyileştirmeleri ve Türkçe etiket onarımı.
+          Ara sürüm. Kapsam: şarkı sözleri toplu çekme (lrclib), Auto EQ taraması,
+          sanatçı detayında Albümler/Şarkılar sekmeleri, liste konumu ve geri gezinme düzeltmeleri,
+          widget play/pause düzeltmesi.
 
           - Bu APK, Shell ile ortak release sertifikası kullanır.
           - Kurulum için Android 13+ (`minSdk 33`) gerekir; paket `com.theemrock.smoothmedia`.
           EOF
           gh release create "$GITHUB_REF_NAME" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "Smooth Media ${GITHUB_REF_NAME#smooth-media-p01-*-interim-} (pre-release)" \
+            --title "Smooth Media ${GITHUB_REF_NAME#smooth-media-} (pre-release)" \
             --notes-file release-notes.md \
             --prerelease \
             --verify-tag
